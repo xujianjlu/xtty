@@ -30,7 +30,10 @@ use crate::core::actions::{
     OpenLinkUnderPointer, RevealLinkUnderPointer, SendBackTab, SendTab, SplitDown, SplitRight,
     ToggleMaximizePane,
 };
-use crate::core::config::{BellMode, Config, LinkFileOpen, MouseZoomModifier, NotifyMode};
+use crate::core::config::{
+    BellMode, CURSOR_BLINK_INTERVAL_MS_MAX, CURSOR_BLINK_INTERVAL_MS_MIN, Config, LinkFileOpen,
+    MouseZoomModifier, NotifyMode,
+};
 use crate::core::shell_quote::quote_for_shell;
 use crate::daemon::protocol::{RemoteContext, ShellSpec};
 use crate::ui::i18n::{L10nKey, t, t_fmt};
@@ -1377,8 +1380,15 @@ impl TerminalView {
 
         cx.spawn(async move |this, cx| {
             loop {
+                let Ok(interval_ms) = this.update(cx, |_, cx| {
+                    cx.global::<Config>()
+                        .cursor_blink_interval_ms
+                        .clamp(CURSOR_BLINK_INTERVAL_MS_MIN, CURSOR_BLINK_INTERVAL_MS_MAX)
+                }) else {
+                    break;
+                };
                 cx.background_executor()
-                    .timer(std::time::Duration::from_millis(530))
+                    .timer(std::time::Duration::from_millis(interval_ms))
                     .await;
                 if this
                     .update_in(cx, |view, window, cx| {

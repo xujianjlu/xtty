@@ -223,6 +223,12 @@ pub struct Config {
     pub link_file_command: Option<String>,
     pub ssh_loopback_forward: bool,
     pub cursor_blink: bool,
+    /// Half-period of the focused caret blink, in milliseconds. The timer that
+    /// flips `cursor_visible` sleeps this long between phases; the full on/off
+    /// cycle is therefore twice as long. A missing key (configs written before
+    /// the setting existed) lands on [`CURSOR_BLINK_INTERVAL_MS_DEFAULT`].
+    #[serde(default = "default_cursor_blink_interval_ms")]
+    pub cursor_blink_interval_ms: u64,
     pub scrollback_limit: usize,
     #[serde(default, deserialize_with = "de_lenient")]
     pub new_tab_position: NewTabPosition,
@@ -641,6 +647,7 @@ impl Default for Config {
             link_file_command: None,
             ssh_loopback_forward: true,
             cursor_blink: true,
+            cursor_blink_interval_ms: CURSOR_BLINK_INTERVAL_MS_DEFAULT,
             scrollback_limit: 10_000,
             new_tab_position: NewTabPosition::AfterCurrent,
             tab_bar_position: TabBarPosition::Left,
@@ -814,6 +821,12 @@ impl Config {
             self.ui_font_family = None;
         }
         self.scrollback_limit = self.scrollback_limit.clamp(100, MAX_SCROLLBACK);
+        // Zero (and anything below the floor) would spin the blink timer as a
+        // busy loop; the GUI stepper and this clamp share one band so a value
+        // the file accepts is a value one click can still move (#550).
+        self.cursor_blink_interval_ms = self
+            .cursor_blink_interval_ms
+            .clamp(CURSOR_BLINK_INTERVAL_MS_MIN, CURSOR_BLINK_INTERVAL_MS_MAX);
         if !self.mouse_scroll_multiplier.is_finite() || self.mouse_scroll_multiplier <= 0.0 {
             self.mouse_scroll_multiplier = Config::default().mouse_scroll_multiplier;
         }
@@ -1091,6 +1104,10 @@ fn default_notify_threshold_secs() -> u64 {
     10
 }
 
+fn default_cursor_blink_interval_ms() -> u64 {
+    CURSOR_BLINK_INTERVAL_MS_DEFAULT
+}
+
 fn default_prefix() -> String {
     "ctrl-b".to_string()
 }
@@ -1209,6 +1226,14 @@ fn default_sidebar_width() -> f32 {
 }
 
 pub const MAX_SCROLLBACK: usize = 100_000;
+
+/// Half-period of the focused caret blink. Matches the historical hard-coded
+/// 530 ms timer in the terminal view, so existing configs that never wrote the
+/// key keep the same cadence.
+pub const CURSOR_BLINK_INTERVAL_MS_DEFAULT: u64 = 530;
+pub const CURSOR_BLINK_INTERVAL_MS_MIN: u64 = 100;
+pub const CURSOR_BLINK_INTERVAL_MS_MAX: u64 = 2_000;
+pub const CURSOR_BLINK_INTERVAL_MS_STEP: u64 = 50;
 
 pub(crate) fn de_lenient<'de, D, T>(deserializer: D) -> Result<T, D::Error>
 where
@@ -1733,6 +1758,42 @@ mod tests {
         assert_eq!(clamp(Some(0.0)), Some(0.2));
         assert_eq!(clamp(Some(2.0)), Some(1.0));
         assert_eq!(clamp(Some(f32::NAN)), None);
+    }
+
+    #[test]
+    fn a_config_without_cursor_blink_interval_keeps_the_historical_default() {
+        let cfg: Config = serde_json::from_str(r#"{"cursor_blink": true}"#)
+            .expect("a pre-setting config must still parse");
+        assert_eq!(
+            cfg.cursor_blink_interval_ms,
+            CURSOR_BLINK_INTERVAL_MS_DEFAULT
+        );
+    }
+
+    #[test]
+    fn sanitize_clamps_cursor_blink_interval_into_band() {
+        let clamp = |n: u64| {
+            let mut cfg = Config {
+                cursor_blink_interval_ms: n,
+                ..Config::default()
+            };
+            cfg.sanitize();
+            cfg.cursor_blink_interval_ms
+        };
+        assert_eq!(clamp(0), CURSOR_BLINK_INTERVAL_MS_MIN);
+        assert_eq!(
+            clamp(CURSOR_BLINK_INTERVAL_MS_DEFAULT),
+            CURSOR_BLINK_INTERVAL_MS_DEFAULT
+        );
+        assert_eq!(
+            clamp(CURSOR_BLINK_INTERVAL_MS_MIN),
+            CURSOR_BLINK_INTERVAL_MS_MIN
+        );
+        assert_eq!(
+            clamp(CURSOR_BLINK_INTERVAL_MS_MAX),
+            CURSOR_BLINK_INTERVAL_MS_MAX
+        );
+        assert_eq!(clamp(u64::MAX), CURSOR_BLINK_INTERVAL_MS_MAX);
     }
 
     #[test]

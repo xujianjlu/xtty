@@ -125,6 +125,10 @@ pub fn translate_ja(key: L10nKey) -> Option<&'static str> {
         L10nKey::SettingsCursorBlinkDesc => {
             "ターミナルがフォーカスされている間、カーソルを点滅させる"
         }
+        L10nKey::SettingsCursorBlinkInterval => "点滅間隔",
+        L10nKey::SettingsCursorBlinkIntervalDesc => {
+            "カーソルの点滅一相にかかるミリ秒（100–2000）。大きいほどゆっくり点滅します"
+        }
         L10nKey::SettingsLanguage => "言語",
         L10nKey::SettingsLanguageDesc => "tty7 の表示言語を選択します",
         L10nKey::SettingsLanguageEnglish => "English",
@@ -801,6 +805,9 @@ pub fn translate_ja(key: L10nKey) -> Option<&'static str> {
         }
         L10nKey::SettingsSearchCursorBlinkKeywords => {
             "カーソル 点滅 フラッシュ cursor blink caret blinking flash"
+        }
+        L10nKey::SettingsSearchCursorBlinkIntervalKeywords => {
+            "点滅間隔 点滅速度 点滅頻度 ミリ秒 遅い 速い blink interval rate speed frequency milliseconds ms"
         }
         L10nKey::SettingsSearchCursorShapeKeywords => {
             "カーソル 形状 ブロック バー アンダーライン ビーム cursor shape caret block bar underline beam"
