@@ -1645,8 +1645,7 @@ impl DaemonPane {
         // Seed the machine-tree title with the dialled identity so the switcher
         // and `tty7 tab ls` do not fall through to a path-only OSC title before
         // (or instead of) shell integration reporting `user@host`.
-        let osc_title =
-            crate::core::tab_view::connection_identity(&spec.user, &spec.host);
+        let osc_title = crate::core::tab_view::connection_identity(&spec.user, &spec.host);
 
         let state = Arc::new(Mutex::new(PaneState {
             id,

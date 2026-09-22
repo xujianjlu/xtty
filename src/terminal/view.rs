@@ -8135,10 +8135,12 @@ mod tests {
         let identity = tty7_core::core::tab_view::connection_identity("xujian6", "dev-box.corp")
             .expect("seed");
         assert_eq!(identity, "xujian6@dev-box");
-        assert!(tty7_core::core::tab_view::identity_from_title(
-            "/home/xujian6/CODE/groups/search-algo/retr"
-        )
-        .is_none());
+        assert!(
+            tty7_core::core::tab_view::identity_from_title(
+                "/home/xujian6/CODE/groups/search-algo/retr"
+            )
+            .is_none()
+        );
         assert_eq!(
             tty7_core::core::tab_view::identity_from_title("xujian6@dev-box:~/CODE/retr")
                 .as_deref(),
