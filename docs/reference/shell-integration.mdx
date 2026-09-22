@@ -42,7 +42,7 @@ shell — [shells you start yourself](#shells-you-start-yourself) have none.
 | Command finished, with exit code | `OSC 133;D` | The "finished after 42s" notification, failure marks in [history](/terminal/history) |
 | Working directory | `OSC 7` | New tabs and splits opening in the right place, the sidebar's repo grouping, the git branch readout |
 | Editing mode (vi / emacs) | `OSC 133;V` | Matching tty7's key handling to your shell's mode |
-| Window title | `OSC 0` | Tab labels. Only PowerShell is given this — zsh, bash, and fish already set a title of their own, and tty7 reads whatever they emit |
+| Window title | `OSC 0` | Tab labels. Bash / zsh / fish / PowerShell emit a stable `user@host` identity (PowerShell still appends `:cwd`; tty7 keeps the identity). Nushell does not set a title — the tab falls back to cwd. |
 
 ## What turns off without it
 

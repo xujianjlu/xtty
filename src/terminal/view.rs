@@ -1290,6 +1290,14 @@ impl TerminalView {
             view.default_title = name.to_string();
             view.title = name.to_string();
         }
+        // Seed the stable tab identity from the dialled endpoint. Remote shells
+        // that only emit a bare cwd path as OSC 0 would otherwise displace the
+        // chip to `…/dir` after the first prompt; connection metadata is the
+        // one identity that is known before shell integration speaks.
+        view.terminal_identity = tty7_core::core::tab_view::connection_identity(
+            &parts.persist.user,
+            &parts.persist.host,
+        );
         view.ssh_spec = Some(parts.persist);
         view
     }
@@ -1713,6 +1721,16 @@ impl TerminalView {
                 self.title = label.clone();
             }
             self.default_title = label;
+        }
+        // Remote-workspace panes are local to tty7-server on that host. Seed
+        // identity from the route's SSH endpoint when the shell has not yet
+        // reported one — otherwise a path-only OSC title (common when
+        // oh-my-zsh termsupport is on for a "local" remote shell) wins the tab.
+        if self.terminal_identity.is_none() {
+            if let Some(spec) = workspace.as_ref().and_then(|w| w.spec.as_deref()) {
+                self.terminal_identity =
+                    tty7_core::core::tab_view::connection_identity(&spec.user, &spec.host);
+            }
         }
         self.workspace = workspace;
     }
@@ -8097,6 +8115,7 @@ mod tests {
         // A title from the program running in it.
         assert_eq!(stated_title("vim — main.rs"), Some("vim — main.rs"));
         assert_eq!(stated_title(" user@host:~/repo "), Some("user@host:~/repo"));
+
         // A default tty7 chose for the pane itself is a name, not the absence
         // of one: an SSH pane answers to its host (#438) and a workspace pane
         // to its workspace, and neither gives way to a directory.
@@ -8105,6 +8124,25 @@ mod tests {
         assert_eq!(
             stated_title("tty7 — process exited"),
             Some("tty7 — process exited")
+        );
+    }
+
+    #[test]
+    fn connection_identity_seeds_survive_path_only_titles() {
+        // Mirrors the Title-event path: a dialled SSH pane already knows
+        // user@host, and a remote PROMPT that only emits the cwd must not
+        // displace the tab chip to `…/dir`.
+        let identity = tty7_core::core::tab_view::connection_identity("xujian6", "dev-box.corp")
+            .expect("seed");
+        assert_eq!(identity, "xujian6@dev-box");
+        assert!(tty7_core::core::tab_view::identity_from_title(
+            "/home/xujian6/CODE/groups/search-algo/retr"
+        )
+        .is_none());
+        assert_eq!(
+            tty7_core::core::tab_view::identity_from_title("xujian6@dev-box:~/CODE/retr")
+                .as_deref(),
+            Some("xujian6@dev-box")
         );
     }
 

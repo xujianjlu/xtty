@@ -1642,6 +1642,11 @@ impl DaemonPane {
             argv: Vec::new(),
             target,
         };
+        // Seed the machine-tree title with the dialled identity so the switcher
+        // and `tty7 tab ls` do not fall through to a path-only OSC title before
+        // (or instead of) shell integration reporting `user@host`.
+        let osc_title =
+            crate::core::tab_view::connection_identity(&spec.user, &spec.host);
 
         let state = Arc::new(Mutex::new(PaneState {
             id,
@@ -1656,7 +1661,7 @@ impl DaemonPane {
             // it is, `ssh_spec` already says.
             shell_spec: None,
             cwd: None,
-            osc_title: None,
+            osc_title,
             shell: ShellState::default(),
             remote_prompt_seen: false,
             modes: TerminalModes::default(),
@@ -6413,5 +6418,31 @@ mod tests {
 
         apply_signals(&mut st, SniffSignals::default());
         assert_eq!(st.cwd, Some(PathBuf::from("/tmp/x")));
+    }
+
+    #[test]
+    fn apply_signals_keeps_identity_when_a_path_only_title_arrives() {
+        let mut st = test_state(true);
+        apply_signals(
+            &mut st,
+            SniffSignals {
+                title: Some("xujian6@dev-box:~/CODE/retr".into()),
+                ..SniffSignals::default()
+            },
+        );
+        assert_eq!(st.osc_title.as_deref(), Some("xujian6@dev-box"));
+
+        apply_signals(
+            &mut st,
+            SniffSignals {
+                title: Some("/home/xujian6/CODE/groups/search-algo/retr".into()),
+                ..SniffSignals::default()
+            },
+        );
+        assert_eq!(
+            st.osc_title.as_deref(),
+            Some("xujian6@dev-box"),
+            "path-only OSC titles must not erase a stored identity"
+        );
     }
 }

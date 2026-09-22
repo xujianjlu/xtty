@@ -85,6 +85,41 @@ pub fn identity_from_title(raw: &str) -> Option<String> {
     Some(format!("{user}@{host}"))
 }
 
+/// Stable `user@host` for a dialled SSH (or workspace) connection, before the
+/// far shell has spoken — and as a fallback when it only titles itself with a
+/// bare path.
+///
+/// DNS hosts keep the short name (`box.corp.com` → `box`), matching what the
+/// injected shell integration reports via `${HOST%%.*}`. IPv4/IPv6 addresses
+/// stay whole: cutting on `.` would turn `10.0.0.5` into `10`, and IPv6 must
+/// not go through [`identity_from_title`] (its colons look like a port split).
+pub fn connection_identity(user: &str, host: &str) -> Option<String> {
+    let user = user.trim();
+    let host = host.trim().trim_matches(|c| c == '[' || c == ']');
+    if user.is_empty() || host.is_empty() || user.chars().any(char::is_whitespace) {
+        return None;
+    }
+    let host = short_connection_host(host);
+    if host.is_empty()
+        || host
+            .chars()
+            .any(|c| c.is_whitespace() || matches!(c, '/' | '\\'))
+    {
+        return None;
+    }
+    Some(format!("{user}@{host}"))
+}
+
+fn short_connection_host(host: &str) -> &str {
+    if host.contains(':') {
+        return host;
+    }
+    if !host.is_empty() && host.bytes().all(|b| b.is_ascii_digit() || b == b'.') {
+        return host;
+    }
+    host.split('.').next().unwrap_or(host)
+}
+
 /// Cuts the `user@host:` head that a shell integration writes into its title,
 /// leaving the path (or command) it actually names. A title with no such head —
 /// an agent's, which is prose — comes back untouched, and so does a bare
@@ -272,6 +307,24 @@ mod tests {
         );
         assert_eq!(identity_from_title("fix user@example.com: today"), None);
         assert_eq!(identity_from_title("vim — main.rs"), None);
+    }
+
+    #[test]
+    fn connection_identity_shortens_dns_but_keeps_addresses() {
+        assert_eq!(
+            connection_identity("xujian6", "krsvr-gray-01.corp.example"),
+            Some("xujian6@krsvr-gray-01".into())
+        );
+        assert_eq!(
+            connection_identity("deploy", "10.0.0.5"),
+            Some("deploy@10.0.0.5".into())
+        );
+        assert_eq!(
+            connection_identity("ann", "fe80::1"),
+            Some("ann@fe80::1".into())
+        );
+        assert_eq!(connection_identity("", "host"), None);
+        assert_eq!(connection_identity("u", "  "), None);
     }
 
     /// The marks come off, whichever alphabet the agent picked.
