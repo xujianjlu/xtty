@@ -6,17 +6,8 @@ use tty7_core::core::machine::TabId;
 
 pub(crate) type ReorderState = Rc<RefCell<Option<Reorder>>>;
 
-/// The cursor for a grip you pick up and drag. Win32 ships no open-hand
-/// cursor, and gpui's Windows backend quietly answers `OpenHand` with the
-/// plain arrow — so a grip there would look like ordinary background. The
-/// pointing hand is the closest thing Windows has that still reads as
-/// "this responds to the mouse".
 pub(crate) fn cursor_grab<E: Styled>(el: E) -> E {
-    if cfg!(target_os = "windows") {
-        el.cursor_pointer()
-    } else {
-        el.cursor_grab()
-    }
+    el.cursor_grab()
 }
 
 pub(crate) struct Preview {

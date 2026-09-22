@@ -2,7 +2,6 @@ use alacritty_terminal::term::TermMode;
 use gpui::{App, Bounds, InputHandler, Pixels, UTF16Selection, Window};
 
 use super::view::TerminalView;
-#[cfg(target_os = "macos")]
 use crate::core::config::Config;
 
 /// Everything about the terminal's current state that changes how a keystroke
@@ -92,7 +91,6 @@ pub(super) fn reshape_option_keystroke(
     }
 }
 
-#[cfg(any(target_os = "macos", test))]
 pub(super) fn defer_to_ime(ks: &gpui::Keystroke, flags: KeyFlags) -> bool {
     if flags.report_all_keys {
         return false;
@@ -106,7 +104,6 @@ pub(super) fn defer_to_ime(ks: &gpui::Keystroke, flags: KeyFlags) -> bool {
         .is_some_and(|ch| !ch.is_empty() && ch.chars().all(|c| c >= '\u{20}' && c != '\u{7f}'))
 }
 
-#[cfg(any(target_os = "macos", test))]
 pub(super) fn meta_chord_bypasses_ime(ks: &gpui::Keystroke, option_as_alt: bool) -> bool {
     let m = &ks.modifiers;
     option_as_alt && m.alt && !m.platform && !m.control
@@ -553,7 +550,6 @@ impl InputHandler for TerminalInputHandler {
         window: &mut Window,
         cx: &mut App,
     ) -> bool {
-        #[cfg(target_os = "macos")]
         if meta_chord_bypasses_ime(keystroke, cx.global::<Config>().macos_option_as_alt) {
             return false;
         }
@@ -563,7 +559,7 @@ impl InputHandler for TerminalInputHandler {
         if window.has_pending_keystrokes() {
             return false;
         }
-        !cfg!(target_os = "linux")
+        true
     }
 }
 

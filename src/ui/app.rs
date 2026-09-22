@@ -279,9 +279,9 @@ pub(crate) fn tile_trailing_inset_sm() -> f32 {
     (CONTENT_INSET - TILE_PAD_SM).max(TILE_EDGE_GAP)
 }
 
-pub(crate) const TITLE_BAR_LEAD: f32 = if cfg!(target_os = "macos") { 80. } else { 12. };
+pub(crate) const TITLE_BAR_LEAD: f32 = 80.;
 
-pub(crate) const WINDOW_CONTROLS_W: f32 = if cfg!(target_os = "macos") { 0. } else { 102. };
+pub(crate) const WINDOW_CONTROLS_W: f32 = 0.;
 
 pub(crate) fn title_bar_hug_offset() -> f32 {
     if cfg!(target_os = "macos") {
@@ -372,11 +372,7 @@ pub(crate) fn title_bar_drag(
     cx: &mut gpui::App,
 ) -> gpui::Stateful<gpui::Div> {
     window_move_gesture(row, key, window, cx).on_double_click(|_, window, _| {
-        if cfg!(target_os = "linux") {
-            window.zoom_window();
-        } else {
-            window.titlebar_double_click();
-        }
+        window.titlebar_double_click();
     })
 }
 
@@ -1070,45 +1066,9 @@ impl TabAgentSession {
     }
 }
 
-/// Maps a backdrop onto the settings dropdown. The dropdown lists the
-/// presets the current Windows build supports, plus the stored value even
-/// when unsupported here (see `theme::backdrop_options`), so the label
-/// always matches what the window actually resolves to.
-#[cfg(target_os = "windows")]
-fn window_backdrop_index(backdrop: WindowBackdrop) -> usize {
-    crate::ui::theme::backdrop_options(backdrop)
-        .iter()
-        .position(|candidate| *candidate == backdrop)
-        .unwrap_or(0)
-}
 
-#[cfg(target_os = "windows")]
-fn window_backdrop_from_index(idx: usize, current: WindowBackdrop) -> WindowBackdrop {
-    crate::ui::theme::backdrop_options(current)
-        .get(idx)
-        .copied()
-        .unwrap_or(WindowBackdrop::Auto)
-}
 
-#[cfg(target_os = "windows")]
-fn window_backdrop_label_key(backdrop: WindowBackdrop) -> L10nKey {
-    match backdrop {
-        WindowBackdrop::Auto => L10nKey::SettingsBackdropAuto,
-        WindowBackdrop::Blur => L10nKey::SettingsBackdropBlur,
-        WindowBackdrop::Mica => L10nKey::SettingsBackdropMica,
-        WindowBackdrop::MicaAlt => L10nKey::SettingsBackdropMicaAlt,
-        WindowBackdrop::Acrylic => L10nKey::SettingsBackdropAcrylic,
-        WindowBackdrop::Off => L10nKey::SettingsBackdropOff,
-    }
-}
 
-#[cfg(target_os = "windows")]
-fn window_backdrop_labels(backdrop: WindowBackdrop) -> Vec<String> {
-    crate::ui::theme::backdrop_options(backdrop)
-        .iter()
-        .map(|backdrop| t(window_backdrop_label_key(*backdrop)).to_string())
-        .collect()
-}
 
 /// What a full-window overlay (settings, the opened file, the diff view)
 /// paints between its own fill and its content.
@@ -2589,37 +2549,15 @@ impl Tty7App {
         cx.notify();
     }
 
-    #[cfg(target_os = "windows")]
-    pub(crate) fn set_window_backdrop(
-        &mut self,
-        backdrop: WindowBackdrop,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        cx.global_mut::<Config>().window_backdrop = backdrop;
-        apply_theme(Some(window), cx);
-        cx.global::<Config>().save();
-        // A material changes the default opacity (SYSTEM_MATERIAL_OPACITY
-        // vs 1.0), so the slider must track the new effective value.
-        self.sync_window_opacity_slider(window, cx);
-        // Rebuild the rows as well as the selected index. The previous value
-        // may have been an unsupported preset retained only for cross-machine
-        // config sync, and must disappear after the user selects a supported
-        // preset on this machine.
-        self.sync_window_backdrop_select(window, cx);
-        cx.notify();
-    }
 
     pub(crate) fn reset_window_overrides(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         {
             let config = cx.global_mut::<Config>();
-            clear_window_override_values(config, cfg!(target_os = "windows"));
+            clear_window_override_values(config, false);
         }
         apply_theme(Some(window), cx);
         cx.global::<Config>().save();
         self.sync_window_opacity_slider(window, cx);
-        #[cfg(target_os = "windows")]
-        self.sync_window_backdrop_select(window, cx);
         cx.notify();
     }
 
@@ -2637,27 +2575,6 @@ impl Tty7App {
         }
     }
 
-    #[cfg(target_os = "windows")]
-    pub(crate) fn sync_window_backdrop_select(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if let Some(select) = self
-            .active_settings()
-            .map(|s| s.window_backdrop_select.clone())
-        {
-            let current = cx.global::<Config>().window_backdrop;
-            let rows = window_backdrop_labels(current);
-            let selected = window_backdrop_index(current);
-            select.update(cx, |state, cx| {
-                state.set_items(SearchableVec::new(rows), window, cx);
-                // Replacing the delegate clears its selection snapshot, so
-                // restore the stored value after installing the new rows.
-                state.set_selected_index(Some(IndexPath::default().row(selected)), window, cx);
-            });
-        }
-    }
 
     pub(crate) fn pick_theme_image(&mut self, cx: &mut Context<Self>) {
         let rx = cx.prompt_for_paths(gpui::PathPromptOptions {
@@ -5651,8 +5568,6 @@ impl Tty7App {
         let (font_select, font_bold_select, font_italic_select, ui_font_select) =
             self.build_font_selects(&mut subs, window, cx);
         let language_select = self.build_language_select(&mut subs, window, cx);
-        #[cfg(target_os = "windows")]
-        let window_backdrop_select = self.build_window_backdrop_select(&mut subs, window, cx);
         let (shell_program_input, shell_args_input, wd_path_input) =
             self.build_shell_inputs(&mut subs, window, cx);
         let link_file_command_input = self.build_link_file_command_input(&mut subs, window, cx);
@@ -5724,8 +5639,6 @@ impl Tty7App {
             font_italic_select,
             ui_font_select,
             language_select,
-            #[cfg(target_os = "windows")]
-            window_backdrop_select,
             shell_program_input,
             shell_args_input,
             wd_path_input,
@@ -5931,45 +5844,6 @@ impl Tty7App {
             .unwrap_or_else(crate::ui::i18n::default_language_code)
     }
 
-    /// The backdrop dropdown only lists the presets this Windows build
-    /// supports, in the order of `theme::supported_backdrops`; the select
-    /// resolves the picked label back through that same list.
-    #[cfg(target_os = "windows")]
-    fn build_window_backdrop_select(
-        &mut self,
-        subs: &mut Vec<Subscription>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Entity<SelectState<SearchableVec<String>>> {
-        let rows = window_backdrop_labels(cx.global::<Config>().window_backdrop);
-        let selected = window_backdrop_index(cx.global::<Config>().window_backdrop);
-        let select = cx.new(|cx| {
-            SelectState::new(
-                SearchableVec::new(rows),
-                Some(IndexPath::default().row(selected)),
-                window,
-                cx,
-            )
-        });
-        subs.push(cx.subscribe_in(
-            &select,
-            window,
-            move |this, _select, ev: &SelectEvent<SearchableVec<String>>, window, cx| {
-                if let SelectEvent::Confirm(Some(label)) = ev {
-                    let current = cx.global::<Config>().window_backdrop;
-                    let rows = window_backdrop_labels(current);
-                    if let Some(idx) = rows.iter().position(|row| row == label) {
-                        this.set_window_backdrop(
-                            window_backdrop_from_index(idx, current),
-                            window,
-                            cx,
-                        );
-                    }
-                }
-            },
-        ));
-        select
-    }
 
     pub(crate) fn set_gui_language(
         &mut self,
@@ -6019,21 +5893,6 @@ impl Tty7App {
                     .unwrap_or(0);
                 state.set_selected_index(Some(IndexPath::default().row(selected)), window, cx);
             });
-            #[cfg(target_os = "windows")]
-            s.window_backdrop_select.update(cx, |state, cx| {
-                let current = cx.global::<Config>().window_backdrop;
-                let rows = window_backdrop_labels(current);
-                state.set_items(SearchableVec::new(rows), window, cx);
-                // `set_items` does not preserve the selection; restore the
-                // index of the stored value so a locale refresh (which
-                // re-translates the labels) cannot leave the dropdown
-                // showing no — or the wrong — selection.
-                state.set_selected_index(
-                    Some(IndexPath::default().row(window_backdrop_index(current))),
-                    window,
-                    cx,
-                );
-            });
             s.search.update(cx, |state, cx| {
                 state.set_placeholder(t(L10nKey::SearchSettings), window, cx)
             });
@@ -6049,11 +5908,9 @@ impl Tty7App {
             s.shell_args_input.update(cx, |state, cx| {
                 state.set_placeholder(t(L10nKey::AppPlaceholderNone), window, cx)
             });
-            if !cfg!(windows) {
-                s.shell_program_input.update(cx, |state, cx| {
-                    state.set_placeholder(t(L10nKey::AppPlaceholderLoginShell), window, cx)
-                });
-            }
+            s.shell_program_input.update(cx, |state, cx| {
+                state.set_placeholder(t(L10nKey::AppPlaceholderLoginShell), window, cx)
+            });
             s.link_file_command_input.update(cx, |state, cx| {
                 state.set_placeholder(t(L10nKey::AppPlaceholderOpenInDefaultApp), window, cx)
             });
@@ -6080,11 +5937,7 @@ impl Tty7App {
             None => (String::new(), String::new()),
         };
         let wd_path = cfg.working_directory.path.clone();
-        let platform_default = if cfg!(windows) {
-            "PowerShell"
-        } else {
-            t(L10nKey::AppPlaceholderLoginShell)
-        };
+        let platform_default = t(L10nKey::AppPlaceholderLoginShell);
         let shell_program_input = cx.new(|cx| {
             InputState::new(window, cx)
                 .placeholder(platform_default)
@@ -6395,8 +6248,6 @@ impl Tty7App {
         // settings panel is open. The window itself already switched
         // material above, so the dropdown has to follow or it contradicts
         // what it describes.
-        #[cfg(target_os = "windows")]
-        self.sync_window_backdrop_select(window, cx);
         let config = cx.global::<Config>().clone();
         if config.cursor_style != self.terminal_cursor_style
             || config.scrollback_limit != self.terminal_scrollback_limit
@@ -7330,13 +7181,7 @@ impl Tty7App {
         if !path.exists() {
             cx.global::<Config>().save();
         }
-        let opener = if cfg!(target_os = "macos") {
-            "open"
-        } else if cfg!(windows) {
-            "explorer"
-        } else {
-            "xdg-open"
-        };
+        let opener = "open";
         if let Err(e) = std::process::Command::new(opener).arg(&path).spawn() {
             log::warn!("failed to open {}: {e}", path.display());
         }
@@ -7349,7 +7194,7 @@ pub(crate) mod render_probe {
 
     thread_local! {
         static DRAWS: Cell<u64> = const { Cell::new(0) };
-                                static BUDGET: Cell<Option<u64>> = const { Cell::new(None) };
+        static BUDGET: Cell<Option<u64>> = const { Cell::new(None) };
     }
 
     pub(crate) fn record() {
@@ -7655,11 +7500,7 @@ impl Render for Tty7App {
         // Windows has no closed-hand cursor and gpui answers `ClosedHand` with
         // the plain arrow there, which would drop the grip's pointing hand the
         // instant the drag it advertised began.
-        let held = if cfg!(target_os = "windows") {
-            gpui::CursorStyle::PointingHand
-        } else {
-            gpui::CursorStyle::ClosedHand
-        };
+        let held = gpui::CursorStyle::ClosedHand;
         if (self.reorder.borrow().is_some() || self.pane_drag.borrow().is_some())
             && cx.active_drag_cursor_style() != Some(held)
         {

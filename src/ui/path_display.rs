@@ -239,74 +239,9 @@ mod tests {
         ));
     }
 
-    #[cfg(windows)]
-    #[test]
-    fn native_separators_rewrites_forward_slashes_to_backslashes_on_windows() {
-        // The bug: a repo root from `git rev-parse` (forward slashes) joined
-        // with backslash-joined entries yields a mixed path, which
-        // `ParseDisplayName` rejects. Every `/` must become `\`.
-        assert_eq!(
-            native_separators(Path::new("D:/code/tty7\\skills")),
-            Path::new("D:\\code\\tty7\\skills")
-        );
-        assert_eq!(
-            native_separators(Path::new("D:/code/tty7")),
-            Path::new("D:\\code\\tty7")
-        );
-    }
 
-    #[cfg(windows)]
-    #[test]
-    fn native_separators_leaves_unc_and_backslash_paths_alone() {
-        // A UNC path (`\\wsl$\…`, `\\?\…`) or an already-native path has no
-        // `/`, so it passes through borrowed — the replace is a no-op and
-        // must not allocate, nor touch the leading `\\`.
-        for p in [
-            "\\\\wsl$\\Ubuntu\\home",
-            "\\\\?\\C:\\code",
-            "C:\\code\\tty7",
-        ] {
-            let got = native_separators(Path::new(p));
-            assert_eq!(got.as_ref(), Path::new(p), "{p:?}");
-            assert!(matches!(got, Cow::Borrowed(_)), "{p:?} should not allocate");
-        }
-    }
 
-    #[cfg(windows)]
-    #[test]
-    fn native_separators_keeps_a_name_a_string_cannot_hold() {
-        use std::ffi::OsString;
-        use std::os::windows::ffi::{OsStrExt, OsStringExt};
 
-        // `0xD800` is a lone high surrogate — legal in an NTFS name, and not
-        // representable in a Rust `str`. Rewriting through
-        // `to_string_lossy` would swap it for `U+FFFD` and hand back a path
-        // naming a *different* file; because `reveal_path` only logs its
-        // failures, that reads to the user as the same silent no-op this fix
-        // is here to remove. Working on the UTF-16 units keeps the name.
-        let raw: Vec<u16> = "C:/a"
-            .encode_utf16()
-            .chain([0xD800])
-            .chain("/b".encode_utf16())
-            .collect();
-        let path = PathBuf::from(OsString::from_wide(&raw));
-        let want: Vec<u16> = "C:\\a"
-            .encode_utf16()
-            .chain([0xD800])
-            .chain("\\b".encode_utf16())
-            .collect();
-        assert_eq!(
-            native_separators(&path)
-                .as_os_str()
-                .encode_wide()
-                .collect::<Vec<_>>(),
-            want
-        );
-        // The round-trip this replaced really did destroy it.
-        assert!(path.to_string_lossy().contains('\u{FFFD}'));
-    }
-
-    #[cfg(not(windows))]
     #[test]
     fn native_separators_is_a_no_op_off_windows() {
         // On Unix the OS separator is `/`; a path that happens to contain

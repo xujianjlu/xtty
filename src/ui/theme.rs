@@ -14,8 +14,6 @@ use crate::terminal::view::{
 use crate::ui::i18n::{L10nKey, t};
 use crate::ui::presets;
 use crate::ui::presets::Fill;
-#[cfg(target_os = "windows")]
-use std::sync::OnceLock;
 
 pub(crate) fn traffic_light_position() -> Point<Pixels> {
     point(px(9.), px(13.))
@@ -370,83 +368,24 @@ pub(crate) fn supported_backdrops_for(build: u32) -> &'static [WindowBackdrop] {
     }
 }
 
-#[cfg(target_os = "windows")]
-pub(crate) fn supported_backdrops() -> &'static [WindowBackdrop] {
-    supported_backdrops_for(windows_build_number())
-}
 
-#[cfg(target_os = "windows")]
-pub(crate) fn windows_build_number() -> u32 {
-    static BUILD: OnceLock<u32> = OnceLock::new();
-    *BUILD.get_or_init(|| {
-        use windows_sys::Wdk::System::SystemServices::RtlGetVersion;
-        use windows_sys::Win32::System::SystemInformation::OSVERSIONINFOW;
-        let mut info: OSVERSIONINFOW = unsafe { std::mem::zeroed() };
-        // RtlGetVersion is not subject to the app-compat version lying that
-        // GetVersionEx is, and unlike GetVersionEx it does not require
-        // dwOSVersionInfoSize to be pre-filled; set it anyway so the call
-        // matches the documented contract.
-        info.dwOSVersionInfoSize = std::mem::size_of_val(&info) as u32;
-        let status = unsafe { RtlGetVersion(&mut info) };
-        if status == 0 {
-            info.dwBuildNumber
-        } else {
-            // Unknown build: treat it as too old, so the fallback chain picks
-            // the most conservative material instead of a silent no-op.
-            0
-        }
-    })
-}
 
 pub(crate) fn resolved_background_appearance(
     backdrop: WindowBackdrop,
     blur: bool,
 ) -> WindowBackgroundAppearance {
-    #[cfg(target_os = "windows")]
-    {
-        windows_background_appearance(backdrop, blur, windows_build_number())
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        // `window_backdrop` is a Windows-only setting and this platform has
-        // no UI to change or clear it (only "Reset window overrides", which
-        // also clobbers opacity). If any variant pinned the appearance
-        // here, the local blur switch would silently show a checked state
-        // that isn't rendered — so every variant, including Off and Blur,
-        // defers to the legacy toggle. (A Windows-synced "off" therefore
-        // does not force transparency on macOS/Linux; the local blur switch
-        // stays authoritative.)
-        if blur {
-            WindowBackgroundAppearance::Blurred
-        } else {
-            WindowBackgroundAppearance::Transparent
-        }
+    let _ = backdrop;
+    if blur {
+        WindowBackgroundAppearance::Blurred
+    } else {
+        WindowBackgroundAppearance::Transparent
     }
 }
 
-/// Whether the resolved backdrop on this platform is actually a material —
-/// i.e. the window content sits over a blur/mica layer instead of plain
-/// transparency. Derived from `resolved_background_appearance` so the
-/// opacity defaulting and the appearance resolution can never disagree: on
-/// very old builds `Blur`/`Acrylic` fall back to `Transparent`, and a
-/// see-through window with no material behind it gets no special opacity.
-///
-/// `Auto` never counts, even when the legacy blur toggle resolves it to
-/// `Blurred`. It is the default for every config written before this
-/// setting existed, and those windows were opaque with opaque sidebars —
-/// treating them as materials would silently turn an untouched install
-/// see-through on first launch after an update. Only an explicit pick in
-/// the backdrop dropdown opts a window into the translucent defaults.
+/// macOS has no Windows-style backdrop materials; the blur toggle alone decides.
 pub(crate) fn material_active(backdrop: WindowBackdrop, blur: bool) -> bool {
-    cfg!(target_os = "windows")
-        && backdrop != WindowBackdrop::Auto
-        && matches!(
-            resolved_background_appearance(backdrop, blur),
-            WindowBackgroundAppearance::Blurred
-                | WindowBackgroundAppearance::MicaBackdrop
-                | WindowBackgroundAppearance::MicaAltBackdrop
-                | WindowBackgroundAppearance::AcrylicBackdrop
-        )
+    let _ = (backdrop, blur);
+    false
 }
 
 /// The window's background alpha when neither the config nor the theme sets
@@ -488,19 +427,6 @@ pub(crate) fn workspace_surface_color(cx: &App) -> Hsla {
     }
 }
 
-/// The backdrop presets offered in the settings dropdown: everything the
-/// current build supports, plus the stored value even if it is not
-/// supported here (e.g. Mica synced from a newer machine) — so the label
-/// always matches what the window actually resolves to instead of quietly
-/// showing "Auto" while a fallback appearance is applied.
-#[cfg(target_os = "windows")]
-pub(crate) fn backdrop_options(current: WindowBackdrop) -> Vec<WindowBackdrop> {
-    let mut list = supported_backdrops().to_vec();
-    if !list.contains(&current) {
-        list.push(current);
-    }
-    list
-}
 
 pub(crate) fn background_appearance(cx: &App) -> WindowBackgroundAppearance {
     let config = cx.global::<Config>();
@@ -558,7 +484,6 @@ pub(crate) fn apply_theme(mut window: Option<&mut Window>, cx: &mut App) {
     let follow = cx.global::<Config>().theme_follow_system;
     if follow {
         sync_native_appearance(None);
-        #[cfg(target_os = "macos")]
         refresh_system_appearance(cx);
     }
     let theme = presets::by_id(cx, &effective_preset_id(cx));
@@ -897,7 +822,6 @@ pub(crate) fn apply_theme(mut window: Option<&mut Window>, cx: &mut App) {
     highlight.style.editor_invisible = Some(ink.opacity(0.25));
     t.highlight_theme = std::sync::Arc::new(highlight);
 
-    #[cfg(target_os = "macos")]
     if let Some(window) = window.as_deref_mut() {
         window.set_traffic_light_position(traffic_light_position());
     }
@@ -925,7 +849,6 @@ pub(crate) fn apply_cursor_hide_mode(cx: &mut App) {
     cx.set_cursor_hide_mode(mode);
 }
 
-#[cfg(target_os = "macos")]
 fn sync_native_appearance(dark: Option<bool>) {
     use objc2::MainThreadMarker;
     use objc2_app_kit::{
@@ -1096,31 +1019,7 @@ mod tests {
         assert_eq!(default_window_opacity(WindowBackdrop::Off, true), 1.0);
     }
 
-    #[cfg(target_os = "windows")]
-    #[test]
-    fn an_explicitly_picked_material_lowers_the_default_opacity() {
-        use crate::core::config::WindowBackdrop;
-        // The counterpart to the check above: opting in through the dropdown
-        // is what buys the translucent default, on a build that supports it.
-        if windows_build_number() < 22_621 {
-            return;
-        }
-        for backdrop in [
-            WindowBackdrop::Blur,
-            WindowBackdrop::Mica,
-            WindowBackdrop::MicaAlt,
-            WindowBackdrop::Acrylic,
-        ] {
-            assert!(material_active(backdrop, false), "{backdrop:?}");
-            assert_eq!(
-                default_window_opacity(backdrop, false),
-                SYSTEM_MATERIAL_OPACITY,
-                "{backdrop:?}"
-            );
-        }
-    }
 
-    #[cfg(not(target_os = "windows"))]
     #[test]
     fn non_windows_backdrop_defers_to_the_local_blur_toggle() {
         use crate::core::config::WindowBackdrop;

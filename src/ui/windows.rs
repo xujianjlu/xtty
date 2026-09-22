@@ -795,13 +795,6 @@ fn close_window_for(cx: &mut App, workspace: WorkspaceId) {
 }
 
 fn window_options(cx: &mut App, workspace: Option<WorkspaceId>) -> WindowOptions {
-    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-    static APP_ICON: std::sync::LazyLock<Option<std::sync::Arc<image::RgbaImage>>> =
-        std::sync::LazyLock::new(|| {
-            image::load_from_memory(include_bytes!("../../assets/app-icon.png"))
-                .ok()
-                .map(|image| std::sync::Arc::new(image.thumbnail(256, 256).into_rgba8()))
-        });
 
     let remember = cx.global::<Config>().remember_window_size;
     let remembered = remember
@@ -836,8 +829,6 @@ fn window_options(cx: &mut App, workspace: Option<WorkspaceId>) -> WindowOptions
     WindowOptions {
         window_bounds: Some(window_bounds),
         app_id: Some("tty7".to_owned()),
-        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-        icon: APP_ICON.as_ref().cloned(),
         titlebar: Some(TitlebarOptions {
             traffic_light_position: Some(crate::ui::theme::traffic_light_position()),
             ..TitleBar::title_bar_options()

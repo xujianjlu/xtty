@@ -1201,7 +1201,6 @@ mod tests {
              and its names do not exist on the remote: {remote:?}"
         );
 
-        #[cfg(unix)]
         {
             let local: Vec<String> = complete("l", 1, Some(Path::new("/")), Some("zsh"))
                 .map(|c| c.candidates.into_iter().map(|c| c.text).collect())
@@ -1247,24 +1246,6 @@ mod tests {
         assert!(complete_foreign("cat ~/ap", 8, dir.as_path()).is_none());
     }
 
-    #[cfg(windows)]
-    #[test]
-    fn an_absolute_word_stays_inside_the_wsl_share() {
-        // The share spelling is a UNC prefix, and Windows `join` semantics
-        // keep the prefix when a rooted path lands on it — which is exactly
-        // what makes `ls /etc/<Tab>` list the *distro's* /etc instead of the
-        // local drive's. This pins the std behaviour the WSL completion
-        // route relies on.
-        let share = Path::new(r"\\wsl$\Ubuntu-24.04\home\me");
-        assert_eq!(
-            resolve_dir("/etc/", share),
-            PathBuf::from(r"\\wsl$\Ubuntu-24.04\etc")
-        );
-        assert_eq!(
-            resolve_dir("sub/", share),
-            PathBuf::from(r"\\wsl$\Ubuntu-24.04\home\me\sub")
-        );
-    }
 
     #[test]
     fn a_remote_pane_still_gets_a_signatures_static_candidates() {

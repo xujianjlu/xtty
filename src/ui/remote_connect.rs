@@ -42,8 +42,6 @@ pub fn available_hosts(cx: &App) -> Vec<HostChoice> {
         });
     }
 
-    out.extend(wsl_hosts(cx));
-
     for imported in crate::core::ssh_config::import_profiles() {
         let alias = imported.profile.name.clone();
         if alias.trim().is_empty() || seen.iter().any(|s| s == &alias) {
@@ -123,10 +121,7 @@ fn live_label(cx: &App, target: &RemoteTarget) -> Option<String> {
             .iter()
             .find(|p| p.id == *id)
             .map(profile_label),
-        RemoteTarget::Wsl { .. } => wsl_hosts(cx)
-            .into_iter()
-            .find(|h| h.target == *target)
-            .map(|h| h.label),
+        RemoteTarget::Wsl { .. } => None,
         RemoteTarget::Alias { .. }
         | RemoteTarget::Direct { .. }
         | RemoteTarget::LocalStdio { .. } => None,
@@ -179,72 +174,8 @@ fn local_stdio_host() -> Option<HostChoice> {
     })
 }
 
-fn wsl_detail() -> String {
-    format!("WSL · {}", t(L10nKey::RemoteThisComputer))
-}
-
-fn wsl_hosts(cx: &App) -> Vec<HostChoice> {
-    let names = cx
-        .try_global::<WslDistros>()
-        .map(|state| state.names.as_slice())
-        .unwrap_or_default();
-    wsl_choices(names)
-}
-
-fn wsl_choices(names: &[String]) -> Vec<HostChoice> {
-    names
-        .iter()
-        .map(|distro| HostChoice {
-            target: RemoteTarget::Wsl {
-                distro: distro.clone(),
-            },
-            label: distro.clone(),
-            detail: wsl_detail(),
-        })
-        .collect()
-}
-
-#[derive(Default)]
-struct WslDistros {
-    names: Vec<String>,
-    probed_at: Option<Instant>,
-    in_flight: bool,
-}
-
-impl Global for WslDistros {}
-
-const WSL_TTL: Duration = Duration::from_secs(30);
-
-pub fn sweep_wsl(cx: &mut App) {
-    if !cfg!(windows) {
-        return;
-    }
-    {
-        let state = cx.default_global::<WslDistros>();
-        if state.in_flight || state.probed_at.is_some_and(|at| at.elapsed() < WSL_TTL) {
-            return;
-        }
-    }
-    cx.update_global::<WslDistros, _>(|state, _| state.in_flight = true);
-    cx.spawn(async move |cx| {
-        let probed = cx
-            .background_spawn(async { crate::core::shells::wsl_distros_probed() })
-            .await;
-        let _ = cx.update(|cx| {
-            cx.update_global::<WslDistros, _>(|state, _| adopt_probe(state, probed));
-            cx.refresh_windows();
-        });
-    })
-    .detach();
-}
-
-fn adopt_probe(state: &mut WslDistros, probed: Option<Vec<String>>) {
-    if let Some(names) = probed {
-        state.names = names;
-    }
-    state.probed_at = Some(Instant::now());
-    state.in_flight = false;
-}
+/// WSL distro probing removed; kept as a no-op for existing call sites.
+pub fn sweep_wsl(_cx: &mut App) {}
 
 fn endpoint_label(user: &str, host: &str, port: u16) -> String {
     let base = if user.is_empty() {
@@ -386,7 +317,6 @@ fn refresh_agent_hooks_once(host: &Arc<RemoteHost>, home: &std::path::Path) {
     });
 }
 
-#[cfg(unix)]
 fn handshake(
     stream: crate::daemon::transport::Stream,
     connection_key: &str,
@@ -395,14 +325,6 @@ fn handshake(
     RemoteHost::over_unix(stream, connection_key, hello)
 }
 
-#[cfg(windows)]
-fn handshake(
-    stream: crate::daemon::transport::Stream,
-    connection_key: &str,
-    hello: &ControlHello,
-) -> io::Result<Arc<RemoteHost>> {
-    RemoteHost::over_tcp(stream, connection_key, hello)
-}
 
 pub fn list_workspaces(host: &Arc<RemoteHost>) -> io::Result<Vec<RemoteWorkspaceRow>> {
     match host.client().call(ControlRequest::MachineGet)? {
@@ -429,13 +351,6 @@ fn client_hostname() -> String {
         // from a GUI process flashes a console window on screen even when its
         // output is piped, and this runs while the user is looking at the
         // connect dialog.
-        #[cfg(windows)]
-        if let Some(name) = std::env::var_os("COMPUTERNAME") {
-            let name = name.to_string_lossy().trim().to_string();
-            if !name.is_empty() {
-                return name;
-            }
-        }
         let mut cmd = std::process::Command::new("hostname");
         tty7_core::core::proc::hide_console(&mut cmd)
             .output()
@@ -1290,63 +1205,4 @@ mod tests {
         assert!(filter_hosts(&hosts, "zzz").is_empty());
     }
 
-    #[test]
-    fn a_wsl_row_names_the_distro_verbatim() {
-        let rows = wsl_choices(&["Ubuntu-22.04".to_string(), "Arch".to_string()]);
-        assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0].label, "Ubuntu-22.04");
-        assert_eq!(
-            rows[0].target,
-            RemoteTarget::Wsl {
-                distro: "Ubuntu-22.04".to_string()
-            }
-        );
-        assert_eq!(rows[0].target.connection_key(), "wsl:Ubuntu-22.04");
-        assert_eq!(rows[1].label, "Arch");
-    }
-
-    #[test]
-    fn no_distros_is_no_rows() {
-        assert!(wsl_choices(&[]).is_empty());
-    }
-
-    #[test]
-    fn a_distro_is_found_by_name_or_by_wsl() {
-        let mut hosts = vec![host("gate2jup", "root@18.143.92.244")];
-        hosts.extend(wsl_choices(&["Ubuntu".to_string()]));
-
-        let by_name = filter_hosts(&hosts, "ubun");
-        assert_eq!(by_name.len(), 1);
-        assert_eq!(by_name[0].label, "Ubuntu");
-
-        let by_kind = filter_hosts(&hosts, "wsl");
-        assert_eq!(by_kind.len(), 1);
-        assert_eq!(by_kind[0].label, "Ubuntu");
-    }
-
-    #[test]
-    fn a_failed_probe_keeps_the_distros_it_already_had() {
-        let mut state = WslDistros {
-            names: vec!["Ubuntu-24.04".to_string()],
-            ..Default::default()
-        };
-        adopt_probe(&mut state, None);
-
-        assert_eq!(state.names, vec!["Ubuntu-24.04".to_string()]);
-        assert!(state.probed_at.is_some(), "the TTL still restarts");
-        assert!(!state.in_flight, "the next sweep is allowed to run");
-    }
-
-    #[test]
-    fn an_answered_probe_replaces_the_list_even_when_it_is_empty() {
-        let mut state = WslDistros {
-            names: vec!["Ubuntu-24.04".to_string()],
-            ..Default::default()
-        };
-        adopt_probe(&mut state, Some(Vec::new()));
-        assert!(state.names.is_empty());
-
-        adopt_probe(&mut state, Some(vec!["Arch".to_string()]));
-        assert_eq!(state.names, vec!["Arch".to_string()]);
-    }
 }

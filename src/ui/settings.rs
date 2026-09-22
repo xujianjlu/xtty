@@ -415,12 +415,6 @@ fn settings_search_entries() -> &'static [SearchEntry] {
             title: SettingsBlur,
             keywords: SettingsSearchBlurKeywords,
         },
-        #[cfg(target_os = "windows")]
-        SearchEntry {
-            section: Appearance,
-            title: SettingsBackdrop,
-            keywords: SettingsSearchBackdropKeywords,
-        },
         SearchEntry {
             section: Appearance,
             title: SettingsDimInactivePanes,
@@ -875,8 +869,6 @@ pub(crate) struct SettingsState {
     pub(crate) font_italic_select: Entity<SelectState<SearchableVec<String>>>,
     pub(crate) ui_font_select: Entity<SelectState<SearchableVec<String>>>,
     pub(crate) language_select: Entity<SelectState<SearchableVec<String>>>,
-    #[cfg(target_os = "windows")]
-    pub(crate) window_backdrop_select: Entity<SelectState<SearchableVec<String>>>,
     pub(crate) shell_program_input: Entity<InputState>,
     pub(crate) shell_args_input: Entity<InputState>,
     pub(crate) wd_path_input: Entity<InputState>,
@@ -1193,7 +1185,6 @@ pub(crate) fn ui_font_default_label() -> &'static str {
     t(L10nKey::SettingsUiFontDefault)
 }
 
-#[cfg(target_os = "macos")]
 const LINK_MODIFIER_LABEL: &str = "⌘";
 #[cfg(not(target_os = "macos"))]
 const LINK_MODIFIER_LABEL: &str = "Ctrl";
@@ -1651,9 +1642,6 @@ fn seed_hinted_multi(
 /// keeps meaning the right file on another machine, or after the account is
 /// renamed; the absolute path the system picker hands back does not.
 fn tildify(path: &str) -> String {
-    #[cfg(windows)]
-    let home = std::env::var("USERPROFILE").ok();
-    #[cfg(not(windows))]
     let home = std::env::var("HOME").ok();
     tildify_with(path, home.as_deref().filter(|h| !h.is_empty()))
 }
@@ -2713,7 +2701,7 @@ impl Tty7App {
             return div().into_any_element();
         };
         let config = cx.global::<Config>();
-        let overridden = window_overrides_active(config, cfg!(target_os = "windows"));
+        let overridden = window_overrides_active(config, false);
         let dim_inactive_panes = config.dim_inactive_panes;
         let opacity = Tty7App::effective_window_opacity(cx);
 
@@ -2736,27 +2724,6 @@ impl Tty7App {
             .into_any_element();
         // Windows exposes the native backdrop materials directly; macOS keeps
         // the simple blur toggle, which drives its vibrancy.
-        #[cfg(target_os = "windows")]
-        let blur_control = {
-            // Both selects come from the same SettingsState resolved at the
-            // top of this function (window_opacity_slider), so the None arm
-            // is unreachable today; fall back to an empty control rather
-            // than returning from the whole section — a missing select must
-            // never silently drop the opacity slider and the rest.
-            match self
-                .active_settings()
-                .map(|s| s.window_backdrop_select.clone())
-            {
-                Some(select) => Select::new(&select)
-                    .small()
-                    .w(px(FIELD_W))
-                    .h(px(24.))
-                    .menu_max_h(px(224.))
-                    .into_any_element(),
-                None => div().into_any_element(),
-            }
-        };
-        #[cfg(not(target_os = "windows"))]
         let blur_control =
             {
                 let theme = presets::by_id(cx, &crate::ui::theme::effective_preset_id(cx));
@@ -2774,29 +2741,6 @@ impl Tty7App {
         // has an effect — otherwise a stored `window_blur: true` would blur
         // the window with no visible control to clear it, short of the reset
         // button, which also discards the user's opacity.
-        #[cfg(target_os = "windows")]
-        let auto_blur_row = (config.window_backdrop == WindowBackdrop::Auto).then(|| {
-            let theme = presets::by_id(cx, &crate::ui::theme::effective_preset_id(cx));
-            let blur = config.window_blur.unwrap_or(theme.blur);
-            let control =
-                crate::ui::theme::switch("window-blur", cx)
-                    .checked(blur)
-                    .on_click(cx.listener(|this, on: &bool, window, cx| {
-                        this.set_window_blur(*on, window, cx)
-                    }))
-                    .into_any_element();
-            self.settings_row(
-                t(L10nKey::SettingsBlur),
-                // Not `SettingsBlurDesc` — that one describes the switch's
-                // usual job, blurring whatever sits behind the window. This
-                // row explains its one remaining job on Windows: feeding the
-                // `Auto` material.
-                t(L10nKey::SettingsBlurAutoDesc),
-                control,
-                cx,
-            )
-        });
-        #[cfg(not(target_os = "windows"))]
         let auto_blur_row: Option<Stateful<Div>> = None;
         let dim_switch = crate::ui::theme::switch("dim-inactive-panes", cx)
             .checked(dim_inactive_panes)
@@ -2812,16 +2756,8 @@ impl Tty7App {
                 cx,
             ))
             .child(self.settings_row(
-                t(if cfg!(target_os = "windows") {
-                    L10nKey::SettingsBackdrop
-                } else {
-                    L10nKey::SettingsBlur
-                }),
-                t(if cfg!(target_os = "windows") {
-                    L10nKey::SettingsBackdropDesc
-                } else {
-                    L10nKey::SettingsBlurDesc
-                }),
+                t(L10nKey::SettingsBlur),
+                t(L10nKey::SettingsBlurDesc),
                 blur_control,
                 cx,
             ))
@@ -5723,11 +5659,7 @@ impl Tty7App {
         };
         let wd_strategy = cx.global::<Config>().working_directory.strategy;
 
-        let platform_default = if cfg!(windows) {
-            "PowerShell"
-        } else {
-            t(L10nKey::SettingsShellDefaultLoginShell)
-        };
+        let platform_default = t(L10nKey::SettingsShellDefaultLoginShell);
 
         // tty7 already knows which shells are installed — it lists them on the
         // new-tab button. Settings asked you to type one from memory instead,
@@ -5747,11 +5679,8 @@ impl Tty7App {
             .cloned()
             .collect();
         let current_program = program_input.read(cx).value().trim().to_string();
-        let platform_default_item: SharedString = if cfg!(windows) {
-            "PowerShell".into()
-        } else {
-            t(L10nKey::AppPlaceholderLoginShell).into()
-        };
+        let platform_default_item: SharedString =
+            t(L10nKey::AppPlaceholderLoginShell).into();
         let picker_app = cx.entity().downgrade();
         let picker_input = program_input.clone();
         // The chevron rides inside the field rather than beside it: hung on the
@@ -8637,12 +8566,6 @@ mod tests {
             ("wallpaper", Appearance),
             ("image opacity", Appearance),
         ];
-        #[cfg(target_os = "windows")]
-        cases.extend([
-            ("material", Appearance),
-            ("mica", Appearance),
-            ("acrylic", Appearance),
-        ]);
         for (query, expected) in cases {
             assert_eq!(
                 best_matching_section(query).map(|s| s.profile_label()),

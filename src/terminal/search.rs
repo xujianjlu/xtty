@@ -2302,23 +2302,6 @@ mod tests {
         );
     }
 
-    /// The Windows half of the rule above, spelled out where it can be: the
-    /// drive the pane is on is what a leading `/` there is measured from.
-    /// Cannot be asserted on a Unix client, where `PathBuf` has no notion of a
-    /// drive at all — the *rule* is pinned ungated above, this is the reading.
-    #[test]
-    #[cfg(windows)]
-    fn a_local_windows_pane_measures_a_leading_slash_from_its_own_drive() {
-        let roots = LinkRoots::local(vec![PathBuf::from(r"C:\proj")]);
-        assert_eq!(
-            file_candidate_at("open /etc/hosts now", 6)
-                .expect("candidate")
-                .paths(&roots),
-            vec![PathBuf::from(r"C:\etc\hosts")],
-            "`/etc` in a cmd.exe pane on C: is C:\\etc, the way `cd /etc` is"
-        );
-    }
-
     #[test]
     fn a_windows_pane_roots_a_drive_letter_and_a_share() {
         let style = PathStyle::Windows;

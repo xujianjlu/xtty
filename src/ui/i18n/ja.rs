@@ -381,13 +381,7 @@ pub fn translate_ja(key: L10nKey) -> Option<&'static str> {
         L10nKey::SettingsConnectTimeoutDesc => "空欄 = ライブラリのデフォルト",
         L10nKey::SettingsX11Forwarding => "X11 転送",
         L10nKey::SettingsX11ForwardingDesc => {
-            if cfg!(target_os = "macos") {
-                "X11 転送を要求（XQuartz が必要）"
-            } else if cfg!(target_os = "windows") {
-                "X11 転送を要求（VcXsrv や X410 などの X サーバーの起動が必要）"
-            } else {
-                "X11 転送を要求"
-            }
+            "X11 転送を要求（XQuartz が必要）"
         }
         L10nKey::SettingsShellIntegration => "シェル統合",
         L10nKey::SettingsShellIntegrationDesc => {

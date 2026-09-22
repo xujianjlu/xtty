@@ -811,26 +811,8 @@ impl TerminalView {
 /// (libcanberra, PipeWire) are a runtime link away and X11's `XBell` does
 /// nothing under Wayland, so the flash fallback stays the answer there.
 fn ring_system_bell() -> bool {
-    #[cfg(target_os = "macos")]
-    {
-        objc2_app_kit::NSBeep();
-        true
-    }
-    #[cfg(target_os = "windows")]
-    {
-        // MB_OK is the "Default Beep" scheme entry, so this follows whatever
-        // the user picked in Sound Settings — including "None", which is a
-        // deliberate silence and still reports success. Deliberately not
-        // `Beep()`, which synthesizes a fixed tone straight at the speaker and
-        // ignores the scheme. Returns immediately; the sound plays async.
-        use windows_sys::Win32::System::Diagnostics::Debug::MessageBeep;
-        use windows_sys::Win32::UI::WindowsAndMessaging::MB_OK;
-        unsafe { MessageBeep(MB_OK) != 0 }
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    {
-        false
-    }
+    objc2_app_kit::NSBeep();
+    true
 }
 
 fn paste_bytes(text: &str, bracketed: bool) -> Vec<u8> {
@@ -2393,7 +2375,6 @@ impl TerminalView {
             return;
         }
 
-        #[cfg(target_os = "macos")]
         if !window.has_pending_keystrokes() && super::input::defer_to_ime(ks, self.key_flags()) {
             return;
         }
@@ -7330,7 +7311,6 @@ fn menu_row_with_hint(
     }
 }
 
-#[cfg(target_os = "macos")]
 fn mac_only(key: &'static str) -> Option<&'static str> {
     Some(key)
 }
@@ -7533,7 +7513,7 @@ fn select_end_copy(enabled: bool, grid: bool, editor: bool) -> SelectEndCopy {
 pub(crate) fn open_file_path(path: &std::path::Path) -> std::io::Result<()> {
     let opener = if cfg!(target_os = "macos") {
         "open"
-    } else if cfg!(windows) {
+    } else if false {
         "explorer"
     } else {
         "xdg-open"
@@ -7548,7 +7528,6 @@ pub(crate) fn open_file_path(path: &std::path::Path) -> std::io::Result<()> {
 /// no desktop-neutral Linux equivalent exists, so there the folder is opened
 /// and the file is left for the eye to find.
 pub(crate) fn reveal_file_path(path: &std::path::Path) -> std::io::Result<()> {
-    #[cfg(target_os = "macos")]
     let mut command = {
         let mut c = std::process::Command::new("open");
         c.arg("-R").arg(path);
@@ -7558,19 +7537,6 @@ pub(crate) fn reveal_file_path(path: &std::path::Path) -> std::io::Result<()> {
     // quotes the whole thing the moment the path holds a space, and Explorer
     // answers a quoted switch by opening Documents and reporting success —
     // so the command line is written out by hand.
-    #[cfg(windows)]
-    let mut command = {
-        use std::os::windows::process::CommandExt;
-        let mut c = std::process::Command::new("explorer");
-        c.raw_arg(format!("/select,\"{}\"", path.display()));
-        c
-    };
-    #[cfg(not(any(target_os = "macos", windows)))]
-    let mut command = {
-        let mut c = std::process::Command::new("xdg-open");
-        c.arg(path.parent().unwrap_or(path));
-        c
-    };
     command.spawn()?;
     Ok(())
 }
@@ -9875,17 +9841,8 @@ pub(crate) fn test_stream_pair() -> (
     crate::daemon::transport::Stream,
     crate::daemon::transport::Stream,
 ) {
-    #[cfg(unix)]
     {
         std::os::unix::net::UnixStream::pair().unwrap()
-    }
-    #[cfg(windows)]
-    {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = listener.local_addr().unwrap();
-        let client_side = std::net::TcpStream::connect(addr).unwrap();
-        let (daemon_side, _) = listener.accept().unwrap();
-        (client_side, daemon_side)
     }
 }
 
@@ -9973,7 +9930,7 @@ mod gpui_tests {
     use gpui::{Entity, TestAppContext, point};
 
     fn harness(cx: &mut TestAppContext) -> (gpui::WindowHandle<TerminalView>, Stream) {
-        let pty = if cfg!(windows) {
+        let pty = if false {
             PtySource::LocalConpty
         } else {
             PtySource::Raw
@@ -11177,7 +11134,6 @@ mod gpui_tests {
     /// stands alone on every client. The gate is only still here because
     /// nothing has run this test on Windows yet; lifting it belongs in a
     /// change that can show it green, not in a merge.
-    #[cfg(unix)]
     #[gpui::test]
     fn a_probe_with_no_host_to_ask_stays_wanted(cx: &mut TestAppContext) {
         let (window, mut daemon) = harness(cx);
@@ -15227,7 +15183,6 @@ mod gpui_tests {
         assert_eq!(next_input_until_timeout(&mut daemon), Some(vec![0x1e]));
     }
 
-    #[cfg(target_os = "macos")]
     #[gpui::test]
     fn cmd_backspace_reaches_a_foreground_tui_as_ctrl_u(cx: &mut TestAppContext) {
         crate::core::config::pin_test_config_dir();
@@ -15260,7 +15215,6 @@ mod gpui_tests {
         assert_eq!(next_input_until_timeout(&mut daemon), Some(vec![0x15]));
     }
 
-    #[cfg(target_os = "macos")]
     #[gpui::test]
     fn cmd_navigation_reaches_a_foreground_tui_as_readline_controls(cx: &mut TestAppContext) {
         crate::core::config::pin_test_config_dir();
@@ -15292,7 +15246,6 @@ mod gpui_tests {
         }
     }
 
-    #[cfg(target_os = "macos")]
     #[gpui::test]
     fn cmd_backspace_releases_held_input_before_ctrl_u(cx: &mut TestAppContext) {
         crate::core::config::pin_test_config_dir();

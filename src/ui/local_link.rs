@@ -214,7 +214,6 @@ fn connect_blocking() -> std::io::Result<Arc<ControlClient>> {
     crate::daemon::spawn::ensure_running().map_err(std::io::Error::other)?;
     let hello = ControlHello::gui(uuid::Uuid::new_v4().to_string(), "this computer");
     let sink: tty7_core::daemon::control::EventSink = Box::new(local_event_sink);
-    #[cfg(unix)]
     let client = {
         let stream = std::os::unix::net::UnixStream::connect(
             tty7_core::host::server::control_socket_path()?,
@@ -227,9 +226,6 @@ fn connect_blocking() -> std::io::Result<Arc<ControlClient>> {
         tty7_core::daemon::transport::tune(&stream);
         ControlClient::over_unix(stream, &hello, sink)?
     };
-    #[cfg(windows)]
-    let client =
-        ControlClient::over_tcp(tty7_core::host::server::connect_control()?, &hello, sink)?;
     Ok(Arc::new(client))
 }
 

@@ -333,13 +333,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::SettingsConnectTimeoutDesc => "留空 = 库默认值。",
         L10nKey::SettingsX11Forwarding => "X11 转发",
         L10nKey::SettingsX11ForwardingDesc => {
-            if cfg!(target_os = "macos") {
-                "请求 X11 转发（需要 XQuartz）。"
-            } else if cfg!(target_os = "windows") {
-                "请求 X11 转发（需要运行 X 服务端，如 VcXsrv 或 X410）。"
-            } else {
-                "请求 X11 转发。"
-            }
+            "请求 X11 转发（需要 XQuartz）。"
         }
         L10nKey::SettingsShellIntegration => "Shell 集成",
         L10nKey::SettingsShellIntegrationDesc => "让远程 shell 报告提示符、退出码和工作目录。",
