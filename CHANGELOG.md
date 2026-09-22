@@ -2079,7 +2079,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   verbs above: work out which pane it is sitting in, split one, send a task
   into another, capture what came back, run a command in a real PTY and pass
   its exit code through. You install it yourself, with
-  `npx skills add l0ng-ai/tty7` — tty7 writes nothing into `~/.claude` for
+  `npx skills add xujianjlu/tty7` — tty7 writes nothing into `~/.claude` for
   it, and there is no switch in Settings that does.
 
   A skill rather than a global instruction, on purpose: an earlier cut
@@ -3452,7 +3452,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   legitimately still see. (#247)
 
 - **Rounded UI controls no longer square off their corners**
-  ([#236](https://github.com/l0ng-ai/tty7/issues/236)) — the cursor-shape
+  ([#236](https://github.com/xujianjlu/tty7/issues/236)) — the cursor-shape
   toggles (Block / Bar / Underline) are the clearest case: the selected
   segment's fill filled the whole corner of the track it caps, with the track's
   own anti-aliased border arc floating *inside* that square. The controls were
@@ -3704,7 +3704,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **Interaction state and status colours are derived from the active theme**
-  ([#197](https://github.com/l0ng-ai/tty7/issues/197)) — a segmented control's
+  ([#197](https://github.com/xujianjlu/tty7/issues/197)) — a segmented control's
   selected option was indistinguishable from its neighbours on *every* bundled
   theme (Dracula worst at 1.03:1), because the theme had a colour model but no
   state model: fixed blend ratios scattered across the code, plus every
@@ -3746,7 +3746,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **Splitting or un-maximizing a pane you were hovering no longer kills the app**
-  ([#201](https://github.com/l0ng-ai/tty7/issues/201)) — a pane remembers the
+  ([#201](https://github.com/xujianjlu/tty7/issues/201)) — a pane remembers the
   cell under the pointer (that's what makes ⌘-hover underline links), and nothing
   invalidated it when the grid shrank underneath. The remembered row then named a
   line the grid no longer had, and the next modifier press indexed the grid with
@@ -3761,7 +3761,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (#204)
 
 - **Emoji written with a variation selector take their real width and
-  presentation** ([#203](https://github.com/l0ng-ai/tty7/issues/203)) — `🗂️`,
+  presentation** ([#203](https://github.com/xujianjlu/tty7/issues/203)) — `🗂️`,
   `❤️` and `⚠️` were budgeted one column, so the glyph bled over its neighbour
   and every following cell on the line shifted left by one, taking selection and
   click hit-testing with it. The selector is zero-width and lands *after* the
@@ -3809,7 +3809,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now skip a leading BOM. (#215)
 
 - **New tabs and splits open in the right directory even when the shell can't be
-  instrumented** ([#187](https://github.com/l0ng-ai/tty7/issues/187)) — a pane
+  instrumented** ([#187](https://github.com/xujianjlu/tty7/issues/187)) — a pane
   learned its directory from `OSC 7`, which only shells tty7 injects its
   integration into ever emit. A shell that `exec`s into another one from its rc
   file (`exec fish` at the end of `.zshrc`), a nested shell started by hand, or
@@ -3825,7 +3825,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Windows has no equivalent process query and is unchanged. (#207)
 
 - **Links open on Ctrl+click on Windows and Linux**
-  ([#183](https://github.com/l0ng-ai/tty7/issues/183)) — the link modifier was
+  ([#183](https://github.com/xujianjlu/tty7/issues/183)) — the link modifier was
   the platform key, which gpui maps to ⌘ on macOS but to Win/Super elsewhere, a
   key the OS mostly swallows. Off macOS neither the hover underline nor
   click-to-open could be triggered at all, and the only way to follow a URL was
@@ -3835,7 +3835,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Settings copy and the docs follow the platform. (#192)
 
 - **Option-as-Meta works with a CJK input source**
-  ([#177](https://github.com/l0ng-ai/tty7/issues/177)) — macOS gives Option two
+  ([#177](https://github.com/xujianjlu/tty7/issues/177)) — macOS gives Option two
   jobs, and routes the chord before the terminal sees it. With a non-ASCII input
   source active, ⌥F went to the IME, which committed `ƒ` and consumed the event,
   so the code that turns the chord into `ESC f` never got a say. The setting
@@ -3962,7 +3962,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The derived name is checked against the locales actually installed before it
   is exported, so it stays loadable on remote hosts too, where ssh forwards
   `LC_*` by default.
-  ([#178](https://github.com/l0ng-ai/tty7/issues/178), #173, #180)
+  ([#178](https://github.com/xujianjlu/tty7/issues/178), #173, #180)
 - **Right-click Paste dropped images, and Copy looked disabled** — copy, cut,
   paste and undo each had two implementations, a chord handler and an action
   handler, which had drifted: the context menu's Paste skipped the image branch
@@ -4775,29 +4775,29 @@ Initial release.
 - zsh shell integration (OSC 7 cwd + OSC 133 prompt marks) via a throwaway `ZDOTDIR`.
 - Native macOS light/dark themes that follow the system appearance.
 
-[26.9.1]: https://github.com/l0ng-ai/tty7/compare/v26.9.0...v26.9.1
-[26.9.0]: https://github.com/l0ng-ai/tty7/compare/v26.8.3...v26.9.0
-[26.8.3]: https://github.com/l0ng-ai/tty7/compare/v26.8.2...v26.8.3
-[26.8.2]: https://github.com/l0ng-ai/tty7/compare/v26.8.1...v26.8.2
-[26.8.1]: https://github.com/l0ng-ai/tty7/compare/v26.8.0...v26.8.1
-[26.8.0]: https://github.com/l0ng-ai/tty7/compare/v26.7.6...v26.8.0
-[26.7.6]: https://github.com/l0ng-ai/tty7/compare/v26.7.5...v26.7.6
-[26.7.5]: https://github.com/l0ng-ai/tty7/compare/v26.7.4...v26.7.5
-[26.7.4]: https://github.com/l0ng-ai/tty7/compare/v26.7.3...v26.7.4
-[26.7.3]: https://github.com/l0ng-ai/tty7/compare/v26.7.2...v26.7.3
-[26.7.2]: https://github.com/l0ng-ai/tty7/compare/v26.7.1...v26.7.2
-[26.7.1]: https://github.com/l0ng-ai/tty7/compare/v26.7.0...v26.7.1
-[26.7.0]: https://github.com/l0ng-ai/tty7/compare/v0.17.0...v26.7.0
-[0.10.0]: https://github.com/l0ng-ai/tty7/compare/v0.9.0...v0.10.0
-[0.9.0]: https://github.com/l0ng-ai/tty7/compare/v0.8.0...v0.9.0
-[0.8.0]: https://github.com/l0ng-ai/tty7/compare/v0.7.0...v0.8.0
-[0.7.0]: https://github.com/l0ng-ai/tty7/compare/v0.6.2...v0.7.0
-[0.6.2]: https://github.com/l0ng-ai/tty7/compare/v0.6.1...v0.6.2
-[0.6.1]: https://github.com/l0ng-ai/tty7/compare/v0.6.0...v0.6.1
-[0.6.0]: https://github.com/l0ng-ai/tty7/compare/v0.5.0...v0.6.0
-[0.5.0]: https://github.com/l0ng-ai/tty7/compare/v0.4.0...v0.5.0
-[0.4.0]: https://github.com/l0ng-ai/tty7/compare/v0.3.0...v0.4.0
-[0.3.0]: https://github.com/l0ng-ai/tty7/compare/v0.2.0...v0.3.0
-[0.2.0]: https://github.com/l0ng-ai/tty7/compare/v0.1.0...v0.2.0
-[0.1.0]: https://github.com/l0ng-ai/tty7/releases/tag/v0.1.0
+[26.9.1]: https://github.com/xujianjlu/tty7/compare/v26.9.0...v26.9.1
+[26.9.0]: https://github.com/xujianjlu/tty7/compare/v26.8.3...v26.9.0
+[26.8.3]: https://github.com/xujianjlu/tty7/compare/v26.8.2...v26.8.3
+[26.8.2]: https://github.com/xujianjlu/tty7/compare/v26.8.1...v26.8.2
+[26.8.1]: https://github.com/xujianjlu/tty7/compare/v26.8.0...v26.8.1
+[26.8.0]: https://github.com/xujianjlu/tty7/compare/v26.7.6...v26.8.0
+[26.7.6]: https://github.com/xujianjlu/tty7/compare/v26.7.5...v26.7.6
+[26.7.5]: https://github.com/xujianjlu/tty7/compare/v26.7.4...v26.7.5
+[26.7.4]: https://github.com/xujianjlu/tty7/compare/v26.7.3...v26.7.4
+[26.7.3]: https://github.com/xujianjlu/tty7/compare/v26.7.2...v26.7.3
+[26.7.2]: https://github.com/xujianjlu/tty7/compare/v26.7.1...v26.7.2
+[26.7.1]: https://github.com/xujianjlu/tty7/compare/v26.7.0...v26.7.1
+[26.7.0]: https://github.com/xujianjlu/tty7/compare/v0.17.0...v26.7.0
+[0.10.0]: https://github.com/xujianjlu/tty7/compare/v0.9.0...v0.10.0
+[0.9.0]: https://github.com/xujianjlu/tty7/compare/v0.8.0...v0.9.0
+[0.8.0]: https://github.com/xujianjlu/tty7/compare/v0.7.0...v0.8.0
+[0.7.0]: https://github.com/xujianjlu/tty7/compare/v0.6.2...v0.7.0
+[0.6.2]: https://github.com/xujianjlu/tty7/compare/v0.6.1...v0.6.2
+[0.6.1]: https://github.com/xujianjlu/tty7/compare/v0.6.0...v0.6.1
+[0.6.0]: https://github.com/xujianjlu/tty7/compare/v0.5.0...v0.6.0
+[0.5.0]: https://github.com/xujianjlu/tty7/compare/v0.4.0...v0.5.0
+[0.4.0]: https://github.com/xujianjlu/tty7/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/xujianjlu/tty7/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/xujianjlu/tty7/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/xujianjlu/tty7/releases/tag/v0.1.0
 [gpui]: https://github.com/zed-industries/zed

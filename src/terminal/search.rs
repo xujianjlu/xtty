@@ -1790,7 +1790,7 @@ mod tests {
 
     #[test]
     fn url_at_stops_at_unbalanced_close_paren_glued_after_url() {
-        let url = "https://github.com/l0ng-ai/tty7/pull/43";
+        let url = "https://github.com/xujianjlu/tty7/pull/43";
         let line = format!("PR 已开:#43 ({url})(Fixes #42),分支 fix-x。");
         let h = line.chars().position(|c| c == 'h').expect("scheme start");
         assert_eq!(url_at(&line, h).as_deref(), Some(url));
