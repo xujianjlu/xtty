@@ -5,6 +5,16 @@ All notable changes to tty7 are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Added
+
+- **In-pane ZMODEM for remote `rz` / `sz`.** When the far side starts a ZMODEM
+  session, tty7 peels the handshake out of the VT stream so binary frames do
+  not paint as garbage. `sz` downloads into `~/Downloads`; `rz` opens the
+  native file picker and uploads the chosen files. Ctrl-C cancels an in-flight
+  transfer.
+
 ## [26.9.2] - 2026-09-10
 
 ### Added
