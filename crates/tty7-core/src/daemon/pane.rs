@@ -2926,6 +2926,11 @@ fn apply_signals(st: &mut PaneState, signals: SniffSignals) {
         // which parsed the same sequence. This is only for the tree.
         if let Some(identity) = crate::core::tab_view::identity_from_title(&title) {
             st.osc_title = Some(identity);
+        } else if st.agent.is_some() {
+            // Agent task/status titles are useful while the agent owns the
+            // pane. Ordinary programs (vim, top, wget) still cannot displace
+            // the stable shell identity stored below them.
+            st.osc_title = (!title.is_empty()).then_some(title);
         } else if st
             .osc_title
             .as_deref()
