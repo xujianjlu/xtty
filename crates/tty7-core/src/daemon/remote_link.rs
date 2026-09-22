@@ -260,6 +260,7 @@ impl std::fmt::Debug for RemoteLink {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::daemon::router::RouteChannel;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     #[test]

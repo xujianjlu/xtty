@@ -1311,7 +1311,7 @@ mod tests {
         );
     }
 
-#[test]
+    #[test]
     fn only_the_pane_channel_changes_the_bridge_command() {
         let base = crate::daemon::remote_link::DEFAULT_REMOTE_SERVER_CMD;
         assert_eq!(RouteChannel::Control.bridge_command(base), base);

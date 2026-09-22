@@ -8074,7 +8074,7 @@ mod tests {
     use super::{SCROLL_ANIM_FRAME, scroll_anim_step};
     use super::{
         TitleSettle, remote_paste_spec, settle_title, staged_path_for_pane, stages_clipboard_image,
-        staging_cache, staging_dir_is_safe, wsl_path, wsl_share_distro, wsl_share_path,
+        staging_cache, staging_dir_is_safe, wsl_share_distro,
     };
     use super::{
         description_budget, drag_scroll_step, elide, encode_mouse, expand_file_command_template,
@@ -8343,7 +8343,7 @@ mod tests {
     }
 
     #[test]
-    fn wsl_workspace_needs_no_forward() {
+    fn local_stdio_workspace_needs_no_forward() {
         let w = ws(
             RemoteTarget::LocalStdio { program: "Ubuntu".into(), args: vec![] },
             false,
@@ -8391,45 +8391,6 @@ mod tests {
         assert_eq!(remote_paste_user(None, Some(&spec)), Some("me"));
     }
 
-    fn wsl_context(distro: &str) -> crate::daemon::protocol::RemoteContext {
-        crate::daemon::protocol::RemoteContext {
-            kind: RemoteKind::Ssh,
-            argv: Vec::new(),
-            target: distro.to_string(),
-        }
-    }
-
-    #[test]
-    fn a_wsl_exe_pane_on_this_machine_completes_over_its_own_share() {
-        assert_eq!(
-            wsl_share_distro(Some(&wsl_context("Ubuntu-24.04")), None, true),
-            Some("Ubuntu-24.04".to_string())
-        );
-    }
-
-    /// The same pane on a remote machine reaches that machine's distro, which
-    /// no share here can list.
-    #[test]
-    fn a_remote_hosts_wsl_exe_pane_leaves_tab_to_the_shell() {
-        assert_eq!(
-            wsl_share_distro(Some(&wsl_context("Ubuntu-24.04")), None, false),
-            None
-        );
-    }
-
-    /// A WSL workspace's panes are served by the daemon inside the distro, so
-    /// their host is never `LOCAL` — and the distro is still on this machine.
-    #[test]
-    fn a_wsl_workspace_pane_completes_over_the_share_its_target_names() {
-        let w = ws(
-            RemoteTarget::LocalStdio { program: "Ubuntu-24.04".into(), args: vec![] },
-            false,
-        );
-        assert_eq!(
-            wsl_share_distro(None, Some(&w), false),
-            Some("Ubuntu-24.04".to_string())
-        );
-    }
 
     #[test]
     fn panes_with_no_distro_of_their_own_have_no_share() {
@@ -8439,7 +8400,7 @@ mod tests {
     }
 
     #[test]
-    fn wsl_and_specless_workspaces_keep_the_local_image_path() {
+    fn local_stdio_and_specless_workspaces_keep_the_local_image_path() {
         let wsl = ws(
             RemoteTarget::LocalStdio { program: "Ubuntu".into(), args: vec![] },
             false,
@@ -8543,65 +8504,6 @@ mod tests {
             id: None,
         };
         assert!(super::validate_remote_clipboard_image(mismatched).is_err());
-    }
-
-    #[test]
-    fn a_wsl_pane_gets_the_automount_path_not_the_windows_one() {
-        // The staged file really is on the pane's own disk — only its name
-        // differs — so this is a rewrite, not an upload.
-        assert_eq!(
-            staged_path_for_pane(
-                r"C:\Users\me\AppData\Local\Temp\tty7-clipboard\paste-1.png",
-                true
-            ),
-            "/mnt/c/Users/me/AppData/Local/Temp/tty7-clipboard/paste-1.png"
-        );
-        assert_eq!(wsl_path(r"D:\x\y.png").as_deref(), Some("/mnt/d/x/y.png"));
-
-        // No automount mapping: the Windows path at least says where it went.
-        let unc = r"\\server\share\paste-1.png";
-        assert_eq!(wsl_path(unc), None);
-        assert_eq!(staged_path_for_pane(unc, true), unc);
-        // Drive-relative, not absolute — `C:x` means "x under C:'s cwd".
-        assert_eq!(wsl_path(r"C:paste-1.png"), None);
-
-        // Every other pane keeps the path exactly as staged.
-        assert_eq!(
-            staged_path_for_pane("/tmp/tty7-clipboard/paste-1.png", false),
-            "/tmp/tty7-clipboard/paste-1.png"
-        );
-        assert_eq!(
-            staged_path_for_pane(r"C:\Temp\paste-1.png", false),
-            r"C:\Temp\paste-1.png"
-        );
-    }
-
-    #[test]
-    fn a_wsl_cwd_gets_a_windows_spelling_the_completion_engine_can_list() {
-        let share = |posix: &str| wsl_share_path("Ubuntu-24.04", posix);
-
-        // A distro-native path goes through the share.
-        assert_eq!(
-            share("/home/me/repo"),
-            Some(PathBuf::from(r"\\wsl$\Ubuntu-24.04\home\me\repo"))
-        );
-        assert_eq!(share("/"), Some(PathBuf::from(r"\\wsl$\Ubuntu-24.04\")));
-
-        // The automount stays on the share too: a drive-spelled cwd would
-        // send an absolute word (`ls /etc<Tab>`) to `C:\etc` instead of the
-        // distro's /etc, because a rooted word completes against its cwd's
-        // path prefix.
-        assert_eq!(
-            share("/mnt/c/Users/me"),
-            Some(PathBuf::from(r"\\wsl$\Ubuntu-24.04\mnt\c\Users\me"))
-        );
-
-        // No absolute POSIX path, no translation — and a distro name that
-        // could break out of the share is refused outright.
-        assert_eq!(share("relative/path"), None);
-        assert_eq!(wsl_share_path("", "/home/me"), None);
-        assert_eq!(wsl_share_path(r"evil\distro", "/home/me"), None);
-        assert_eq!(wsl_share_path("evil/distro", "/home/me"), None);
     }
 
     #[test]

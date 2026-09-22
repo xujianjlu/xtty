@@ -788,10 +788,6 @@ mod tests {
             RemoteTarget::direct("me", "box.local", 2222).connection_key(),
             "ssh-direct:me@box.local:2222"
         );
-        assert_eq!(
-            .connection_key(),
-            "wsl:Ubuntu"
-        );
     }
 
     #[test]
@@ -809,10 +805,6 @@ mod tests {
             .is_ssh()
         );
         assert!(RemoteTarget::direct("me", "box.local", 22).is_ssh());
-        assert!(
-            !.is_ssh(),
-            "a distribution is reached through wsl.exe, not a connection"
-        );
         assert!(
             !RemoteTarget::LocalStdio {
                 program: "tty7-server".into(),
@@ -838,10 +830,6 @@ mod tests {
             .hosts_our_server()
         );
         assert!(RemoteTarget::direct("me", "box.local", 22).hosts_our_server());
-        assert!(
-            .hosts_our_server(),
-            "a distribution's server is installed and launched from here, like an SSH one"
-        );
         assert!(
             !RemoteTarget::LocalStdio {
                 program: "tty7-server".into(),

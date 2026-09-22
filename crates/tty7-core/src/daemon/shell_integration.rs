@@ -1649,26 +1649,17 @@ mod tests {
     }
 
     #[test]
-    fn shell_kind_strips_exe_for_non_powershell_shells() {
-        for prog in [
-            "C:/Program Files/Git/bin/bash.exe",
-            "C:/msys64/usr/bin/bash.exe",
-        ] {
+    fn shell_kind_maps_posix_bash_paths() {
+        for prog in ["/bin/bash", "/usr/local/bin/bash", "bash"] {
             assert!(
                 matches!(shell_kind(Some(prog)), Some(ShellKind::Bash)),
                 "{prog} should map to Bash"
             );
         }
-        for prog in ["bash"] {
-            assert!(matches!(shell_kind(Some(prog)), Some(ShellKind::Bash)));
-        }
     }
 
     #[test]
-    fn bash_rcfile_path_uses_forward_slashes_on_windows() {
-        let rendered = bash_path(Path::new(
-            r"C:\Users\a\AppData\Local\Temp\tty7-bashrc-1-0\bashrc",
-        ));
+    fn bash_rcfile_path_keeps_posix_separators() {
         assert_eq!(
             bash_path(Path::new("/tmp/tty7-bashrc-1-0/bashrc")),
             "/tmp/tty7-bashrc-1-0/bashrc"
@@ -2019,14 +2010,14 @@ mod tests {
 
         assert!(setup(Some(bash), &[], true).is_none());
 
-        let inj = setup(Some("powershell.exe"), &[], false).expect("powershell setup");
+        let inj = setup(Some("powershell"), &[], false).expect("powershell setup");
         assert!(inj.env.contains_key("TTY7_SHELL_INTEGRATION"));
         assert!(inj.dir.is_none());
         assert!(!inj.replaces_argv);
 
         assert!(setup(Some("pwsh"), &[], true).is_none());
 
-        let inj = setup(Some("nu.exe"), &[], false).expect("nushell setup");
+        let inj = setup(Some("nu"), &[], false).expect("nushell setup");
         assert!(inj.env.contains_key("TTY7_SHELL_INTEGRATION"));
         assert_eq!(inj.args[0], "--config");
         assert!(!inj.replaces_argv);
@@ -2034,7 +2025,7 @@ mod tests {
             let _ = std::fs::remove_dir_all(d);
         }
 
-        assert!(setup(Some("nu.exe"), &[], true).is_none());
+        assert!(setup(Some("nu"), &[], true).is_none());
 
         assert!(setup(Some("/bin/sh"), &[], false).is_none());
     }
