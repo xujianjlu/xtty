@@ -127,6 +127,37 @@ pub enum KeybindingOverride {
     Exact(Vec<String>),
 }
 
+/// An iTerm-style rule that reacts to text printed by a terminal.
+///
+/// The secret is deliberately absent. `credential` is only the account name
+/// of an entry in the operating-system keychain; serialising a trigger must
+/// never serialise the password it sends.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(default)]
+pub struct PasswordTrigger {
+    pub name: String,
+    pub pattern: String,
+    pub regex: bool,
+    pub credential: String,
+    pub send_enter: bool,
+    pub enabled: bool,
+    pub cooldown_ms: u64,
+}
+
+impl Default for PasswordTrigger {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            pattern: String::new(),
+            regex: false,
+            credential: String::new(),
+            send_enter: true,
+            enabled: true,
+            cooldown_ms: 1_500,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Config {
@@ -179,6 +210,11 @@ pub struct Config {
     /// they wrote.
     #[serde(default, deserialize_with = "de_lenient")]
     pub custom_shells: Vec<CustomShell>,
+
+    /// Output-driven password rules. Passwords live in the OS keychain under
+    /// `credential`, never in this config file.
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub password_triggers: Vec<PasswordTrigger>,
 
     pub link_url: bool,
     /// What a clicked file link opens in. `None` means the key predates this
@@ -628,6 +664,7 @@ impl Default for Config {
             prefix: default_prefix(),
             shell: None,
             custom_shells: Vec::new(),
+            password_triggers: Vec::new(),
             link_url: true,
             link_file_open: Some(LinkFileOpen::Internal),
             link_file_command: None,
