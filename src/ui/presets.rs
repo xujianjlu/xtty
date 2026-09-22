@@ -483,6 +483,18 @@ pub(crate) fn needs_edge(fill: u32, surface: Hsla) -> bool {
     contrast(fill, packed) < 1.25
 }
 
+/// Permanent chrome on the sidebar rail — the workspace switcher and the tab
+/// search box. Same family as the selected tab (`sidebar.selected`), stepped
+/// about halfway so the active row still reads as the strongest mark in the
+/// column. Mixing toward the selected rung also darkens the fill on light
+/// themes, which is the symmetric treatment those themes need; a hairline
+/// alone without this fill is not enough to lift either control off the rail.
+pub(crate) fn sidebar_chrome_fill(cx: &App) -> (u32, Hsla) {
+    let sf = cx.global::<Surfaces>().sidebar;
+    let packed = mix(sf.base, sf.selected, 0.55);
+    (packed, gpui::rgb(packed).into())
+}
+
 /// Whether a surface is dark enough that a halo cut in its own colour stops
 /// reading as a ring and starts reading as a hole.
 pub(crate) fn surface_is_dark(surface: Hsla) -> bool {

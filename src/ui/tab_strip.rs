@@ -979,7 +979,7 @@ impl Tty7App {
                 .h(px(30.))
                 .w_full()
                 .px(px(7.))
-                .rounded_md()
+                .rounded_lg()
                 .bg(cx.theme().sidebar_accent)
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .child(Input::new(&rename.input).appearance(false).xsmall())
@@ -994,6 +994,15 @@ impl Tty7App {
             .next()
             .map(|c| c.to_uppercase().to_string())
             .unwrap_or_else(|| "~".to_string());
+        let (_, chrome_fill) = crate::ui::presets::sidebar_chrome_fill(cx);
+        let selected = cx.global::<crate::ui::presets::Surfaces>().sidebar.selected;
+        // Resting fill is the chrome step; hover walks to the selected rung so
+        // the pointer still gets an answer on top of an already-raised tile.
+        let workspace_variant = ButtonCustomVariant::new(cx)
+            .color(chrome_fill)
+            .foreground(cx.theme().sidebar_foreground)
+            .hover(gpui::rgb(selected).into())
+            .active(cx.theme().sidebar_accent);
 
         div()
             .occlude()
@@ -1005,7 +1014,7 @@ impl Tty7App {
             })
             .child(
                 Button::new("rail-workspace-head")
-                    .custom(chrome_tile_variant(cx))
+                    .custom(workspace_variant)
                     .child(
                         h_flex()
                             .id("rail-workspace-head-ink")
@@ -1013,13 +1022,10 @@ impl Tty7App {
                             .h_full()
                             .items_center()
                             .gap(px(6.))
-                            // The tile's own hover is a fill the palette keeps
-                            // a hair off the surface, which on the rail is
-                            // barely a change at all — and the name and the
-                            // chevron pinned their own ink, so the pointer
-                            // landing on the one control at the top of the
-                            // column said nothing. Answer the way a group
-                            // header does: the ink steps up to full strength.
+                            // Name and chevron pin their own ink so the
+                            // pointer landing on the one control at the top of
+                            // the column still says something: the ink steps
+                            // up to full strength the way a group header does.
                             .text_color(cx.theme().muted_foreground)
                             .hover(|s| s.text_color(cx.theme().foreground))
                             .child(
@@ -1061,7 +1067,7 @@ impl Tty7App {
                     .xsmall()
                     .w_full()
                     .h(px(30.))
-                    .rounded_md()
+                    .rounded_lg()
                     .tooltip_element(chord_tooltip(
                         t(L10nKey::HomeSwitchWorkspace),
                         "ToggleSwitcher",
