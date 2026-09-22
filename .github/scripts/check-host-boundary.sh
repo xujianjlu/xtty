@@ -68,6 +68,11 @@ src/ui/settings.rs|std::fs::metadata
 # business, read over the wire, not through here.
 src/terminal/history.rs|std::fs::
 
+# ZMODEM receives into ~/Downloads and sends paths chosen by the native file
+# picker — both are local-machine paths by construction. The far side speaks
+# the wire protocol; those files never resolve through a remote Host workspace.
+src/terminal/zmodem.rs|std::fs::
+
 # Completion is already remote-aware: a remote pane is signalled by `cwd: None`,
 # which disables exactly these local-filesystem candidate sources in favour of
 # `remote_path_request` / `remote_path_candidates`. The `$PATH` scan is likewise

@@ -2267,10 +2267,7 @@ impl TerminalView {
             }
             Err(err) => {
                 log::warn!("zmodem transfer error: {err}");
-                self.finish_zmodem(
-                    ZmodemUiAction::Failed { detail: err },
-                    cx,
-                );
+                self.finish_zmodem(ZmodemUiAction::Failed { detail: err }, cx);
             }
         }
     }
@@ -12524,7 +12521,7 @@ mod gpui_tests {
         window
             .update(cx, |view, window, cx| {
                 assert!(!view.input_active());
-                view.history = ["echo hello".into()];
+                view.history = vec!["echo hello".to_string()];
                 view.history_frecency = vec![0.0];
                 view.on_key_down(
                     &KeyDownEvent {

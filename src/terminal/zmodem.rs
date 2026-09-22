@@ -230,10 +230,7 @@ fn free_download_path(name: &str) -> Option<PathBuf> {
     }
     let path = Path::new(name);
     let ext = path.extension().and_then(|e| e.to_str());
-    let stem = path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or(name);
+    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or(name);
     (2..1000u32).find_map(|n| {
         let candidate = match ext {
             Some(ext) => dir.join(format!("{stem} ({n}).{ext}")),
@@ -266,9 +263,7 @@ enum SessionKind {
         active: Option<SendFile>,
     },
     /// `rz` detected; native picker is open; wire bytes buffer here.
-    AwaitingPicker {
-        buffered: Vec<u8>,
-    },
+    AwaitingPicker { buffered: Vec<u8> },
 }
 
 pub(crate) struct ZmodemSession {
@@ -297,9 +292,7 @@ impl ZmodemSession {
 
     pub(crate) fn start_awaiting_picker(initial: Vec<u8>) -> Self {
         Self {
-            kind: SessionKind::AwaitingPicker {
-                buffered: initial,
-            },
+            kind: SessionKind::AwaitingPicker { buffered: initial },
         }
     }
 
@@ -317,10 +310,7 @@ impl ZmodemSession {
         }
     }
 
-    pub(crate) fn begin_send_with_paths(
-        &mut self,
-        paths: Vec<PathBuf>,
-    ) -> Result<Vec<u8>, String> {
+    pub(crate) fn begin_send_with_paths(&mut self, paths: Vec<PathBuf>) -> Result<Vec<u8>, String> {
         let SessionKind::AwaitingPicker { buffered } = &self.kind else {
             return Err("zmodem send is not waiting for files".into());
         };
@@ -331,8 +321,7 @@ impl ZmodemSession {
 
         let mut queue = VecDeque::new();
         for path in paths {
-            let meta = std::fs::metadata(&path)
-                .map_err(|e| format!("{}: {e}", path.display()))?;
+            let meta = std::fs::metadata(&path).map_err(|e| format!("{}: {e}", path.display()))?;
             if !meta.is_file() {
                 continue;
             }
@@ -390,7 +379,10 @@ impl ZmodemSession {
 
     /// Drive the state machine with newly diverted wire bytes. Returns bytes
     /// to write back to the PTY, plus an optional UI action.
-    pub(crate) fn pump(&mut self, inbound: &[u8]) -> Result<(Vec<u8>, Option<ZmodemUiAction>), String> {
+    pub(crate) fn pump(
+        &mut self,
+        inbound: &[u8],
+    ) -> Result<(Vec<u8>, Option<ZmodemUiAction>), String> {
         match &mut self.kind {
             SessionKind::AwaitingPicker { buffered } => {
                 buffered.extend_from_slice(inbound);
