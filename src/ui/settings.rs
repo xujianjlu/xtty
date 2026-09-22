@@ -326,7 +326,7 @@ fn window_overrides_active(config: &Config) -> bool {
     config.window_opacity.is_some() || config.window_blur.is_some()
 }
 
-#[derive(Clone)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SettingsSection {
     Appearance,
     Terminal,

@@ -2500,6 +2500,149 @@ fn leaf_id_in_identifier(identifier: &str) -> Option<u64> {
     leaf_id.parse().ok()
 }
 
+struct OscNotifyScanner {
+    tok: OscTokenizer,
+}
+
+impl Default for OscNotifyScanner {
+    fn default() -> Self {
+        Self {
+            tok: OscTokenizer::new(&[b"9", b"777"]),
+        }
+    }
+}
+
+impl OscNotifyScanner {
+    fn feed(&mut self, bytes: &[u8], out: &mut Vec<(Option<String>, String)>) {
+        self.tok.feed(bytes, |payload| {
+            if let Some(note) = parse_osc_notification(payload) {
+                out.push(note);
+            }
+        });
+    }
+}
+
+fn parse_osc_notification(payload: &[u8]) -> Option<(Option<String>, String)> {
+    if crate::core::cli_agent::parse_agent_event(payload).is_some() {
+        return None;
+    }
+    let (title, body) = crate::core::osc::parse_notification(payload)?;
+    if title.as_deref() == Some(crate::core::cli_agent::AGENT_EVENT_SENTINEL) {
+        return None;
+    }
+    Some((title, body))
+}
+
+fn connect() -> anyhow::Result<Stream> {
+    transport::connect().map_err(|e| {
+        anyhow::Error::new(e).context(format!(
+            "connect to daemon at {}",
+            transport::endpoint_display()
+        ))
+    })
+}
+
+/// Whether the local daemon answers `Version` on a fresh connection right now.
+///
+/// The one question a silent `Attach` leaves open — is the daemon serving and
+/// this socket orphaned, or is nobody serving yet? A daemon answers `Version`
+/// before it touches any state, so this is the cheapest thing it can say. One
+/// second is the same budget `spawn` gives the same handshake; a healthy
+/// daemon answers in microseconds.
+fn local_daemon_answers() -> bool {
+    use std::io::Write as _;
+
+    let Ok(mut stream) = transport::connect() else {
+        return false;
+    };
+    let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(1)));
+    if ClientMsg::Version
+        .encode(&mut stream)
+        .and_then(|()| stream.flush())
+        .is_err()
+    {
+        return false;
+    }
+    matches!(DaemonMsg::read(&mut stream), Ok(DaemonMsg::Version(_)))
+}
+
+fn connect_routed(route: &PaneRoute) -> anyhow::Result<Stream> {
+    if let PaneRoute::Unroutable(reason) = route {
+        return Err(anyhow::anyhow!("{reason}"));
+    }
+    let Some(header) = route.header() else {
+        return connect();
+    };
+
+    tty7_core::host::guard_off_ui();
+
+    // No pre-flight remote probe here on purpose. The daemon runs the same
+    // probe inside `router::open_link` before it opens the link, so asking from
+    // this side too bought nothing and cost a second full round trip on every
+    // pane. The route ack below still reports failure, and first-install consent
+    // still reaches this process via `RouteSetup::blocking` on this connection.
+    let mut stream = connect()?;
+    let ack = crate::daemon::router::negotiate(&mut stream, header)
+        .map_err(|e| anyhow::anyhow!("route this pane to {}: {e}", header.describe()))?;
+    log::debug!(
+        "pane routed to {} over {}",
+        header.describe(),
+        ack.link.as_deref().unwrap_or("?")
+    );
+    Ok(stream)
+}
+
+fn terminal_config_from_user(user_config: &crate::core::config::Config) -> Config {
+    Config {
+        scrolling_history: user_config.scrollback_limit,
+        default_cursor_style: alacritty_cursor_style(user_config.cursor_style),
+        semantic_escape_chars: user_config.word_separators.clone(),
+        kitty_keyboard: true,
+        // ConPTY resize semantics only apply on Windows panes. macOS always
+        // leaves this off (`cfg!(windows)` is false here).
+        conpty_resize: cfg!(windows),
+        ..Config::default()
+    }
+}
+
+#[cfg(test)]
+mod config_tests {
+    use super::*;
+
+    /// The whole conhost-semantics fix hangs on this one field: it defaults to
+    /// off in `alacritty_terminal`, so dropping the line compiles clean, passes
+    /// every other test, and quietly resurrects the maximize garbling — which
+    /// is exactly how it shipped disabled once (#415 follow-up).
+    #[test]
+    fn windows_panes_opt_into_conpty_resize_semantics() {
+        let config = terminal_config_from_user(&crate::core::config::Config::default());
+        assert_eq!(config.conpty_resize, cfg!(windows));
+        #[cfg(windows)]
+        assert!(config.conpty_resize);
+    }
+}
+
+fn alacritty_cursor_style(style: ConfigCursorStyle) -> CursorStyle {
+    let shape = match style {
+        ConfigCursorStyle::Block => CursorShape::Block,
+        ConfigCursorStyle::Bar => CursorShape::Beam,
+        ConfigCursorStyle::Underline => CursorShape::Underline,
+    };
+    CursorStyle {
+        shape,
+        blinking: false,
+    }
+}
+
+fn win_size(size: TermSize, cell_w: u16, cell_h: u16) -> WinSize {
+    WinSize {
+        cols: size.cols as u16,
+        rows: size.rows as u16,
+        cell_w,
+        cell_h,
+    }
+}
+
 /// macOS notifications, straight to `NSUserNotificationCenter`.
 ///
 /// This used to go through `mac-notification-sys` with `wait_for_click`, so a
