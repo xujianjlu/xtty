@@ -12810,9 +12810,14 @@ mod gpui_tests {
 
     #[gpui::test]
     fn ctrl_r_fuzzy_search_accepts_into_the_editor(cx: &mut TestAppContext) {
-        let (window, _daemon) = harness(cx);
+        // Accept parks in `cmd` only when the inline editor is live. Without
+        // OSC marks the same Enter types into the PTY (covered by
+        // `history_search_works_without_shell_integration`).
+        let (window, mut daemon) = harness(cx);
+        prompt_ready(&window, cx, &mut daemon);
         window
             .update(cx, |view, _, cx| {
+                assert!(view.input_active(), "the editor owns an idle prompt");
                 view.history = ["git status", "cargo build", "git commit -m x"]
                     .into_iter()
                     .map(String::from)
