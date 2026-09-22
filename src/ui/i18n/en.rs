@@ -120,6 +120,10 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::SettingsCursorShapeDesc => "How the terminal cursor is drawn.",
         L10nKey::SettingsCursorBlink => "Cursor blink",
         L10nKey::SettingsCursorBlinkDesc => "Pulse the cursor while the terminal is focused.",
+        L10nKey::SettingsCursorBlinkInterval => "Blink interval",
+        L10nKey::SettingsCursorBlinkIntervalDesc => {
+            "Seconds between each on/off phase of the cursor (0.1–2). Decimals allowed."
+        }
         L10nKey::SettingsLanguage => "Language",
         L10nKey::SettingsLanguageDesc => "Choose the language used for the tty7 interface.",
         L10nKey::SettingsLanguageEnglish => "English",
@@ -779,6 +783,9 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         }
         L10nKey::SettingsSearchCopyOnSelectKeywords => "clipboard selection yank mouse",
         L10nKey::SettingsSearchCursorBlinkKeywords => "caret blinking flash",
+        L10nKey::SettingsSearchCursorBlinkIntervalKeywords => {
+            "caret blink rate speed frequency interval seconds sec s slow fast"
+        }
         L10nKey::SettingsSearchCursorShapeKeywords => "caret block bar underline beam",
         L10nKey::SettingsSearchCustomThemesKeywords => {
             "theme duplicate edit colors folder yaml import background image wallpaper"

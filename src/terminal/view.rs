@@ -1377,9 +1377,12 @@ impl TerminalView {
 
         cx.spawn(async move |this, cx| {
             loop {
-                cx.background_executor()
-                    .timer(std::time::Duration::from_millis(530))
-                    .await;
+                let Ok(interval) =
+                    this.update(cx, |_, cx| cx.global::<Config>().cursor_blink_interval())
+                else {
+                    break;
+                };
+                cx.background_executor().timer(interval).await;
                 if this
                     .update_in(cx, |view, window, cx| {
                         // A pane can be focused once while it is being built, before

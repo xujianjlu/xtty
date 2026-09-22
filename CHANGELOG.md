@@ -5,6 +5,16 @@ All notable changes to tty7 are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Cursor blink interval is configurable.** Settings → Appearance → Cursor
+  gained a stepper for how long each on/off phase lasts (0.1–2 s, default
+  0.53), and the same value is the `cursor_blink_interval_secs` key in
+  `config.json` (decimals allowed). The terminal caret and the home-page caret
+  share the clock, so turning the interval up slows both without restarting.
+
 ## [26.9.2] - 2026-09-10
 
 ### Added

@@ -15,7 +15,8 @@ use std::sync::Arc;
 
 use crate::core::actions::*;
 use crate::core::config::{
-    Config, CursorStyle as ConfigCursorStyle, MouseZoomModifier, NewTabPosition, RightPanelTab,
+    CURSOR_BLINK_INTERVAL_SECS_MAX, CURSOR_BLINK_INTERVAL_SECS_MIN, Config,
+    CursorStyle as ConfigCursorStyle, MouseZoomModifier, NewTabPosition, RightPanelTab,
     ShellConfig, TabBarPosition,
 };
 use crate::core::session::{
@@ -149,10 +150,6 @@ pub(crate) const RECORD_COMMIT_DELAY_MS: u64 = 650;
 /// it: roughly forty columns at the default font, which is a prompt with room
 /// to read what it printed.
 pub(crate) const TERMINAL_MIN_W: f32 = 360.;
-
-/// Half the period of the home page's cursor, near enough the terminal's own
-/// 530ms that the two do not read as different clocks.
-pub(crate) const HOME_CURSOR_BLINK_MS: u64 = 600;
 
 /// How wide one side panel may grow, given the floor under the terminal and the
 /// floor under the *other* panel.
@@ -1563,14 +1560,19 @@ impl Tty7App {
         .detach();
 
         // The home page's cursor, on the terminal's own schedule. It ticks
-        // whether or not the page is up — a timer that wakes twice a second to
-        // compare a `Vec`'s length against zero costs nothing — but only asks
-        // for a frame when the page is the thing on screen.
+        // whether or not the page is up — a timer that wakes a few times a
+        // second to compare a `Vec`'s length against zero costs nothing — but
+        // only asks for a frame when the page is the thing on screen. The sleep
+        // length is re-read each lap so a settings change takes effect without
+        // rebuilding the window.
         cx.spawn(async move |this, cx| {
             loop {
-                cx.background_executor()
-                    .timer(std::time::Duration::from_millis(HOME_CURSOR_BLINK_MS))
-                    .await;
+                let Ok(interval) =
+                    this.update(cx, |_, cx| cx.global::<Config>().cursor_blink_interval())
+                else {
+                    break;
+                };
+                cx.background_executor().timer(interval).await;
                 if this
                     .update(cx, |this, cx| {
                         if this.tabs.is_empty() {
@@ -3209,6 +3211,29 @@ impl Tty7App {
                 }
             }
         }
+    }
+
+    pub(crate) fn set_cursor_blink_interval(&mut self, secs: f64, cx: &mut Context<Self>) {
+        self.update_config(cx, |cfg| {
+            let secs = if secs.is_finite() && secs > 0.0 {
+                secs.clamp(
+                    CURSOR_BLINK_INTERVAL_SECS_MIN,
+                    CURSOR_BLINK_INTERVAL_SECS_MAX,
+                )
+            } else {
+                crate::core::config::CURSOR_BLINK_INTERVAL_SECS_DEFAULT
+            };
+            cfg.cursor_blink_interval_secs = secs;
+        });
+    }
+
+    pub(crate) fn change_cursor_blink_interval(&mut self, delta: f64, cx: &mut Context<Self>) {
+        let current = cx.global::<Config>().cursor_blink_interval_secs;
+        self.set_cursor_blink_interval(current + delta, cx);
+    }
+
+    pub(crate) fn reset_cursor_blink_interval(&mut self, cx: &mut Context<Self>) {
+        self.set_cursor_blink_interval(crate::core::config::CURSOR_BLINK_INTERVAL_SECS_DEFAULT, cx);
     }
 
     pub(crate) fn set_scrollback_limit(&mut self, lines: usize, cx: &mut Context<Self>) {
@@ -10077,7 +10102,7 @@ mod cursor_blink_gpui_tests {
         });
 
         vcx.executor()
-            .advance_clock(std::time::Duration::from_millis(530));
+            .advance_clock(crate::core::config::Config::default().cursor_blink_interval());
         vcx.background_executor.run_until_parked();
 
         app.update(&mut vcx, |_, cx| {

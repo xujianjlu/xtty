@@ -23,8 +23,9 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::core::config::{
-    BellMode, Config, CursorStyle, LinkFileOpen, MouseZoomModifier, NewTabPosition, NotifyMode,
-    TabBarPosition, UI_FONT_SIZE_DEFAULT, UpdateChannel,
+    BellMode, CURSOR_BLINK_INTERVAL_SECS_STEP, Config, CursorStyle, LinkFileOpen,
+    MouseZoomModifier, NewTabPosition, NotifyMode, TabBarPosition, UI_FONT_SIZE_DEFAULT,
+    UpdateChannel,
 };
 use crate::core::keychain::{
     CredentialRef, CredentialStore as _, OsCredentialStore, key_account_from_contents,
@@ -460,6 +461,11 @@ fn settings_search_entries() -> &'static [SearchEntry] {
             section: Appearance,
             title: SettingsCursorBlink,
             keywords: SettingsSearchCursorBlinkKeywords,
+        },
+        SearchEntry {
+            section: Appearance,
+            title: SettingsCursorBlinkInterval,
+            keywords: SettingsSearchCursorBlinkIntervalKeywords,
         },
         SearchEntry {
             section: Appearance,
@@ -2449,6 +2455,7 @@ impl Tty7App {
         let cfg = cx.global::<Config>();
         let cursor_style = cfg.cursor_style;
         let cursor_blink = cfg.cursor_blink;
+        let cursor_blink_interval_secs = cfg.cursor_blink_interval_secs;
         let font_ligatures = cfg.font_features.as_ref().is_some_and(|features| {
             features.is_calt_enabled() == Some(true)
                 || features
@@ -2603,6 +2610,20 @@ impl Tty7App {
             .checked(cursor_blink)
             .on_click(cx.listener(|this, on: &bool, _w, cx| this.set_cursor_blink(*on, cx)))
             .into_any_element();
+        let blink_interval_control = stepper_row(
+            step("cursor-blink-interval-dec", "−", 0).on_click(cx.listener(|this, _, _w, cx| {
+                this.change_cursor_blink_interval(-CURSOR_BLINK_INTERVAL_SECS_STEP, cx)
+            })),
+            format!("{cursor_blink_interval_secs:.2}s"),
+            step("cursor-blink-interval-inc", "+", 2).on_click(cx.listener(|this, _, _w, cx| {
+                this.change_cursor_blink_interval(CURSOR_BLINK_INTERVAL_SECS_STEP, cx)
+            })),
+            Button::new("cursor-blink-interval-reset")
+                .label(t(L10nKey::Reset))
+                .ghost()
+                .small()
+                .on_click(cx.listener(|this, _, _w, cx| this.reset_cursor_blink_interval(cx))),
+        );
 
         v_flex()
             .child(self.section_intro(
@@ -2684,6 +2705,12 @@ impl Tty7App {
                 t(L10nKey::SettingsCursorBlink),
                 t(L10nKey::SettingsCursorBlinkDesc),
                 blink_switch,
+                cx,
+            ))
+            .child(self.settings_row(
+                t(L10nKey::SettingsCursorBlinkInterval),
+                t(L10nKey::SettingsCursorBlinkIntervalDesc),
+                blink_interval_control,
                 cx,
             ))
             .into_any_element()

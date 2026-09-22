@@ -223,6 +223,13 @@ pub struct Config {
     pub link_file_command: Option<String>,
     pub ssh_loopback_forward: bool,
     pub cursor_blink: bool,
+    /// Half-period of the focused caret blink, in seconds. The timer that
+    /// flips `cursor_visible` sleeps this long between phases; the full on/off
+    /// cycle is therefore twice as long. Accepts decimals (e.g. `0.53`). A
+    /// missing key (configs written before the setting existed) lands on
+    /// [`CURSOR_BLINK_INTERVAL_SECS_DEFAULT`].
+    #[serde(default = "default_cursor_blink_interval_secs")]
+    pub cursor_blink_interval_secs: f64,
     pub scrollback_limit: usize,
     #[serde(default, deserialize_with = "de_lenient")]
     pub new_tab_position: NewTabPosition,
@@ -641,6 +648,7 @@ impl Default for Config {
             link_file_command: None,
             ssh_loopback_forward: true,
             cursor_blink: true,
+            cursor_blink_interval_secs: CURSOR_BLINK_INTERVAL_SECS_DEFAULT,
             scrollback_limit: 10_000,
             new_tab_position: NewTabPosition::AfterCurrent,
             tab_bar_position: TabBarPosition::Left,
@@ -792,6 +800,22 @@ impl Config {
         self.link_file_open.unwrap_or_default()
     }
 
+    /// Half-period sleep for the focused caret blink, after clamping into the
+    /// same band the settings stepper and [`Self::sanitize`] share.
+    pub fn cursor_blink_interval(&self) -> std::time::Duration {
+        let secs = if self.cursor_blink_interval_secs.is_finite()
+            && self.cursor_blink_interval_secs > 0.0
+        {
+            self.cursor_blink_interval_secs.clamp(
+                CURSOR_BLINK_INTERVAL_SECS_MIN,
+                CURSOR_BLINK_INTERVAL_SECS_MAX,
+            )
+        } else {
+            CURSOR_BLINK_INTERVAL_SECS_DEFAULT
+        };
+        std::time::Duration::from_secs_f64(secs)
+    }
+
     fn sanitize(&mut self) {
         if !self.font_size.is_finite() || self.font_size <= 0.0 {
             self.font_size = Config::default().font_size;
@@ -814,6 +838,16 @@ impl Config {
             self.ui_font_family = None;
         }
         self.scrollback_limit = self.scrollback_limit.clamp(100, MAX_SCROLLBACK);
+        // Non-finite or non-positive values would spin the blink timer as a
+        // busy loop; the GUI stepper and this clamp share one band so a value
+        // the file accepts is a value one click can still move (#550).
+        if !self.cursor_blink_interval_secs.is_finite() || self.cursor_blink_interval_secs <= 0.0 {
+            self.cursor_blink_interval_secs = CURSOR_BLINK_INTERVAL_SECS_DEFAULT;
+        }
+        self.cursor_blink_interval_secs = self.cursor_blink_interval_secs.clamp(
+            CURSOR_BLINK_INTERVAL_SECS_MIN,
+            CURSOR_BLINK_INTERVAL_SECS_MAX,
+        );
         if !self.mouse_scroll_multiplier.is_finite() || self.mouse_scroll_multiplier <= 0.0 {
             self.mouse_scroll_multiplier = Config::default().mouse_scroll_multiplier;
         }
@@ -1091,6 +1125,10 @@ fn default_notify_threshold_secs() -> u64 {
     10
 }
 
+fn default_cursor_blink_interval_secs() -> f64 {
+    CURSOR_BLINK_INTERVAL_SECS_DEFAULT
+}
+
 fn default_prefix() -> String {
     "ctrl-b".to_string()
 }
@@ -1209,6 +1247,14 @@ fn default_sidebar_width() -> f32 {
 }
 
 pub const MAX_SCROLLBACK: usize = 100_000;
+
+/// Half-period of the focused caret blink, in seconds. Matches the historical
+/// hard-coded 530 ms timer in the terminal view, so existing configs that never
+/// wrote the key keep the same cadence.
+pub const CURSOR_BLINK_INTERVAL_SECS_DEFAULT: f64 = 0.53;
+pub const CURSOR_BLINK_INTERVAL_SECS_MIN: f64 = 0.1;
+pub const CURSOR_BLINK_INTERVAL_SECS_MAX: f64 = 2.0;
+pub const CURSOR_BLINK_INTERVAL_SECS_STEP: f64 = 0.05;
 
 pub(crate) fn de_lenient<'de, D, T>(deserializer: D) -> Result<T, D::Error>
 where
@@ -1733,6 +1779,56 @@ mod tests {
         assert_eq!(clamp(Some(0.0)), Some(0.2));
         assert_eq!(clamp(Some(2.0)), Some(1.0));
         assert_eq!(clamp(Some(f32::NAN)), None);
+    }
+
+    #[test]
+    fn a_config_without_cursor_blink_interval_keeps_the_historical_default() {
+        let cfg: Config = serde_json::from_str(r#"{"cursor_blink": true}"#)
+            .expect("a pre-setting config must still parse");
+        assert_eq!(
+            cfg.cursor_blink_interval_secs,
+            CURSOR_BLINK_INTERVAL_SECS_DEFAULT
+        );
+    }
+
+    #[test]
+    fn cursor_blink_interval_accepts_decimal_seconds() {
+        let cfg: Config = serde_json::from_str(r#"{"cursor_blink_interval_secs": 0.75}"#)
+            .expect("decimal seconds must parse");
+        assert_eq!(cfg.cursor_blink_interval_secs, 0.75);
+        assert_eq!(
+            cfg.cursor_blink_interval(),
+            std::time::Duration::from_secs_f64(0.75)
+        );
+    }
+
+    #[test]
+    fn sanitize_clamps_cursor_blink_interval_into_band() {
+        let clamp = |n: f64| {
+            let mut cfg = Config {
+                cursor_blink_interval_secs: n,
+                ..Config::default()
+            };
+            cfg.sanitize();
+            cfg.cursor_blink_interval_secs
+        };
+        assert_eq!(clamp(0.0), CURSOR_BLINK_INTERVAL_SECS_DEFAULT);
+        assert_eq!(clamp(-1.0), CURSOR_BLINK_INTERVAL_SECS_DEFAULT);
+        assert_eq!(clamp(f64::NAN), CURSOR_BLINK_INTERVAL_SECS_DEFAULT);
+        assert_eq!(
+            clamp(CURSOR_BLINK_INTERVAL_SECS_DEFAULT),
+            CURSOR_BLINK_INTERVAL_SECS_DEFAULT
+        );
+        assert_eq!(
+            clamp(CURSOR_BLINK_INTERVAL_SECS_MIN),
+            CURSOR_BLINK_INTERVAL_SECS_MIN
+        );
+        assert_eq!(
+            clamp(CURSOR_BLINK_INTERVAL_SECS_MAX),
+            CURSOR_BLINK_INTERVAL_SECS_MAX
+        );
+        assert_eq!(clamp(10.0), CURSOR_BLINK_INTERVAL_SECS_MAX);
+        assert_eq!(clamp(0.05), CURSOR_BLINK_INTERVAL_SECS_MIN);
     }
 
     #[test]

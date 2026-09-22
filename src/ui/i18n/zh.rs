@@ -107,6 +107,10 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::SettingsCursorShapeDesc => "终端光标的绘制方式。",
         L10nKey::SettingsCursorBlink => "光标闪烁",
         L10nKey::SettingsCursorBlinkDesc => "终端获得焦点时让光标闪烁。",
+        L10nKey::SettingsCursorBlinkInterval => "闪烁间隔",
+        L10nKey::SettingsCursorBlinkIntervalDesc => {
+            "光标每次亮灭之间的秒数（0.1–2），可填小数。数值越大闪烁越慢。"
+        }
         L10nKey::SettingsLanguage => "语言",
         L10nKey::SettingsLanguageDesc => "选择 tty7 界面使用的语言。",
         L10nKey::SettingsLanguageEnglish => "English",
@@ -702,6 +706,9 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         }
         L10nKey::SettingsSearchCursorBlinkKeywords => {
             "光标闪烁 闪烁 光标 blink cursor blinking flash"
+        }
+        L10nKey::SettingsSearchCursorBlinkIntervalKeywords => {
+            "闪烁间隔 闪烁频率 闪烁速度 秒 光标 快 慢 blink interval rate speed frequency seconds sec s"
         }
         L10nKey::SettingsSearchCursorShapeKeywords => {
             "光标形状 光标 块 竖线 下划线 cursor shape caret block bar underline beam"
