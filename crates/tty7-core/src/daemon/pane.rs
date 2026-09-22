@@ -2924,7 +2924,16 @@ fn apply_signals(st: &mut PaneState, signals: SniffSignals) {
     if let Some(title) = signals.title {
         // No `notify`: a window renders its own tabs from its own terminal,
         // which parsed the same sequence. This is only for the tree.
-        st.osc_title = (!title.is_empty()).then_some(title);
+        if let Some(identity) = crate::core::tab_view::identity_from_title(&title) {
+            st.osc_title = Some(identity);
+        } else if st
+            .osc_title
+            .as_deref()
+            .and_then(crate::core::tab_view::identity_from_title)
+            .is_none()
+        {
+            st.osc_title = (!title.is_empty()).then_some(title);
+        }
     }
     for shell in signals.shell {
         #[cfg(windows)]
