@@ -9,18 +9,9 @@ const MAX_CONFIG_FILES: usize = 256;
 pub const IMPORTED_GROUP: &str = "Imported from ssh_config";
 
 fn home_dir() -> Option<PathBuf> {
-    #[cfg(windows)]
-    {
-        std::env::var_os("USERPROFILE")
-            .filter(|h| !h.is_empty())
-            .map(PathBuf::from)
-    }
-    #[cfg(not(windows))]
-    {
-        std::env::var_os("HOME")
-            .filter(|h| !h.is_empty())
-            .map(PathBuf::from)
-    }
+    std::env::var_os("HOME")
+        .filter(|h| !h.is_empty())
+        .map(PathBuf::from)
 }
 
 fn expand_hostname_tokens(hostname: &str, alias: &str) -> String {

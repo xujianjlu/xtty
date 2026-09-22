@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 pub mod asset;
+pub mod bundled;
 pub mod checksums;
 #[cfg(feature = "remote-install")]
 pub mod download;
@@ -10,7 +11,6 @@ pub mod outcome;
 #[cfg(feature = "remote-install")]
 pub mod proxy;
 pub mod ssh_ops;
-pub mod wsl;
 
 pub use asset::{RemotePaths, UnsupportedTarget};
 pub use checksums::ChecksumError;
@@ -130,7 +130,7 @@ pub trait ServerBinarySource: Send + Sync {
 
 pub struct BundledOrRelease<'a> {
     pub fetch: &'a dyn AssetFetcher,
-    pub bundled: Option<wsl::BundledServerBinary>,
+    pub bundled: Option<bundled::BundledServerBinary>,
     /// When a bundled directory is configured but the requested asset is absent,
     /// fall back to the release download instead of failing with `MissingBundled`.
     pub fallback_on_missing: bool,
@@ -140,18 +140,18 @@ impl<'a> BundledOrRelease<'a> {
     pub fn from_env(fetch: &'a dyn AssetFetcher) -> Self {
         Self {
             fetch,
-            bundled: wsl::BundledServerBinary::from_env_only(),
+            bundled: bundled::BundledServerBinary::from_env_only(),
             fallback_on_missing: false,
         }
     }
 
     /// Prefer a server binary shipped next to the client executable (see
-    /// `wsl::BundledServerBinary::discover`), falling back to the GitHub release
-    /// download when no matching bundled asset is present.
+    /// `bundled::BundledServerBinary::discover`), falling back to the GitHub
+    /// release download when no matching bundled asset is present.
     pub fn discover(fetch: &'a dyn AssetFetcher) -> Self {
         Self {
             fetch,
-            bundled: Some(wsl::BundledServerBinary::discover()),
+            bundled: Some(bundled::BundledServerBinary::discover()),
             fallback_on_missing: true,
         }
     }
@@ -526,8 +526,7 @@ impl std::fmt::Display for InstallError {
             Self::Checksum(e) => write!(f, "{e}"),
             Self::MissingBundled { asset, searched } => write!(
                 f,
-                "this build of tty7 does not ship a Linux server binary, so it cannot \
-                 install one into a WSL distribution: `{asset}` was not found in {}",
+                "no bundled Linux server binary `{asset}` was found in {}",
                 if searched.is_empty() {
                     "any known location".to_string()
                 } else {
@@ -563,7 +562,7 @@ impl std::fmt::Display for InstallError {
                      Point {} at a directory holding a matching server binary.",
                     wanted.control,
                     wanted.protocol,
-                    wsl::BUNDLED_DIR_ENV,
+                    bundled::BUNDLED_DIR_ENV,
                 )
             }
         }
@@ -1353,11 +1352,10 @@ fn connection_label(conn: &SshConnection) -> String {
 /// open a tab on a host tty7 was already connected to and already serving. The
 /// SSH connection itself is reused, so none of that wait is handshake cost.
 ///
-/// Deliberately not a global map keyed by host, the way [`wsl`]'s is. A distro
-/// name is the whole identity of a WSL target, but an SSH connection can die
-/// and be replaced under the same key, and a note about the previous link must
-/// not answer for the next one. Keying by connection generation *is* keeping
-/// the note on the connection — see `SshConnection::proved_server`.
+/// Deliberately not a global map keyed by host. An SSH connection can die and
+/// be replaced under the same key, and a note about the previous link must not
+/// answer for the next one. Keying by connection generation *is* keeping the
+/// note on the connection — see `SshConnection::proved_server`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProvedServer {
     /// The server binary the probe settled on, which is what the route runs.

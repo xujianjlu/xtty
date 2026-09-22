@@ -62,10 +62,9 @@ toml_edit = "0.25"
 # via the GUI, so this pins no new code.
 smallvec.workspace = true
 
-# Cross-platform PTY for the daemon: a Unix pty on Unix, ConPTY on Windows,
-# behind one blocking `Read`/`Write`/`resize` API. This is what lets
-# `daemon::pane` share a single code path across platforms instead of
-# hand-rolling fd/ioctl/signal code.
+# Cross-platform PTY for the daemon: a Unix pty on Unix behind one blocking
+# `Read`/`Write`/`resize` API. This is what lets `daemon::pane` share a single
+# code path instead of hand-rolling fd/ioctl/signal code.
 portable-pty = "0.8"
 
 # Native (pure-Rust) SSH client for the daemon's russh session engine
@@ -84,7 +83,6 @@ portable-pty = "0.8"
 # downloaded. The GUI package turns the feature on (see the root `Cargo.toml`).
 ureq = { version = "3", default-features = false, features = [
     "rustls",
-    "win-system-proxy",
     "socks-proxy",
 ], optional = true }
 
@@ -151,34 +149,6 @@ core-foundation = "0.10"
 system-configuration = { version = "0.6", optional = true }
 system-configuration-sys = { version = "0.6", optional = true }
 
-# The Windows GUI⇄daemon transport is loopback TCP, which (unlike a Unix socket)
-# any local process can connect to — so the daemon authenticates each connection
-# against a random token it writes into the user-private port file. `getrandom`
-# is the OS CSPRNG that mints that token.
-[target.'cfg(windows)'.dependencies]
-getrandom = "0.3"
-
-# Toolhelp process enumeration + `TerminateProcess`, used by `daemon::winproc` to
-# title a pane by its foreground command and to tear down a shell's descendant
-# tree on hangup (ConPTY's `kill` only reaches the shell itself). `Registry`
-# additionally lets `daemon::windows_env` re-read the two environment hives at
-# pane-spawn time so a long-lived daemon stops handing out its startup `PATH`.
-# `IpHelper` is `GetExtendedTcpTable`, which is how `daemon::procinfo` answers
-# the Info tab's Ports section here — the platform has no `lsof` to shell out to.
-windows-sys = { version = "0.59", features = [
-    "Win32_Foundation",
-    "Win32_NetworkManagement_IpHelper",
-    "Win32_Security",
-    "Win32_System_Console",
-    "Win32_System_Diagnostics_ToolHelp",
-    "Win32_System_Registry",
-    "Win32_System_Threading",
-    "Win32_UI_WindowsAndMessaging",
-] }
-# Read the system proxy out of the registry for tty7's own downloads
-# (`daemon::install::proxy`).
-winreg = { version = "0.52", optional = true }
-
 [dev-dependencies]
 # Sandboxes for the `host::conformance` suite: a fresh empty directory per case,
 # removed on drop.
@@ -218,7 +188,6 @@ gssapi = ["dep:libgssapi"]
 # downloader, and each is a no-op on the targets it is not written for.
 remote-install = [
     "dep:ureq",
-    "dep:winreg",
     "dep:system-configuration",
     "dep:system-configuration-sys",
 ]

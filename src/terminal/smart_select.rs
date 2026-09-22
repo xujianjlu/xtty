@@ -1,4 +1,3 @@
-use std::sync::OnceLock;
 
 use alacritty_terminal::event::EventListener;
 use alacritty_terminal::grid::Dimensions;
@@ -89,72 +88,13 @@ pub(super) fn is_cjk(c: char) -> bool {
     )
 }
 
-#[cfg(not(target_os = "macos"))]
-fn is_kana_or_hangul(c: char) -> bool {
-    matches!(
-        u32::from(c),
-        0x1100..=0x11FF
-        | 0x3040..=0x30FF
-        | 0x31F0..=0x31FF
-        | 0xA960..=0xA97F
-        | 0xAC00..=0xD7FF
-        | 0xFF66..=0xFF9F
-    )
-}
 
-#[cfg(not(target_os = "macos"))]
-static JIEBA: OnceLock<jieba_rs::Jieba> = OnceLock::new();
-
-#[cfg(not(target_os = "macos"))]
-fn warm() {
-    static ONCE: std::sync::Once = std::sync::Once::new();
-    ONCE.call_once(|| {
-        std::thread::spawn(|| {
-            let _ = JIEBA.get_or_init(jieba_rs::Jieba::new);
-        });
-    });
-}
 
 pub(super) fn cjk_word_range(text: &str, click: usize) -> Option<(usize, usize)> {
-    #[cfg(target_os = "macos")]
-    {
-        tokenizer::word_range(text, click)
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        let chars: Vec<char> = text.chars().collect();
-        chars.get(click)?;
-        jieba_word_range(&chars, click)
-    }
+    tokenizer::word_range(text, click)
 }
 
-#[cfg(not(target_os = "macos"))]
-fn jieba_word_range(chars: &[char], click: usize) -> Option<(usize, usize)> {
-    let mut rs = click;
-    while rs > 0 && is_cjk(chars[rs - 1]) {
-        rs -= 1;
-    }
-    let mut re = click;
-    while re + 1 < chars.len() && is_cjk(chars[re + 1]) {
-        re += 1;
-    }
-    if chars[rs..=re].iter().copied().any(is_kana_or_hangul) {
-        return None;
-    }
-    let Some(jieba) = JIEBA.get() else {
-        warm();
-        return None;
-    };
-    let run: String = chars[rs..=re].iter().collect();
-    let rel = click - rs;
-    jieba
-        .cut(&run, true)
-        .iter()
-        .find(|tok| rel < tok.end)
-        .map(|tok| (rs + tok.start, rs + tok.end - 1))
-}
 
-#[cfg(target_os = "macos")]
 mod tokenizer {
     use core_foundation::base::{CFIndex, CFRange, TCFType};
     use core_foundation::string::{CFString, CFStringRef};
@@ -507,10 +447,7 @@ mod tests {
 
     const SEPS: &str = ",│`|:\"' ()[]{}<>\t";
 
-    fn ensure_segmenter() {
-        #[cfg(not(target_os = "macos"))]
-        let _ = JIEBA.get_or_init(jieba_rs::Jieba::new);
-    }
+    fn ensure_segmenter() {}
 
     fn range(text: &str, click: usize) -> Option<(usize, usize)> {
         let chars: Vec<char> = text.chars().collect();

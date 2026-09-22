@@ -1,8 +1,3 @@
-#![cfg_attr(
-    all(target_os = "windows", not(debug_assertions)),
-    windows_subsystem = "windows"
-)]
-
 mod core;
 mod daemon;
 mod terminal;
@@ -251,21 +246,6 @@ fn open_path_from(
             return Some(path.into());
         }
         if arg == std::ffi::OsStr::new("--open-path") {
-            return args.next().map(Into::into);
-        }
-    }
-    None
-}
-
-/// The directory an installer is about to replace, from
-/// `--stop-daemon --update-install-dir <dir>`. Meaningful only next to
-/// `--stop-daemon`; the caller checks that flag first.
-#[cfg(windows)]
-fn update_install_dir_from(
-    mut args: impl Iterator<Item = std::ffi::OsString>,
-) -> Option<std::path::PathBuf> {
-    while let Some(arg) = args.next() {
-        if arg == std::ffi::OsStr::new("--update-install-dir") {
             return args.next().map(Into::into);
         }
     }
@@ -543,28 +523,6 @@ fn main() {
         .iter()
         .any(|arg| arg == std::ffi::OsStr::new("--stop-daemon"))
     {
-        // An installer about to replace `dir` says so, and gets more than a
-        // stop: orphaned ConPTY hosts and anything else still running from
-        // that directory are terminated, and the call does not return until
-        // the images there are actually replaceable (or says why they are
-        // not). Invoked by the Inno PrepareToInstall step and the updater.
-        #[cfg(windows)]
-        if let Some(dir) = update_install_dir_from(args.iter().cloned()) {
-            // Held in the *parent's* name: this helper returns in seconds,
-            // but the Setup (or uninstaller) that invoked it keeps replacing
-            // files in `dir` until it exits — and a daemon spawned in that
-            // window would relock them. The guard needs no clearing; it goes
-            // stale the moment that parent is gone.
-            tty7_core::daemon::update_guard::hold_for_parent();
-            if let Err(error) = crate::daemon::spawn::stop_for_update(&dir) {
-                log::error!(
-                    "preparing {} for replacement failed: {error}",
-                    dir.display()
-                );
-                std::process::exit(1);
-            }
-            return;
-        }
         crate::daemon::spawn::stop();
         return;
     }
@@ -599,11 +557,6 @@ fn main() {
     // and before the daemon below, which forks every pane and so must already
     // carry the CLI's directory in its environment.
     crate::core::cli_install::install(config.install_cli_on_path);
-
-    // Give desktop toasts the tty7 icon and name instead of notify-rust's
-    // PowerShell fallback. Best-effort; no-op off Windows.
-    #[cfg(target_os = "windows")]
-    crate::core::aumid::init();
 
     let restore_session = config.restore_session;
     let daemon_result = if restore_session {
@@ -943,24 +896,6 @@ mod argument_tests {
         assert_eq!(equals, Some(PathBuf::from("C:\\cfg")));
     }
 
-    #[cfg(windows)]
-    #[test]
-    fn open_path_preserves_unpaired_utf16_from_windows_arguments() {
-        use std::os::windows::ffi::OsStringExt as _;
-
-        let native_path =
-            OsString::from_wide(&[b'C' as u16, b':' as u16, b'\\' as u16, 0xD800, b'x' as u16]);
-        let parsed =
-            open_path_from([OsString::from("--open-path"), native_path.clone()].into_iter());
-        assert_eq!(parsed, Some(PathBuf::from(native_path.clone())));
-
-        let mut equals_arg = OsString::from("--open-path=");
-        equals_arg.push(&native_path);
-        assert_eq!(
-            open_path_from([equals_arg].into_iter()),
-            Some(PathBuf::from(native_path))
-        );
-    }
 
     #[test]
     fn a_pathless_forward_asks_the_gui_to_surface_and_exits_only_on_bool_true() {

@@ -9,9 +9,6 @@ use crate::daemon::control::DialectRefusal;
 use crate::daemon::protocol::{ClientMsg, DaemonMsg, DaemonVersion, PROTOCOL_VERSION};
 use crate::daemon::{pidfile, transport};
 
-#[cfg(windows)]
-mod windows;
-
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(3);
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
 // A version echo takes microseconds on a healthy daemon; a second is already
@@ -223,17 +220,12 @@ fn recorded_daemon_is_dead_with(recorded: Option<u32>, alive: impl Fn(u32) -> bo
     pid > 4 && pid != std::process::id() && !alive(pid)
 }
 
-#[cfg(windows)]
-fn daemon_process_alive(pid: u32) -> bool {
-    !crate::daemon::winproc::wait_for_exit(pid, Duration::ZERO)
-}
-
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 fn daemon_process_alive(pid: u32) -> bool {
     process_alive(pid as libc::pid_t)
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 fn daemon_process_alive(_pid: u32) -> bool {
     // No cheap liveness query on this platform: assume alive, which keeps
     // the TCP probe as the authority.
@@ -417,28 +409,6 @@ pub fn ensure_running() -> anyhow::Result<()> {
         reap_stranded();
     }
 
-    // While an installer is replacing the installation, spawning a daemon
-    // would relock the very images it is clearing — the update would fail
-    // with "files in use" caused by us. Connecting to a live daemon above is
-    // fine; only creating a new one waits. The short patience first is for
-    // the guard's holder being a Setup that is exiting right now — the
-    // post-install "Launch tty7" click — where the launch deserves its
-    // daemon, not an error.
-    #[cfg(windows)]
-    {
-        const UPDATE_GUARD_PATIENCE: Duration = Duration::from_secs(5);
-        let deadline = Instant::now() + UPDATE_GUARD_PATIENCE;
-        while crate::daemon::update_guard::held() {
-            if Instant::now() >= deadline {
-                anyhow::bail!(
-                    "a tty7 update is being installed right now; the daemon will return \
-                     when the installer relaunches the app"
-                );
-            }
-            std::thread::sleep(POLL_INTERVAL);
-        }
-    }
-
     spawn_detached()?;
 
     // After the spawn, because the spawn is itself a generation move.
@@ -522,8 +492,6 @@ pub fn reap_stranded() {
     // The daemon's control listener probes control.port for a live
     // predecessor before binding; a stale file would cost it the same
     // refused-connect delay the reap above just made unnecessary.
-    #[cfg(windows)]
-    crate::host::server::remove_control_endpoint();
 }
 
 /// How long a seat holder that is not answering yet gets to be a daemon
@@ -626,7 +594,6 @@ enum DialectAnswer {
 /// Silence is not agreement: a daemon that is still coming up, or one whose
 /// control socket is unreachable, answers nothing and is left alone.
 fn control_dialect_answer() -> DialectAnswer {
-    #[cfg(unix)]
     let sock = match crate::host::server::control_socket_path()
         .ok()
         .and_then(|path| std::os::unix::net::UnixStream::connect(path).ok())
@@ -634,12 +601,6 @@ fn control_dialect_answer() -> DialectAnswer {
         Some(sock) => sock,
         None => return DialectAnswer::Silent,
     };
-    #[cfg(windows)]
-    let sock = match crate::host::server::connect_control() {
-        Ok(sock) => sock,
-        Err(_) => return DialectAnswer::Silent,
-    };
-
     if sock.set_read_timeout(Some(HANDSHAKE_TIMEOUT)).is_err() {
         return DialectAnswer::Silent;
     }
@@ -858,14 +819,6 @@ pub fn stop() {
     }
 }
 
-/// Whether the recorded daemon process actually exited within `timeout`. The
-/// endpoint file only says the daemon stopped listening; this is what says its
-/// executable image is no longer mapped.
-#[cfg(windows)]
-fn wait_for_recorded_exit(pid: u32, timeout: Duration) -> bool {
-    crate::daemon::winproc::wait_for_exit(pid, timeout)
-}
-
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 fn wait_for_recorded_exit(pid: u32, timeout: Duration) -> bool {
     let deadline = Instant::now() + timeout;
@@ -878,7 +831,7 @@ fn wait_for_recorded_exit(pid: u32, timeout: Duration) -> bool {
     true
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 fn wait_for_recorded_exit(_pid: u32, _timeout: Duration) -> bool {
     true
 }
@@ -1063,123 +1016,7 @@ fn is_zombie(pid: libc::pid_t) -> bool {
         .is_some_and(|(_, rest)| rest.trim_start().starts_with('Z'))
 }
 
-#[cfg(windows)]
-fn reap_recorded_daemon(recorded: Option<u32>) {
-    use crate::daemon::winproc;
-
-    let Some(pid) = recorded.or_else(pidfile::read) else {
-        return;
-    };
-    if pid <= 4 || pid == std::process::id() {
-        pidfile::remove();
-        return;
-    }
-    let procs = winproc::snapshot();
-    let matches = procs
-        .iter()
-        .find(|p| p.pid == pid)
-        .is_some_and(|entry| is_reapable_daemon_name(&entry.name));
-    if matches {
-        log::warn!("reaping unreachable daemon (pid {pid}); its sessions will be hung up");
-        // One deadline across the whole tree: this runs synchronously before
-        // the first window exists, and a crash that left many hosts behind
-        // must not multiply the wait by their count.
-        let mut targets = winproc::descendants(&procs, pid);
-        targets.push(pid);
-        winproc::terminate_and_wait_all(&targets, Instant::now() + REAP_WAIT_TIMEOUT);
-    }
-    pidfile::remove();
-}
-
-#[cfg(windows)]
-const REAP_WAIT_TIMEOUT: Duration = Duration::from_secs(2);
-
-/// Stops the daemon and then makes the installation directory actually
-/// replaceable, which is more than `stop` alone can promise: a daemon that
-/// died without cleaning up leaves its ConPTY hosts (OpenConsole.exe) running,
-/// orphaned, each holding the installed image open — invisible to the pidfile
-/// and fatal to any installer's `DeleteFile`.
-///
-/// Terminates every process whose executable lives under `install_dir`
-/// (except the caller), then waits until the replaceable images there can be
-/// opened for writing. An error names what is still locked, so the update log
-/// finally says *why* an upgrade could not replace its files.
-#[cfg(windows)]
-pub fn stop_for_update(install_dir: &Path) -> Result<(), String> {
-    use crate::daemon::winproc;
-
-    stop();
-
-    let deadline = Instant::now() + UPDATE_CLEAR_TIMEOUT;
-    let holdouts = winproc::processes_running_from(install_dir);
-    for &pid in &holdouts {
-        log::warn!(
-            "terminating pid {pid} still running from {}",
-            install_dir.display()
-        );
-    }
-    winproc::terminate_and_wait_all(&holdouts, deadline);
-
-    wait_until_images_unlocked(install_dir, deadline)
-}
-
-#[cfg(windows)]
-const UPDATE_CLEAR_TIMEOUT: Duration = Duration::from_secs(10);
-
-/// Waits until every .exe and .dll directly in `dir` can be opened for
-/// writing — the same access an installer needs to replace it. Only the top
-/// level: that is where the locked images (tty7-app.exe, OpenConsole.exe,
-/// conpty.dll) live, and a recursive sweep would stall on unrelated content.
-#[cfg(windows)]
-fn wait_until_images_unlocked(dir: &Path, deadline: Instant) -> Result<(), String> {
-    // Never probe our own image: the legitimate callers run from a staged
-    // copy outside `dir`, but if someone invokes the *installed* binary with
-    // this flag, its own image can never open for writing and the wait would
-    // only ever time out.
-    let own = std::env::current_exe().and_then(std::fs::canonicalize).ok();
-    let images: Vec<PathBuf> = std::fs::read_dir(dir)
-        .map_err(|error| format!("reading {}: {error}", dir.display()))?
-        .flatten()
-        .map(|entry| entry.path())
-        .filter(|path| {
-            path.extension()
-                .and_then(|ext| ext.to_str())
-                .is_some_and(|ext| {
-                    ext.eq_ignore_ascii_case("exe") || ext.eq_ignore_ascii_case("dll")
-                })
-        })
-        .filter(|path| {
-            // Excluding takes a positive identification: a candidate that
-            // cannot be canonicalized (delete-pending, held by a scanner) is
-            // a lock to wait out, not ours to skip.
-            !own.as_deref()
-                .is_some_and(|own| std::fs::canonicalize(path).is_ok_and(|path| path == own))
-        })
-        .collect();
-
-    let mut locked: Vec<&PathBuf> = images.iter().collect();
-    loop {
-        locked.retain(|path| std::fs::OpenOptions::new().write(true).open(path).is_err());
-        if locked.is_empty() {
-            return Ok(());
-        }
-        if Instant::now() >= deadline {
-            let names: Vec<String> = locked
-                .iter()
-                .filter_map(|path| path.file_name())
-                .map(|name| name.to_string_lossy().into_owned())
-                .collect();
-            return Err(format!(
-                "these files in {} are still in use by another process: {}",
-                dir.display(),
-                names.join(", ")
-            ));
-        }
-        std::thread::sleep(POLL_INTERVAL);
-    }
-}
-
-#[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 fn reap_recorded_daemon(_recorded: Option<u32>) {}
 
 fn spawn_detached() -> anyhow::Result<()> {
@@ -1188,33 +1025,6 @@ fn spawn_detached() -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("could not locate own executable: {e}"))?;
 
     let config_dir = config::config_dir_path();
-
-    // Some Windows shell brokers enforce Redirection Trust on processes they
-    // launch. An ordinary child inherits it and cannot traverse Scoop's
-    // user-created `current` junctions. The policy cannot be relaxed in place,
-    // so create the daemon through the clean interactive desktop shell only
-    // when the enforcing bit is actually present.
-    #[cfg(windows)]
-    if windows::redirection_trust_enforced() {
-        let mut args = vec![std::ffi::OsString::from("--daemon")];
-        if let Some(dir) = &config_dir {
-            args.push(std::ffi::OsString::from("--config-dir"));
-            args.push(dir.as_os_str().to_owned());
-        }
-        match windows::spawn_detached_with_clean_parent(&exe, &args) {
-            Ok(()) => return Ok(()),
-            // The clean parent is unavailable whenever there is no interactive
-            // Explorer to borrow — it is restarting, the shell was replaced, or
-            // the session has no desktop at all. Losing it only costs junction
-            // traversal inside the shells, so degrade to the ordinary path
-            // instead of refusing to start tty7 at all.
-            Err(error) => log::warn!(
-                "could not spawn the daemon through the Windows desktop shell while \
-                 Redirection Trust is enforced ({error}); falling back to the ordinary \
-                 path, where Scoop-style junctions may be unreachable"
-            ),
-        }
-    }
 
     let mut cmd = Command::new(exe);
     cmd.arg("--daemon");
@@ -1320,235 +1130,6 @@ fn detach(cmd: &mut Command) {
     }
 }
 
-/// How the daemon is created: no console of its own, and no window.
-///
-/// Deliberately without `CREATE_NEW_PROCESS_GROUP`. That flag disables Ctrl+C
-/// for the whole new group, and Windows hands the resulting "ignore Ctrl+C"
-/// process state down to every descendant — which for the daemon means every
-/// ConPTY shell it spawns, and everything those shells run. It bought nothing
-/// either: `DETACHED_PROCESS` already leaves the daemon with no console, so no
-/// console control event could reach it in the first place. Keeping it cost
-/// every pane its Ctrl+C (#451, #314).
-///
-/// Public because `tty7-cli` launches the headless `tty7-server` the same way,
-/// and that server spawns panes too: the two detach paths agreeing is the whole
-/// point of the constant.
-#[cfg(windows)]
-pub const DAEMON_CREATION_FLAGS: u32 = DETACHED_PROCESS | CREATE_NO_WINDOW;
-
-#[cfg(windows)]
-const DETACHED_PROCESS: u32 = 0x0000_0008;
-#[cfg(windows)]
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-/// Named only so the tests can say which bit must stay out of the flags above.
-#[cfg(all(windows, test))]
-const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
-
-#[cfg(windows)]
-fn detach(cmd: &mut Command) {
-    use std::os::windows::process::CommandExt;
-
-    cmd.creation_flags(DAEMON_CREATION_FLAGS);
-}
-
-#[cfg(all(test, windows))]
-mod ctrl_c_flag_tests {
-    use super::*;
-
-    /// `CREATE_NEW_PROCESS_GROUP` disables Ctrl+C for every process in the new
-    /// group, and the daemon's group is every pane shell it ever spawns. Both
-    /// spawn paths — the ordinary one and the Redirection Trust detour — have to
-    /// stay clear of it or #451 and #314 come straight back.
-    #[test]
-    fn the_daemon_is_never_created_into_a_ctrl_c_free_process_group() {
-        assert_eq!(
-            DAEMON_CREATION_FLAGS & CREATE_NEW_PROCESS_GROUP,
-            0,
-            "the daemon must not disable Ctrl+C for everything it spawns"
-        );
-        assert_eq!(
-            DAEMON_CREATION_FLAGS,
-            DETACHED_PROCESS | CREATE_NO_WINDOW,
-            "the daemon still wants no console and no window"
-        );
-
-        assert_eq!(
-            windows::SPAWN_FLAGS & CREATE_NEW_PROCESS_GROUP,
-            0,
-            "the clean-parent spawn path must not reintroduce the group either"
-        );
-    }
-}
-
-#[cfg(all(test, windows))]
-mod windows_spawn_tests {
-    use super::*;
-    use std::mem::size_of;
-    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-    use windows_sys::Win32::System::Threading::{
-        ProcessRedirectionTrustPolicy, SetProcessMitigationPolicy,
-    };
-
-    const INNER_ENV: &str = "TTY7_REDIRECTION_TRUST_INNER";
-    const CLEAN_PARENT_ENV: &str = "TTY7_REDIRECTION_TRUST_CLEAN_PARENT";
-    const PROBE_RESULT_ENV: &str = "TTY7_REDIRECTION_TRUST_PROBE_RESULT";
-    const TEST_NAME: &str =
-        "daemon::spawn::windows_spawn_tests::daemon_spawn_does_not_inherit_redirection_trust";
-
-    /// Redirection Trust cannot be disabled after it is enforced, so the outer
-    /// test delegates the destructive policy change to a short-lived copy of
-    /// the test executable. This keeps the remaining test process clean.
-    #[test]
-    fn daemon_spawn_does_not_inherit_redirection_trust() {
-        // A probe process reports both its inherited policy and whether it can
-        // traverse the fixture. Checking the policy directly keeps this test
-        // deterministic on elevated CI runners, whose own junctions may remain
-        // trusted even while Redirection Trust is enforced.
-        if let Some(result) = std::env::var_os(PROBE_RESULT_ENV) {
-            let result = PathBuf::from(result);
-            let junction_probe = result
-                .parent()
-                .expect("probe result has a fixture directory")
-                .join("current")
-                .join("probe.txt");
-            let verdict = if windows::redirection_trust_enforced() {
-                "ENFORCED"
-            } else if junction_probe.exists() {
-                "CLEAN_OK"
-            } else {
-                "CLEAN_BLOCKED"
-            };
-            std::fs::write(result, verdict).expect("write mitigation probe verdict");
-            return;
-        }
-
-        if std::env::var_os(INNER_ENV).is_none() {
-            let output = Command::new(std::env::current_exe().expect("locate test executable"))
-                .args(["--exact", TEST_NAME, "--nocapture"])
-                .env(INNER_ENV, "1")
-                .env(CLEAN_PARENT_ENV, std::process::id().to_string())
-                .output()
-                .expect("spawn isolated mitigation test process");
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            assert!(
-                output.status.success(),
-                "isolated mitigation test failed:\nstdout:\n{stdout}\nstderr:\n{}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-            // libtest exits 0 when `--exact` matches nothing, so a stale
-            // TEST_NAME would turn this whole regression into a silent pass.
-            assert!(
-                stdout.contains("1 passed"),
-                "the isolated mitigation test must actually run; TEST_NAME is probably stale:\n{stdout}"
-            );
-            return;
-        }
-
-        let clean_parent_pid: u32 = std::env::var(CLEAN_PARENT_ENV)
-            .expect("clean parent pid")
-            .parse()
-            .expect("clean parent pid is numeric");
-
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system time after epoch")
-            .as_nanos();
-        let root = std::env::temp_dir().join(format!(
-            "tty7-redirection-trust-{}-{unique}",
-            std::process::id()
-        ));
-        let target = root.join("version");
-        let junction = root.join("current");
-        let inherited_result = root.join("inherited-result.txt");
-        let result = root.join("result.txt");
-        let batch = root.join("junction probe.cmd");
-        std::fs::create_dir_all(&target).expect("create junction target");
-        std::fs::write(target.join("probe.txt"), b"ok").expect("write junction probe");
-
-        let comspec = std::env::var_os("ComSpec").unwrap_or_else(|| "cmd.exe".into());
-        let linked = Command::new(&comspec)
-            .args(["/d", "/c", "mklink", "/J"])
-            .arg(&junction)
-            .arg(&target)
-            .status()
-            .expect("create junction fixture");
-        assert!(linked.success(), "mklink must create the junction fixture");
-
-        let mut policy = 1u32;
-        // SAFETY: The DWORD buffer exactly matches the Windows policy layout,
-        // and only this disposable inner test process receives the policy.
-        let enabled = unsafe {
-            SetProcessMitigationPolicy(
-                ProcessRedirectionTrustPolicy,
-                (&raw mut policy).cast(),
-                size_of::<u32>(),
-            )
-        };
-        assert!(
-            enabled != 0,
-            "enable Redirection Trust: {}",
-            io::Error::last_os_error()
-        );
-        assert!(
-            windows::redirection_trust_enforced(),
-            "tty7 must detect the enforcing policy before selecting the alternate spawn path"
-        );
-
-        // First prove that an ordinary child inherits the enforced policy.
-        // This is the red-capable half of the regression and does not depend on
-        // how Windows classifies the junction created by the current account.
-        let inherited = Command::new(std::env::current_exe().expect("locate test executable"))
-            .args(["--exact", TEST_NAME, "--nocapture"])
-            .env(PROBE_RESULT_ENV, &inherited_result)
-            .status()
-            .expect("spawn ordinary mitigation probe");
-        assert!(inherited.success(), "ordinary mitigation probe must run");
-        assert_eq!(
-            std::fs::read_to_string(&inherited_result)
-                .expect("read inherited mitigation verdict")
-                .trim(),
-            "ENFORCED",
-            "an ordinary child must demonstrate the policy inheritance that the alternate spawn path removes"
-        );
-
-        // The clean helper inherits INNER_ENV from this disposable process. A
-        // batch wrapper adds the result path before launching another copy of
-        // the test executable, whose first branch records its actual policy.
-        let test_exe = std::env::current_exe().expect("locate test executable");
-        let script = format!(
-            "@echo off\r\nset \"{PROBE_RESULT_ENV}={}\"\r\n\"{}\" --exact \"{TEST_NAME}\" --nocapture\r\n",
-            result.display(),
-            test_exe.display(),
-        );
-        std::fs::write(&batch, script).expect("write mitigation probe batch");
-
-        windows::spawn_detached_with_parent(
-            Path::new(&comspec),
-            &[
-                std::ffi::OsString::from("/d"),
-                std::ffi::OsString::from("/c"),
-                batch.as_os_str().to_owned(),
-            ],
-            clean_parent_pid,
-        )
-        .expect("spawn mitigation probe through clean logical parent");
-
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while !result.exists() && Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(25));
-        }
-
-        let verdict = std::fs::read_to_string(&result).unwrap_or_else(|_| "MISSING".into());
-        let _ = std::fs::remove_dir(&junction);
-        let _ = std::fs::remove_dir_all(&root);
-        assert_eq!(
-            verdict.trim(),
-            "CLEAN_OK",
-            "a tty7 daemon child must drop the inherited policy and retain access to user-created junctions"
-        );
-    }
-}
-
 #[cfg(test)]
 mod exe_name_tests {
     use super::*;
@@ -1597,14 +1178,6 @@ mod exe_name_tests {
                 "{name:?} must be protected from the reap"
             );
         }
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn windows_matches_daemon_names_case_insensitively() {
-        assert!(is_reapable_daemon_name("TTY7-APP.EXE"));
-        assert!(is_reapable_daemon_name("Tty7-Server"));
-        assert!(is_reapable_daemon_name("TTY7"));
     }
 
     /// The kernel's " (deleted)" marker on a replaced executable is not part

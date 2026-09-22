@@ -7,8 +7,6 @@ use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 
 pub(super) struct Backend {
     tray: TrayIcon,
-    #[cfg(not(target_os = "macos"))]
-    attention: bool,
 }
 
 impl Backend {
@@ -22,10 +20,7 @@ impl Backend {
             }
         }));
 
-        #[cfg(target_os = "macos")]
         let img = icon::render()?;
-        #[cfg(not(target_os = "macos"))]
-        let img = icon::render(false)?;
         let icon = Icon::from_rgba(img.data, img.width, img.height).ok()?;
         let tray = TrayIconBuilder::new()
             .with_icon(icon)
@@ -42,7 +37,6 @@ impl Backend {
             }
         };
 
-        #[cfg(target_os = "macos")]
         if let Some(status_item) = tray.ns_status_item() {
             if let Some(mtm) = objc2::MainThreadMarker::new() {
                 if let Some(button) = status_item.button(mtm) {
@@ -54,28 +48,12 @@ impl Backend {
                 }
             }
         }
-        Some(Self {
-            tray,
-            #[cfg(not(target_os = "macos"))]
-            attention: false,
-        })
+        Some(Self { tray })
     }
 
     pub(super) fn update(&mut self, snap: &TraySnapshot) {
         self.tray.set_menu(Some(Box::new(build_menu(snap))));
         let _ = self.tray.set_tooltip(Some(snap.tooltip()));
-        #[cfg(not(target_os = "macos"))]
-        {
-            let attention = snap.attention();
-            if attention != self.attention {
-                self.attention = attention;
-                if let Some(img) = icon::render(attention)
-                    && let Ok(icon) = Icon::from_rgba(img.data, img.width, img.height)
-                {
-                    let _ = self.tray.set_icon(Some(icon));
-                }
-            }
-        }
     }
 }
 

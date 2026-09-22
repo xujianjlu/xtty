@@ -606,22 +606,6 @@ async fn drive(local: Stream, header: &RouteHeader) -> io::Result<()> {
         tokio::io::AsyncWriteExt::write_all(&mut *link, &leftover).await?;
     }
     let copied = tokio::io::copy_bidirectional(&mut local, &mut *link).await;
-    // A bridge that never sent a byte never ran. This is where a stale note is
-    // actually found out: `wsl.exe` spawns quite happily with a server path
-    // that no longer exists inside the distro — the distro was reinstalled, the
-    // directory was cleaned out — and only fails once it is the shell trying to
-    // exec it. Forget the distro, so the pane after this one proves it again
-    // rather than repeating a failure that would otherwise outlive every window
-    // and last until tty7 itself restarts.
-    if let RouteTarget::Wsl { distro } = &header.target
-        && header.server_command.is_none()
-        && !copied
-            .as_ref()
-            .is_ok_and(|(_, from_remote)| *from_remote > 0)
-    {
-        log::info!("wsl:{distro}: the bridge closed without answering; proving it again next time");
-        crate::daemon::install::wsl::forget_wsl_server(distro);
-    }
     // The same reasoning over SSH, where the note is the one this connection's
     // probe left behind. `exec` on a session channel succeeds whatever the
     // command turns out to be, so a server binary that has been deleted or
@@ -763,37 +747,15 @@ async fn restart_server(
                 .restart_remote_server(spec, setup)
                 .await
         }
-        // A distro's server is installed and launched from here too, so both
-        // moves mean the same thing they do over SSH — only the transport is
-        // different.
-        (RouteTarget::Wsl { distro }, RouteAction::ReplaceServer) => {
-            let distro = distro.clone();
-            setup
-                .blocking(move || crate::daemon::install::wsl::replace_wsl_server(&distro))
-                .await??;
-            Ok(())
-        }
-        (RouteTarget::Wsl { distro }, _) => {
-            let distro = distro.clone();
-            setup
-                .blocking(move || crate::daemon::install::wsl::restart_wsl_daemon(&distro))
-                .await??;
-            Ok(())
-        }
+        // WSL client installs are no longer supported.
+        (RouteTarget::Wsl { .. }, _) => Err(anyhow::anyhow!(
+            "WSL routes are not supported in this build"
+        )),
         _ => Err(anyhow::anyhow!(
             "restarting tty7's server is only supported for machines it serves, not {}",
             header.describe()
         )),
     }
-}
-
-/// Prove (or recall) where this distro's server is, off the reactor — the probe
-/// is a chain of blocking `wsl.exe` calls the first time round.
-async fn ensure_wsl_server(distro: &str, setup: &RouteSetup) -> anyhow::Result<String> {
-    let distro = distro.to_string();
-    Ok(setup
-        .blocking(move || crate::daemon::install::wsl::ensure_wsl_server(&distro))
-        .await??)
 }
 
 async fn open_link(
@@ -807,32 +769,9 @@ async fn open_link(
                 .await?;
             Ok((link, Some(conn)))
         }
-        RouteTarget::Wsl { distro } => {
-            if let Some(command) = header.server_command.as_deref() {
-                let link = RemoteLink::wsl_shell(distro, command, setup.channel)?;
-                return Ok((link, None));
-            }
-
-            let from_memory = crate::daemon::install::wsl::remembered_wsl_server(distro).is_some();
-            let binary = ensure_wsl_server(distro, setup).await?;
-            match RemoteLink::wsl(distro, &binary, setup.channel) {
-                Ok(link) => Ok((link, None)),
-                // Only worth a second look when the path came from memory: one
-                // proved a moment ago will prove the same, and re-proving it
-                // just doubles the wait before the error reaches the user.
-                Err(stale) if from_memory => {
-                    log::info!(
-                        "wsl:{distro}: the remembered server would not start ({stale}); \
-                         looking again"
-                    );
-                    crate::daemon::install::wsl::forget_wsl_server(distro);
-                    let binary = ensure_wsl_server(distro, setup).await?;
-                    let link = RemoteLink::wsl(distro, &binary, setup.channel)?;
-                    Ok((link, None))
-                }
-                Err(e) => Err(e.into()),
-            }
-        }
+        RouteTarget::Wsl { .. } => Err(anyhow::anyhow!(
+            "WSL routes are not supported in this build"
+        )),
         RouteTarget::LocalStdio { program, args } => {
             let args: Vec<&str> = args.iter().map(String::as_str).collect();
             Ok((RemoteLink::local_stdio(program, &args)?, None))
@@ -844,12 +783,6 @@ async fn open_link(
 fn into_async(local: Stream) -> io::Result<tokio::net::UnixStream> {
     local.set_nonblocking(true)?;
     tokio::net::UnixStream::from_std(local)
-}
-
-#[cfg(windows)]
-fn into_async(local: Stream) -> io::Result<tokio::net::TcpStream> {
-    local.set_nonblocking(true)?;
-    tokio::net::TcpStream::from_std(local)
 }
 
 #[cfg(test)]

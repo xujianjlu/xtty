@@ -63,11 +63,7 @@ fn base_name(program: &str) -> &str {
 /// to `/mnt/...` before they reach here.)
 pub fn quoting_for(shell_program: Option<&str>) -> Quoting {
     let Some(base) = shell_program.map(base_name) else {
-        return if cfg!(windows) {
-            Quoting::PowerShell
-        } else {
-            Quoting::Posix
-        };
+        return Quoting::Posix;
     };
     if base.eq_ignore_ascii_case("cmd") {
         Quoting::Cmd
@@ -317,6 +313,6 @@ mod tests {
         assert!(!posix_escapes_for(Some("cmd.exe")));
         assert!(!posix_escapes_for(Some("powershell.exe")));
         assert!(!posix_escapes_for(Some("pwsh")));
-        assert_eq!(posix_escapes_for(None), !cfg!(windows));
+        assert!(posix_escapes_for(None));
     }
 }

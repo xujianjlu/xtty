@@ -7,9 +7,7 @@
 
 use std::path::PathBuf;
 
-#[cfg(target_os = "macos")]
 pub const BUNDLE_ID: &str = "com.github.tty7";
-#[cfg(target_os = "macos")]
 const URL_SCHEMES: &[&str] = &["ssh", "x-man-page"];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -113,7 +111,6 @@ fn decode(raw: &str, what: &str) -> Result<String, String> {
         .map_err(|_| format!("the URL has a {what} that is not UTF-8"))
 }
 
-#[cfg(target_os = "macos")]
 pub fn set_as_default_terminal() -> Result<(), String> {
     use core_foundation::base::TCFType;
     use core_foundation::string::CFString;
@@ -168,11 +165,6 @@ pub fn set_as_default_terminal() -> Result<(), String> {
         }
     }
     Ok(())
-}
-
-#[cfg(not(target_os = "macos"))]
-pub fn set_as_default_terminal() -> Result<(), String> {
-    Err("setting a default terminal is only available on macOS".to_string())
 }
 
 #[cfg(test)]

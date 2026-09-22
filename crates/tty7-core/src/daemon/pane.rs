@@ -22,11 +22,6 @@ use crate::daemon::protocol::{
 };
 use crate::daemon::shell_integration;
 
-#[cfg(windows)]
-fn default_prog() -> CommandBuilder {
-    CommandBuilder::new(crate::core::shells::windows_default_shell())
-}
-
 #[cfg(not(windows))]
 fn default_prog() -> CommandBuilder {
     default_prog_with_override(detected_shell_override())
@@ -55,11 +50,6 @@ fn usable_shell_path(path: std::ffi::OsString) -> Option<String> {
         return None;
     }
     path.into_os_string().into_string().ok()
-}
-
-#[cfg(windows)]
-fn default_shell_name(_cmd: &CommandBuilder) -> String {
-    crate::core::shells::windows_default_shell().to_string()
 }
 
 #[cfg(not(windows))]
@@ -473,20 +463,6 @@ fn pane_environment(
         ("TERM_PROGRAM_VERSION".to_string(), version.to_string()),
         (TTY7_PANE_ENV.to_string(), pane.to_string()),
     ];
-    #[cfg(windows)]
-    if !extra_env
-        .keys()
-        .any(|key| key.eq_ignore_ascii_case("COLORFGBG"))
-    {
-        // The bundled ConPTY forwards OSC 11 queries, so this is no longer the
-        // only answer a Windows pane gets — but the in-box conhost still
-        // swallows them, and that is what a build without `conpty.dll` beside
-        // it runs on. Keep the conventional fallback hint for that case, and
-        // for applications that never learned to ask. An explicit user override
-        // still wins, below.
-        let colorfgbg = if dark { "15;0" } else { "0;15" };
-        env.push(("COLORFGBG".to_string(), colorfgbg.to_string()));
-    }
     if let Some(ws) = workspace {
         env.push((TTY7_WS_ENV.to_string(), ws.to_string()));
     }
@@ -565,17 +541,6 @@ fn apply_common_command_setup(
         cmd.env("PWD", dir);
     }
     let extra_env = crate::core::config::extra_env();
-
-    // Windows hands every process a private copy of the environment at spawn
-    // time and never updates it, so a daemon that has been running since before
-    // an installer touched `HKCU\Environment` would give a brand-new pane its
-    // startup `PATH` (#333). Re-read both hives here and pin the merge onto the
-    // command; the pane-specific variables below (and the configured overrides
-    // they carry) are applied afterwards and still win.
-    #[cfg(windows)]
-    for (k, v) in crate::daemon::windows_env::refreshed_pane_environment(&extra_env) {
-        cmd.env(k, v);
-    }
 
     let dark = crate::core::machine::appearance().dark;
     for (k, v) in pane_environment(&extra_env, dark, pane, workspace, shell) {
@@ -912,11 +877,6 @@ impl DeathReporter {
         *self.exit_code.lock().unwrap() = Some(Box::new(probe));
     }
 
-    #[cfg(windows)]
-    fn has_reported(&self) -> bool {
-        self.reported.load(Ordering::SeqCst)
-    }
-
     fn report(&self, state: &Mutex<PaneState>, shutting_down: &AtomicBool) {
         if self.reported.swap(true, Ordering::SeqCst) {
             return;
@@ -947,62 +907,6 @@ impl DeathReporter {
             on_dead();
         }
     }
-}
-
-/// Releases the PTY master without holding its slot mutex during destruction.
-///
-/// `ClosePseudoConsole` may wait while the output pipe is drained, and the same
-/// slot is what `resize` locks. Dropping the master only after releasing the
-/// mutex keeps a concurrent resize from parking behind a close that is itself
-/// waiting on the reader.
-#[cfg(windows)]
-fn close_pty_master(master: &Mutex<Option<Box<dyn MasterPty + Send>>>) {
-    let owned = master.lock().ok().and_then(|mut slot| slot.take());
-    drop(owned);
-}
-
-/// How long the Windows exit monitor lets the reader announce the death on its
-/// own before doing it itself.
-///
-/// The reader is the better reporter: it publishes `Exited` only after it has
-/// forwarded every byte that preceded EOF, which is what keeps a short-lived
-/// command's final frame ahead of its exit. But EOF is not guaranteed. A
-/// grandchild that inherited the ConPTY output pipe holds it open after the
-/// shell is gone — `cmd /c start …` is enough — and `ClosePseudoConsole` then
-/// never completes. Without this window such a pane would read as alive
-/// forever to every attached client.
-#[cfg(windows)]
-const EXIT_DRAIN_WINDOW: Duration = Duration::from_secs(2);
-
-#[cfg(windows)]
-const EXIT_DRAIN_POLL: Duration = Duration::from_millis(10);
-
-/// Releases the pseudoconsole, then reports the pane's death — preferring the
-/// reader's EOF-ordered report and falling back to its own after `window`.
-///
-/// Must run on a background thread: both halves block.
-#[cfg(windows)]
-fn drain_then_report(
-    master: Arc<Mutex<Option<Box<dyn MasterPty + Send>>>>,
-    state: Arc<Mutex<PaneState>>,
-    shutting_down: Arc<AtomicBool>,
-    death: Arc<DeathReporter>,
-    window: Duration,
-) {
-    // `ClosePseudoConsole` can block until the reader drains the pipe, so it
-    // cannot run on the thread that owns the deadline below.
-    std::thread::Builder::new()
-        .name("tty7-daemon-pane-pty-close".to_string())
-        .spawn(move || close_pty_master(&master))
-        .expect("spawn daemon pane pty close thread");
-
-    let deadline = std::time::Instant::now() + window;
-    while !death.has_reported() && std::time::Instant::now() < deadline {
-        std::thread::sleep(EXIT_DRAIN_POLL);
-    }
-    // `DeathReporter` is idempotent, so this is a no-op whenever the reader
-    // already got there — which is the ordinary case.
-    death.report(&state, &shutting_down);
 }
 
 /// One out-of-band frame the reader forwards to the subscriber, kept in stream
@@ -1472,13 +1376,6 @@ impl DaemonPane {
     ) -> anyhow::Result<Arc<Self>> {
         let pty_size = pty_size(size);
 
-        // Before the shell exists, not after: a ConPTY child inherits the
-        // "ignore Ctrl+C" state of whoever created it, and the daemon can be
-        // carrying it from its own launch. Leaving it on costs the pane every
-        // Ctrl+C it will ever be sent (#451, #314).
-        #[cfg(windows)]
-        crate::daemon::winproc::allow_ctrl_c_in_children();
-
         let pair = native_pty_system().openpty(pty_size)?;
         let spawn = build_spawn_config(id, cwd, shell, workspace.as_deref())?;
 
@@ -1610,15 +1507,6 @@ impl DaemonPane {
                 }
             }
         });
-
-        #[cfg(windows)]
-        Self::spawn_exit_monitor(
-            shell_pid,
-            master.clone(),
-            state.clone(),
-            pane.shutting_down.clone(),
-            death.clone(),
-        );
 
         let fg_master = master.clone();
         let remote_master = master.clone();
@@ -2362,67 +2250,11 @@ impl DaemonPane {
             PaneBackend::Pty(p) => {
                 #[cfg(unix)]
                 Self::signal_group(p, libc::SIGHUP);
-                #[cfg(windows)]
-                Self::kill_descendants(p);
-                if let Ok(mut child) = p.child.lock() {
-                    let _ = child.kill();
-                }
                 #[cfg(unix)]
                 Self::signal_group(p, libc::SIGKILL);
             }
             PaneBackend::NativeSsh(b) => b.handle.close(),
         }
-    }
-
-    #[cfg(windows)]
-    fn kill_descendants(pty: &PtyBackend) {
-        if let Some(pid) = pty.shell_pid {
-            let procs = crate::daemon::winproc::snapshot();
-            for target in crate::daemon::winproc::descendants(&procs, pid) {
-                crate::daemon::winproc::terminate(target);
-            }
-        }
-    }
-
-    #[cfg(windows)]
-    fn spawn_exit_monitor(
-        shell_pid: Option<u32>,
-        master: Arc<Mutex<Option<Box<dyn MasterPty + Send>>>>,
-        state: Arc<Mutex<PaneState>>,
-        shutting_down: Arc<AtomicBool>,
-        death: Arc<DeathReporter>,
-    ) {
-        use windows_sys::Win32::Foundation::CloseHandle;
-        use windows_sys::Win32::System::Threading::{
-            INFINITE, OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject,
-        };
-
-        let Some(pid) = shell_pid else { return };
-        let handle = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
-        if handle.is_null() {
-            // The process may have exited before OpenProcess ran, so go
-            // straight to the close-and-report path — off this thread, since
-            // pane construction is what calls us.
-            std::thread::Builder::new()
-                .name("tty7-daemon-pane-exit-fallback".to_string())
-                .spawn(move || {
-                    drain_then_report(master, state, shutting_down, death, EXIT_DRAIN_WINDOW);
-                })
-                .expect("spawn daemon pane exit fallback thread");
-            return;
-        }
-        let handle = handle as isize;
-        std::thread::Builder::new()
-            .name("tty7-daemon-pane-exit-monitor".to_string())
-            .spawn(move || {
-                let handle = handle as windows_sys::Win32::Foundation::HANDLE;
-                unsafe {
-                    WaitForSingleObject(handle, INFINITE);
-                    CloseHandle(handle);
-                }
-                drain_then_report(master, state, shutting_down, death, EXIT_DRAIN_WINDOW);
-            })
-            .expect("spawn daemon pane exit monitor thread");
     }
 
     #[cfg(unix)]
@@ -2464,19 +2296,7 @@ impl DaemonPane {
             .unwrap_or_default()
     }
 
-    #[cfg(windows)]
-    fn foreground_title(&self) -> String {
-        let Some(pty) = self.pty() else {
-            return String::new();
-        };
-        let Some(pid) = pty.shell_pid else {
-            return String::new();
-        };
-        let procs = crate::daemon::winproc::snapshot();
-        crate::daemon::winproc::foreground_name(&procs, pid).unwrap_or_default()
-    }
-
-    #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     fn foreground_title(&self) -> String {
         String::new()
     }
@@ -2941,13 +2761,6 @@ fn apply_signals(st: &mut PaneState, signals: SniffSignals) {
         }
     }
     for shell in signals.shell {
-        #[cfg(windows)]
-        if shell_mark_capture_changed(&st.shell, &shell) {
-            apply_agent(
-                st,
-                agent_from_shell_mark(&shell, crate::core::config::agent_commands_cached()),
-            );
-        }
         st.shell = shell.clone();
         notify(
             st,
@@ -3708,59 +3521,6 @@ mod tests {
         assert!(!has_custom_args(Some(&chosen(vec![], false))));
         assert!(!has_custom_args(Some(&chosen(vec![], true))));
         assert!(!has_custom_args(None));
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn wsl_panes_are_tagged_as_a_foreign_filesystem() {
-        let spec = |program: &str, args: Vec<&str>| ChosenShell {
-            program: program.to_string(),
-            args: args.into_iter().map(str::to_string).collect(),
-            args_are_tty7_defaults: true,
-        };
-
-        let ctx = wsl_remote_context(Some(&spec(
-            "wsl.exe",
-            vec!["--distribution", "Ubuntu-24.04", "--cd", "~"],
-        )))
-        .expect("wsl.exe must be tagged");
-        assert_eq!(ctx.kind, RemoteKind::Wsl);
-        assert_eq!(ctx.target, "Ubuntu-24.04");
-        assert!(ctx.argv.is_empty());
-
-        assert_eq!(
-            wsl_remote_context(Some(&spec("wsl.exe", vec!["-d", "Debian"])))
-                .expect("short flag")
-                .target,
-            "Debian"
-        );
-        assert_eq!(
-            wsl_remote_context(Some(&spec("wsl.exe", vec![])))
-                .expect("default distro is still WSL")
-                .target,
-            crate::core::shells::default_wsl_distro().unwrap_or_default(),
-            "no --distribution resolves to the machine's default distro"
-        );
-        assert_eq!(
-            wsl_remote_context(Some(&spec("wsl.exe", vec!["--distribution=Arch"])))
-                .expect("joined flag")
-                .target,
-            "Arch"
-        );
-        assert!(wsl_remote_context(Some(&spec(r"C:\Windows\System32\WSL.EXE", vec![]))).is_some());
-
-        let from_config = choose_shell(None, Some(("wsl.exe".to_string(), Vec::new())));
-        assert_eq!(
-            wsl_remote_context(from_config.as_ref()).map(|c| c.kind),
-            Some(RemoteKind::Wsl),
-            "a configured wsl.exe is as much a WSL pane as a dropdown one"
-        );
-
-        assert!(wsl_remote_context(Some(&spec("powershell.exe", vec![]))).is_none());
-        assert!(
-            wsl_remote_context(Some(&spec(r"C:\Program Files\Git\bin\bash.exe", vec![]))).is_none()
-        );
-        assert!(wsl_remote_context(None).is_none());
     }
 
     #[test]
@@ -5865,245 +5625,6 @@ mod tests {
         );
     }
 
-    #[cfg(windows)]
-    #[test]
-    fn closing_conpty_waits_for_delayed_reader_output_before_exit() {
-        /// A master whose destruction opens the simulated ConPTY output pipe.
-        /// The production `ConPtyMasterPty` performs the equivalent transition
-        /// by calling `ClosePseudoConsole` from its destructor.
-        struct SignallingMaster {
-            released: Arc<(Mutex<bool>, Condvar)>,
-        }
-
-        impl Drop for SignallingMaster {
-            fn drop(&mut self) {
-                let (lock, ready) = &*self.released;
-                *lock.lock().unwrap() = true;
-                ready.notify_all();
-            }
-        }
-
-        impl MasterPty for SignallingMaster {
-            fn resize(&self, _size: PtySize) -> anyhow::Result<()> {
-                Ok(())
-            }
-
-            fn get_size(&self) -> anyhow::Result<PtySize> {
-                Ok(PtySize::default())
-            }
-
-            fn try_clone_reader(&self) -> anyhow::Result<Box<dyn Read + Send>> {
-                Ok(Box::new(std::io::empty()))
-            }
-
-            fn take_writer(&self) -> anyhow::Result<Box<dyn Write + Send>> {
-                Ok(Box::new(std::io::sink()))
-            }
-        }
-
-        /// Models a reader that stays delayed well past any plausible grace
-        /// period, then receives a final output chunk followed by EOF.
-        struct DelayedTailReader {
-            released: Arc<(Mutex<bool>, Condvar)>,
-            tail: std::io::Cursor<Vec<u8>>,
-            delayed: bool,
-        }
-
-        impl Read for DelayedTailReader {
-            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-                if !self.delayed {
-                    let (lock, ready) = &*self.released;
-                    let mut released = lock.lock().unwrap();
-                    while !*released {
-                        released = ready.wait(released).unwrap();
-                    }
-                    drop(released);
-                    std::thread::sleep(Duration::from_millis(800));
-                    self.delayed = true;
-                }
-                self.tail.read(buf)
-            }
-        }
-
-        let released = Arc::new((Mutex::new(false), Condvar::new()));
-        let master: Mutex<Option<Box<dyn MasterPty + Send>>> =
-            Mutex::new(Some(Box::new(SignallingMaster {
-                released: released.clone(),
-            })));
-        let state = Arc::new(Mutex::new(test_state(true)));
-        let (sub_tx, sub_rx) = mpsc::channel();
-        state.lock().unwrap().subscriber = Some(sub_tx);
-
-        let reader = DaemonPane::spawn_reader(
-            state,
-            Arc::new(AtomicBool::new(false)),
-            Arc::new(OutputGate::new()),
-            Box::new(DelayedTailReader {
-                released,
-                tail: std::io::Cursor::new(b"final output".to_vec()),
-                delayed: false,
-            }),
-            null_writer(),
-            || false,
-            ForegroundProbes {
-                remote: Box::new(|| None),
-                agent: Box::new(|| None),
-                cwd: Box::new(|| None),
-            },
-            Arc::new(DeathReporter::new(|| {})),
-        );
-
-        close_pty_master(&master);
-        assert!(
-            sub_rx.recv_timeout(Duration::from_millis(600)).is_err(),
-            "closing the master must not publish Exited while the reader is still delayed"
-        );
-        assert!(matches!(
-            sub_rx.recv_timeout(Duration::from_secs(1)),
-            Ok(DaemonMsg::Output(bytes)) if bytes == b"final output"
-        ));
-        assert!(matches!(
-            sub_rx.recv_timeout(Duration::from_secs(1)),
-            Ok(DaemonMsg::Exited { code: None })
-        ));
-        assert!(sub_rx.try_recv().is_err(), "no output may follow Exited");
-        reader.join().unwrap();
-    }
-
-    /// An inert stand-in for the ConPTY master: releasing it is instant, which
-    /// is what `ClosePseudoConsole` does once the pipe has no pending bytes.
-    #[cfg(windows)]
-    struct InertMaster;
-
-    #[cfg(windows)]
-    impl MasterPty for InertMaster {
-        fn resize(&self, _size: PtySize) -> anyhow::Result<()> {
-            Ok(())
-        }
-
-        fn get_size(&self) -> anyhow::Result<PtySize> {
-            Ok(PtySize::default())
-        }
-
-        fn try_clone_reader(&self) -> anyhow::Result<Box<dyn Read + Send>> {
-            Ok(Box::new(std::io::empty()))
-        }
-
-        fn take_writer(&self) -> anyhow::Result<Box<dyn Write + Send>> {
-            Ok(Box::new(std::io::sink()))
-        }
-    }
-
-    #[cfg(windows)]
-    fn exit_drain_fixture() -> (
-        Arc<Mutex<Option<Box<dyn MasterPty + Send>>>>,
-        Arc<Mutex<PaneState>>,
-        Arc<AtomicBool>,
-        Arc<DeathReporter>,
-        mpsc::Receiver<DaemonMsg>,
-    ) {
-        let state = Arc::new(Mutex::new(test_state(true)));
-        let (sub_tx, sub_rx) = mpsc::channel();
-        state.lock().unwrap().subscriber = Some(sub_tx);
-        (
-            Arc::new(Mutex::new(Some(
-                Box::new(InertMaster) as Box<dyn MasterPty + Send>
-            ))),
-            state,
-            Arc::new(AtomicBool::new(false)),
-            Arc::new(DeathReporter::new(|| {})),
-            sub_rx,
-        )
-    }
-
-    /// A grandchild that inherited the ConPTY output pipe keeps it open after
-    /// the shell is gone, so the reader never sees EOF and can never publish
-    /// the exit. The monitor's drain window is the only thing that stops such
-    /// a pane from reading as alive forever.
-    #[cfg(windows)]
-    #[test]
-    fn a_pty_that_never_reaches_eof_still_reports_the_exit() {
-        struct NeverEofReader;
-
-        impl Read for NeverEofReader {
-            fn read(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
-                // Long enough to outlast the window below, bounded so the
-                // thread cannot outlive the test binary.
-                std::thread::sleep(Duration::from_secs(5));
-                Ok(0)
-            }
-        }
-
-        let (master, state, shutting_down, death, sub_rx) = exit_drain_fixture();
-        let _reader = DaemonPane::spawn_reader(
-            state.clone(),
-            shutting_down.clone(),
-            Arc::new(OutputGate::new()),
-            Box::new(NeverEofReader),
-            null_writer(),
-            || false,
-            ForegroundProbes {
-                remote: Box::new(|| None),
-                agent: Box::new(|| None),
-                cwd: Box::new(|| None),
-            },
-            death.clone(),
-        );
-
-        drain_then_report(
-            master,
-            state,
-            shutting_down,
-            death,
-            Duration::from_millis(50),
-        );
-        assert!(
-            matches!(
-                sub_rx.recv_timeout(Duration::from_secs(1)),
-                Ok(DaemonMsg::Exited { code: None })
-            ),
-            "the monitor must report the exit once its drain window elapses"
-        );
-    }
-
-    /// The ordinary case: EOF arrives, the reader reports, and the monitor
-    /// neither waits out its window nor publishes a second `Exited`.
-    #[cfg(windows)]
-    #[test]
-    fn the_exit_monitor_defers_to_the_reader_that_saw_eof() {
-        let (master, state, shutting_down, death, sub_rx) = exit_drain_fixture();
-        let reader = DaemonPane::spawn_reader(
-            state.clone(),
-            shutting_down.clone(),
-            Arc::new(OutputGate::new()),
-            Box::new(std::io::empty()),
-            null_writer(),
-            || false,
-            ForegroundProbes {
-                remote: Box::new(|| None),
-                agent: Box::new(|| None),
-                cwd: Box::new(|| None),
-            },
-            death.clone(),
-        );
-
-        let started = std::time::Instant::now();
-        drain_then_report(master, state, shutting_down, death, Duration::from_secs(30));
-        assert!(
-            started.elapsed() < Duration::from_secs(5),
-            "the monitor must stop waiting as soon as the reader has reported"
-        );
-        assert!(matches!(
-            sub_rx.recv_timeout(Duration::from_secs(1)),
-            Ok(DaemonMsg::Exited { code: None })
-        ));
-        assert!(
-            sub_rx.try_recv().is_err(),
-            "the idempotent reporter must not publish a second Exited"
-        );
-        reader.join().unwrap();
-    }
-
     /// Issue #213 end-to-end at the reader: a chunk carrying text plus a
     /// kitty graphics query and a transmit-and-display must (1) keep only the
     /// text in the replay ring and the `Output` frame, (2) write the `a=q` reply
@@ -6665,27 +6186,6 @@ mod tests {
         assert_eq!(applied.get(SHELL_ENV).map(String::as_str), Some("/bin/ksh"));
     }
 
-    #[cfg(windows)]
-    #[test]
-    fn windows_panes_are_left_without_a_shell_variable() {
-        let applied = pane_environment(
-            &std::collections::HashMap::new(),
-            false,
-            1,
-            None,
-            r"C:\Program Files\PowerShell\7\pwsh.exe",
-        );
-
-        assert!(
-            !applied
-                .iter()
-                .any(|(key, _)| key.eq_ignore_ascii_case(SHELL_ENV)),
-            "$SHELL is a POSIX contract: the MSYS, Cygwin and WSL tools that \
-             read it on Windows want a POSIX path, and a Windows one would \
-             point them at a shell they cannot exec"
-        );
-    }
-
     #[test]
     fn shell_env_path_only_ever_answers_an_absolute_path() {
         let never = |_: &str| false;
@@ -6782,65 +6282,6 @@ mod tests {
             applied.get("COLORTERM").map(String::as_str),
             Some("truecolor")
         );
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn pane_environment_advertises_light_and_dark_backgrounds() {
-        let empty = std::collections::HashMap::new();
-        let light: std::collections::HashMap<_, _> =
-            pane_environment(&empty, false, 1, None, "pwsh.exe")
-                .into_iter()
-                .collect();
-        let dark: std::collections::HashMap<_, _> =
-            pane_environment(&empty, true, 1, None, "pwsh.exe")
-                .into_iter()
-                .collect();
-
-        assert_eq!(light.get("COLORFGBG").map(String::as_str), Some("0;15"));
-        assert_eq!(dark.get("COLORFGBG").map(String::as_str), Some("15;0"));
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn configured_colorfgbg_wins_case_insensitively() {
-        let configured = [("ColorFgBg".to_string(), "3;4".to_string())]
-            .into_iter()
-            .collect();
-        let applied = pane_environment(&configured, false, 1, None, "pwsh.exe");
-
-        assert!(!applied.iter().any(|(key, _)| key == "COLORFGBG"));
-        assert!(
-            applied
-                .iter()
-                .any(|(key, value)| key == "ColorFgBg" && value == "3;4")
-        );
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn pane_environment_capability_keys_cannot_be_overridden_by_recasing() {
-        let configured = [("Term", "dumb"), ("ColorTerm", ""), ("term_program", "x")]
-            .iter()
-            .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
-            .collect();
-
-        let applied = pane_environment(&configured, false, 1, None, "pwsh.exe");
-
-        assert!(
-            !applied.iter().any(|(k, _)| k == "Term" || k == "ColorTerm"),
-            "a recased capability key must be filtered out, or it would land \
-             in the same case-folded slot and win by coming later"
-        );
-        let get = |key: &str| {
-            applied
-                .iter()
-                .find(|(k, _)| k == key)
-                .map(|(_, v)| v.as_str())
-        };
-        assert_eq!(get("TERM"), Some("xterm-256color"));
-        assert_eq!(get("COLORTERM"), Some("truecolor"));
-        assert_eq!(get("term_program"), Some("x"));
     }
 
     #[test]

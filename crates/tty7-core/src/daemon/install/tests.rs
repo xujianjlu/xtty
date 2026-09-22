@@ -1509,7 +1509,7 @@ fn a_bundle_is_used_instead_of_downloading() {
     let release = FakeRelease::new();
     let source = BundledOrRelease {
         fetch: &release,
-        bundled: Some(wsl::BundledServerBinary::in_dirs(vec![dir.clone()])),
+        bundled: Some(bundled::BundledServerBinary::in_dirs(vec![dir.clone()])),
         fallback_on_missing: false,
     };
     let loaded = source
@@ -1537,7 +1537,7 @@ fn a_bundle_that_lacks_the_asset_does_not_fall_back_to_the_network() {
     let release = FakeRelease::new();
     let source = BundledOrRelease {
         fetch: &release,
-        bundled: Some(wsl::BundledServerBinary::in_dirs(vec![dir.clone()])),
+        bundled: Some(bundled::BundledServerBinary::in_dirs(vec![dir.clone()])),
         fallback_on_missing: false,
     };
     let err = source
@@ -1564,7 +1564,7 @@ fn discover_falls_back_to_release_when_bundled_is_missing() {
     let release = FakeRelease::new();
     let source = BundledOrRelease {
         fetch: &release,
-        bundled: Some(wsl::BundledServerBinary::in_dirs(vec![dir.clone()])),
+        bundled: Some(bundled::BundledServerBinary::in_dirs(vec![dir.clone()])),
         fallback_on_missing: true,
     };
     let loaded = source
@@ -1592,7 +1592,7 @@ fn discover_uses_bundled_when_it_is_present() {
     let release = FakeRelease::new();
     let source = BundledOrRelease {
         fetch: &release,
-        bundled: Some(wsl::BundledServerBinary::in_dirs(vec![dir.clone()])),
+        bundled: Some(bundled::BundledServerBinary::in_dirs(vec![dir.clone()])),
         fallback_on_missing: true,
     };
     let loaded = source
@@ -2103,7 +2103,7 @@ fn an_upload_that_speaks_the_wrong_dialect_is_not_published() {
         "and the staged file is cleaned up rather than left to be found"
     );
     assert!(
-        err.to_string().contains(wsl::BUNDLED_DIR_ENV),
+        err.to_string().contains(bundled::BUNDLED_DIR_ENV),
         "the message points at the one lever that fixes it: {err}"
     );
 }

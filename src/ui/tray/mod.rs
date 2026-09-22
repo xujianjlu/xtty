@@ -1,13 +1,7 @@
 mod icon;
-#[cfg(any(target_os = "macos", target_os = "windows"))]
 mod native;
-#[cfg(target_os = "linux")]
-mod sni;
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
 use native::Backend;
-#[cfg(target_os = "linux")]
-use sni::Backend;
 
 use std::sync::Mutex;
 
@@ -30,8 +24,7 @@ static SENDER: Mutex<Option<smol::channel::Sender<TrayAction>>> = Mutex::new(Non
 /// Whether an icon is actually on the bar right now.
 ///
 /// `show_tray_icon` is a request, not an outcome: `Backend::create` can fail
-/// for the whole run (a Linux session with no StatusNotifier host is the
-/// ordinary case), and after `MAX_ATTEMPTS` the loop gives up and logs. Asking
+/// for the whole run, and after `MAX_ATTEMPTS` the loop gives up and logs. Asking
 /// the config alone whether closing the last window may retire the app would
 /// then leave a process with no window and no icon — running, unreachable, and
 /// still holding the daemon.
@@ -43,9 +36,7 @@ pub(crate) fn icon_is_up() -> bool {
 }
 
 /// A sender for the current tray dispatch loop, if one is running.
-// Only the platform notification callbacks call this. The Windows one is
-// compiled out of test builds so unit tests never raise a real toast; the macOS
-// one is not, but no test sends a notification there either.
+// Only the platform notification callbacks call this.
 #[cfg_attr(test, allow(dead_code))]
 pub(crate) fn sender() -> Option<smol::channel::Sender<TrayAction>> {
     SENDER.lock().ok()?.clone()

@@ -370,7 +370,7 @@ pub fn run_daemon() -> anyhow::Result<()> {
             }
         }
     }
-    #[cfg(not(any(unix, windows)))]
+    #[cfg(not(unix))]
     log::info!("no control listener on this platform; serving panes only");
 
     run_with(registry, _seat.is_some())
@@ -531,28 +531,6 @@ pub fn control_services() -> crate::host::server::Services {
     }
 }
 
-/// Say which pseudoconsole this daemon's panes will run on.
-///
-/// `portable-pty` loads a sideloaded `conpty.dll` if one sits beside the
-/// running executable and silently uses `kernel32`'s otherwise. The difference
-/// is invisible until someone asks why a pane swallowed an OSC 11 query (#345),
-/// so the choice belongs in the log rather than in a bug report.
-#[cfg(windows)]
-fn report_conpty_host() {
-    let bundled = std::env::current_exe()
-        .ok()
-        .and_then(|exe| exe.parent().map(|dir| dir.join("conpty.dll")));
-    match bundled {
-        Some(path) if path.is_file() => {
-            log::info!("panes use the bundled ConPTY at {}", path.display())
-        }
-        _ => log::warn!(
-            "no conpty.dll beside this executable; panes fall back to the in-box conhost, \
-             which does not answer terminal color queries"
-        ),
-    }
-}
-
 /// `alone` says this process holds the single-server seat. It decides how the
 /// endpoint left by whoever was here before may be dealt with — see
 /// [`transport::clear_endpoint_before_bind`].
@@ -563,9 +541,6 @@ fn run_with(registry: Arc<Registry>, alone: bool) -> anyhow::Result<()> {
 
     let listener = transport::bind()?;
     log::info!("daemon listening on {}", transport::endpoint_display());
-
-    #[cfg(windows)]
-    report_conpty_host();
 
     crate::daemon::pidfile::write_current();
 
@@ -659,8 +634,6 @@ fn on_shutdown() {
         store.flush();
     }
     transport::remove_stale_endpoint();
-    #[cfg(windows)]
-    crate::host::server::remove_control_endpoint();
     // The pidfile stays. Once the endpoint above is unlinked it is the only
     // name anything has for this process, and the process is not gone yet —
     // a stalled exit after this point used to leave a daemon holding the
@@ -865,18 +838,6 @@ fn handle_conn(stream: Stream, registry: Arc<Registry>) -> anyhow::Result<()> {
             // been reaped has nothing left to photograph.
             store_scrollback_now(&registry);
             registry.drain_and_kill();
-            // The ConPTY hosts (OpenConsole.exe) are this process's children,
-            // not the shells', so the per-pane kill never reaches them — and
-            // exiting right away would leave them holding the installed
-            // OpenConsole.exe image open while an updater tries to replace it.
-            // Reap everything still below us and wait for the images to be
-            // released before the endpoint disappears, because the endpoint
-            // going away is what tells `spawn::stop` the shutdown is complete.
-            #[cfg(windows)]
-            crate::daemon::winproc::reap_descendants_of(
-                std::process::id(),
-                std::time::Duration::from_secs(3),
-            );
             on_shutdown();
             exit_now();
         }

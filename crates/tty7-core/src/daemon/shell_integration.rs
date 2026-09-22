@@ -966,14 +966,6 @@ fn nushell_config_dir_from(
 /// `dirs::config_dir()` — what nu falls back to. Note this is **not** where
 /// tty7 keeps its own config (`~/.config/tty7` on macOS too); nu follows the
 /// platform convention, and the two are only the same directory on Linux.
-#[cfg(windows)]
-fn platform_config_dir() -> Option<PathBuf> {
-    // `dirs` asks Windows for FOLDERID_RoamingAppData; `%APPDATA%` is the
-    // same directory in every environment tty7 can spawn a pane in.
-    std::env::var_os("APPDATA")
-        .filter(|v| !v.is_empty())
-        .map(PathBuf::from)
-}
 
 #[cfg(target_os = "macos")]
 fn platform_config_dir() -> Option<PathBuf> {
@@ -1205,36 +1197,6 @@ fn wsl_zdotdir(dir: &Path) -> Option<String> {
     Some(zdotdir.to_string_lossy().into_owned())
 }
 
-#[cfg(windows)]
-fn setup_wsl(args: &[String]) -> Option<Injection> {
-    let distro = wsl_distro(args);
-    let dir = throwaway_dir("tty7-wslrc-")?;
-    let env = wsl_integration_env(&dir, std::env::var("WSLENV").ok().as_deref())?;
-
-    let mut argv: Vec<String> = Vec::new();
-    if let Some(d) = &distro {
-        argv.push("--distribution".to_string());
-        argv.push(d.clone());
-    }
-    if let Some(cd) = wsl_cd(args) {
-        argv.push("--cd".to_string());
-        argv.push(cd);
-    }
-    // `--` forwards the command through the distro's default shell, which makes
-    // shells such as fish parse the POSIX bootstrap before `sh` can receive it.
-    // `--exec` bypasses that shell and executes the bootstrap interpreter itself.
-    argv.push("--exec".to_string());
-    argv.push("sh".to_string());
-    argv.push("-c".to_string());
-    argv.push(wsl_exec_script());
-
-    Some(Injection {
-        env,
-        args: argv,
-        replaces_argv: true,
-        dir: Some(dir),
-    })
-}
 
 #[cfg_attr(not(windows), allow(dead_code))]
 fn wsl_cd(args: &[String]) -> Option<String> {
@@ -1268,9 +1230,6 @@ pub fn setup(program: Option<&str>, args: &[String], has_custom_args: bool) -> O
         ShellKind::Bash => setup_bash(),
         ShellKind::PowerShell => setup_powershell(),
         ShellKind::Nushell => setup_nushell(),
-        #[cfg(windows)]
-        ShellKind::Wsl => setup_wsl(args),
-        #[cfg(not(windows))]
         ShellKind::Wsl => None,
     }?;
 
@@ -1755,60 +1714,6 @@ mod tests {
             .unwrap_or_else(|| panic!("daemon could not parse OSC 7 payload {payload:?}"))
     }
 
-    #[cfg(windows)]
-    #[test]
-    fn git_bash_reports_the_full_prompt_cycle_over_a_real_pty() {
-        let Some(bash) = crate::core::shells::git_bash_path() else {
-            eprintln!("skipping: Git for Windows not installed");
-            return;
-        };
-        let bash = bash.to_string_lossy().into_owned();
-        let injection = setup(Some(&bash), &[], false).expect("bash integration");
-        let text = prompt_cycle_over_pty(&bash, &injection, b"false\n", None);
-
-        for mark in ["133;A", "133;B", "133;C", FAILED_COMMAND_MARK] {
-            assert!(
-                text.contains(mark),
-                "Git Bash must report {mark:?}; got:\n{text}"
-            );
-        }
-        let cwd = reported_cwd(&text);
-        assert!(
-            cwd.exists(),
-            "Git Bash reported a cwd the Windows side cannot resolve: {cwd:?} \
-             — a drive-relative msys path, so `pwd -W` translation regressed"
-        );
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn wsl_reports_the_full_prompt_cycle_over_a_real_pty() {
-        let Some(distro) = crate::core::shells::wsl_distros().into_iter().next() else {
-            eprintln!("skipping: no WSL distributions installed");
-            return;
-        };
-        let args: Vec<String> = vec![
-            "--distribution".into(),
-            distro.clone(),
-            "--cd".into(),
-            "~".into(),
-        ];
-        let injection = setup(Some("wsl.exe"), &args, false).expect("wsl integration");
-        let text = prompt_cycle_over_pty("wsl.exe", &injection, b"false\n", None);
-
-        for mark in ["133;A", "133;B", "133;C", FAILED_COMMAND_MARK] {
-            assert!(
-                text.contains(mark),
-                "WSL ({distro}) must report {mark:?}; got:\n{text}"
-            );
-        }
-        let cwd = reported_cwd(&text);
-        assert!(
-            cwd.to_string_lossy().starts_with('/'),
-            "expected the distro's own absolute path, got {cwd:?}"
-        );
-    }
-
     /// The OSC 0 title the shell settled on, as `user@host:dir`.
     fn reported_title(text: &str) -> String {
         text.split("\u{1b}]")
@@ -1923,39 +1828,6 @@ mod tests {
         assert!(shell_kind(Some("cmd.exe")).is_none());
         assert!(matches!(shell_kind(Some("wsl.exe")), Some(ShellKind::Wsl)));
         assert!(matches!(shell_kind(Some("wsl")), Some(ShellKind::Wsl)));
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn wsl_setup_never_contacts_the_distro() {
-        let args: Vec<String> = vec![
-            "--distribution".into(),
-            "tty7-no-such-distro-exists".into(),
-            "--cd".into(),
-            "~".into(),
-        ];
-        let inj = setup(Some("wsl.exe"), &args, false)
-            .expect("setup must not depend on reaching the distro");
-
-        let sep = inj
-            .args
-            .iter()
-            .position(|a| a == "--exec")
-            .expect("`--exec`");
-        assert_eq!(
-            &inj.args[..sep],
-            &[
-                "--distribution".to_string(),
-                "tty7-no-such-distro-exists".to_string(),
-                "--cd".to_string(),
-                "~".to_string()
-            ]
-        );
-        assert_eq!(inj.args[sep + 1], "sh");
-        assert_eq!(inj.args[sep + 2], "-c");
-        assert!(inj.args[sep + 3].contains("$SHELL"));
-        assert!(inj.args[sep + 3].contains("--rcfile"));
-        assert!(inj.replaces_argv);
     }
 
     #[test]
@@ -2179,28 +2051,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(windows)]
-    fn shell_kind_declines_the_wsl_bash_launcher() {
-        let system_root = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
-        for prog in [
-            format!(r"{system_root}\System32\bash.exe"),
-            format!(r"{system_root}/System32/bash.exe"),
-            format!(r"{system_root}\SysWOW64\bash.exe"),
-            format!(r"{system_root}\system32\BASH.EXE"),
-        ] {
-            assert!(
-                shell_kind(Some(&prog)).is_none(),
-                "{prog} is the WSL launcher and must not be treated as Bash"
-            );
-        }
-        for prog in ["bash", "bash.exe", "BASH.EXE"] {
-            assert!(
-                shell_kind(Some(prog)).is_none(),
-                "{prog} cannot be identified as msys bash and must be declined"
-            );
-        }
-    }
-
     #[test]
     fn bash_rcfile_path_uses_forward_slashes_on_windows() {
         let rendered = bash_path(Path::new(
@@ -3001,42 +2851,4 @@ mod tests {
             .find(|p| p.is_file())
     }
 
-    #[cfg(windows)]
-    #[test]
-    fn nushell_reports_the_full_prompt_cycle_over_a_real_pty() {
-        let Some(nu) = crate::core::shells::nushell_path() else {
-            eprintln!("skipping: Nushell not installed");
-            return;
-        };
-        let nu = nu.to_string_lossy().into_owned();
-        let injection = setup(Some(&nu), &[], false).expect("nushell integration");
-        // One line: Nushell's line editor holds the tty in raw mode and can
-        // drop what arrives while a command is running, so a second `\r` may
-        // never reach it. `cd` first, then a command that fails — `1 / 0`
-        // errors with exit status 1 (a literal `false` is just a value).
-        let text = prompt_cycle_over_pty(
-            &nu,
-            &injection,
-            b"cd C:/Windows; 1 / 0\r",
-            Some(Path::new("C:/")),
-        );
-
-        for mark in ["133;A", "133;B", "133;C", FAILED_COMMAND_MARK] {
-            assert!(
-                text.contains(mark),
-                "Nushell must report {mark:?}; got:\n{text}"
-            );
-        }
-        let cwd = reported_cwd(&text);
-        assert!(
-            cwd.exists(),
-            "Nushell reported a cwd the Windows side cannot resolve: {cwd:?} \
-             — a drive-relative path, so the URI leading-slash translation regressed"
-        );
-        assert_eq!(
-            last_osc7(&text),
-            PathBuf::from("C:/Windows"),
-            "`cd` must move the pane's reported cwd; got:\n{text}"
-        );
-    }
 }

@@ -7,20 +7,11 @@ pub(super) struct RgbaImage {
     pub height: u32,
 }
 
-#[cfg(target_os = "macos")]
 const GLYPH_SVG: &[u8] = include_bytes!("../../../assets/tray.svg");
-#[cfg(not(target_os = "macos"))]
-const GLYPH_SVG: &[u8] = include_bytes!("../../../assets/app-icon.svg");
 
-#[cfg(target_os = "macos")]
 const SIZE: u32 = 36;
-#[cfg(not(target_os = "macos"))]
-const SIZE: u32 = 32;
 
-#[cfg(not(target_os = "macos"))]
-const AMBER: (u8, u8, u8) = (0xF5, 0x9E, 0x0B);
 
-#[cfg(target_os = "macos")]
 pub(super) fn render() -> Option<RgbaImage> {
     let tree = usvg::Tree::from_data(GLYPH_SVG, &usvg::Options::default()).ok()?;
     let mut pixmap = tiny_skia::Pixmap::new(SIZE, SIZE)?;
@@ -28,18 +19,6 @@ pub(super) fn render() -> Option<RgbaImage> {
     Some(to_rgba(&pixmap))
 }
 
-#[cfg(not(target_os = "macos"))]
-pub(super) fn render(attention: bool) -> Option<RgbaImage> {
-    let tree = usvg::Tree::from_data(GLYPH_SVG, &usvg::Options::default()).ok()?;
-    let mut pixmap = tiny_skia::Pixmap::new(SIZE, SIZE)?;
-    resvg::render(&tree, fit_center(&tree, SIZE), &mut pixmap.as_mut());
-
-    if attention {
-        badge(&mut pixmap);
-    }
-
-    Some(to_rgba(&pixmap))
-}
 
 pub(super) fn agent_avatar(
     agent: crate::core::cli_agent::CLIAgent,
@@ -167,53 +146,7 @@ fn recolor(pixmap: &mut tiny_skia::Pixmap, rgb: (u8, u8, u8)) {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
-fn badge(pixmap: &mut tiny_skia::Pixmap) {
-    let s = SIZE as f32;
-    let (cx, cy) = (s * 0.78, s * 0.22);
-    let r = s * 0.20;
-    let circle = |radius: f32| {
-        let mut pb = tiny_skia::PathBuilder::new();
-        pb.push_circle(cx, cy, radius);
-        pb.finish()
-    };
-    let mut paint = tiny_skia::Paint {
-        anti_alias: true,
-        ..Default::default()
-    };
 
-    if let Some(ring) = circle(r * 1.35) {
-        paint.blend_mode = tiny_skia::BlendMode::Clear;
-        pixmap.fill_path(
-            &ring,
-            &paint,
-            tiny_skia::FillRule::Winding,
-            tiny_skia::Transform::identity(),
-            None,
-        );
-    }
-    if let Some(dot) = circle(r) {
-        paint.blend_mode = tiny_skia::BlendMode::SourceOver;
-        paint.set_color_rgba8(AMBER.0, AMBER.1, AMBER.2, 0xFF);
-        pixmap.fill_path(
-            &dot,
-            &paint,
-            tiny_skia::FillRule::Winding,
-            tiny_skia::Transform::identity(),
-            None,
-        );
-    }
-}
-
-#[cfg(target_os = "linux")]
-pub(super) fn render_argb(attention: bool) -> Option<(Vec<u8>, u32)> {
-    let img = render(attention)?;
-    let mut argb = Vec::with_capacity(img.data.len());
-    for px in img.data.chunks_exact(4) {
-        argb.extend_from_slice(&[px[3], px[0], px[1], px[2]]);
-    }
-    Some((argb, img.width))
-}
 
 #[cfg(test)]
 mod tests {
@@ -260,7 +193,6 @@ mod tests {
         assert_eq!((px[1], px[2]), (0, 0));
     }
 
-    #[cfg(target_os = "macos")]
     #[test]
     fn render_produces_template_glyph() {
         let img = render().unwrap();
@@ -270,19 +202,6 @@ mod tests {
         assert!(covered > 0, "icon rendered fully transparent");
     }
 
-    #[cfg(not(target_os = "macos"))]
-    #[test]
-    fn render_produces_both_states() {
-        let normal = render(false).unwrap();
-        let attention = render(true).unwrap();
-        for img in [&normal, &attention] {
-            assert_eq!((img.width, img.height), (SIZE, SIZE));
-            assert_eq!(img.data.len(), (SIZE * SIZE * 4) as usize);
-            let covered = img.data.chunks_exact(4).filter(|p| p[3] > 0).count();
-            assert!(covered > 0, "icon rendered fully transparent");
-        }
-        assert_ne!(normal.data, attention.data);
-    }
 
     #[test]
     fn agent_avatar_renders_brand_and_fallback() {
@@ -339,15 +258,4 @@ mod tests {
         }
     }
 
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn render_argb_reorders_bytes() {
-        let rgba = render(false).unwrap();
-        let (argb, size) = render_argb(false).unwrap();
-        assert_eq!(size, rgba.width);
-        assert_eq!(argb.len(), rgba.data.len());
-        for (a4, r4) in argb.chunks_exact(4).zip(rgba.data.chunks_exact(4)) {
-            assert_eq!(a4, [r4[3], r4[0], r4[1], r4[2]]);
-        }
-    }
 }

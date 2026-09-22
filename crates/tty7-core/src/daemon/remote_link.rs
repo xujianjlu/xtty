@@ -33,23 +33,22 @@ impl RemoteLink {
         Ok(RemoteLink::LocalStdio(spawn_stdio(program, args)?))
     }
 
-    pub fn wsl(distro: &str, server: &str, channel: RouteChannel) -> io::Result<RemoteLink> {
-        super::install::wsl::validate_distro(distro)?;
-        let args = super::install::wsl::wsl_args(distro, &wsl_link_argv(server, channel));
-        Ok(RemoteLink::Wsl(spawn_stdio_owned(
-            super::install::wsl::WSL_EXE,
-            &args,
-        )?))
+    pub fn wsl(_distro: &str, _server: &str, _channel: RouteChannel) -> io::Result<RemoteLink> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "WSL routes are not supported in this build",
+        ))
     }
 
-    pub fn wsl_shell(distro: &str, command: &str, channel: RouteChannel) -> io::Result<RemoteLink> {
-        super::install::wsl::validate_distro(distro)?;
-        let command = channel.bridge_command(command);
-        let args = super::install::wsl::wsl_args(distro, &["sh", "-c", &command]);
-        Ok(RemoteLink::Wsl(spawn_stdio_owned(
-            super::install::wsl::WSL_EXE,
-            &args,
-        )?))
+    pub fn wsl_shell(
+        _distro: &str,
+        _command: &str,
+        _channel: RouteChannel,
+    ) -> io::Result<RemoteLink> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "WSL routes are not supported in this build",
+        ))
     }
 
     pub fn kind_label(&self) -> &'static str {
@@ -74,14 +73,6 @@ impl RemoteLink {
             RemoteLink::StreamLocal(_) | RemoteLink::SessionExec(_)
         )
     }
-}
-
-fn wsl_link_argv<'a>(server: &'a str, channel: RouteChannel) -> Vec<&'a str> {
-    let mut argv = vec![server, "--stdio"];
-    if channel == RouteChannel::Pane {
-        argv.push("--pane");
-    }
-    argv
 }
 
 fn spawn_stdio(program: &str, args: &[&str]) -> io::Result<ProcessStream> {
@@ -294,15 +285,12 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     #[test]
-    fn only_a_pane_link_asks_for_the_pane_socket() {
-        let server = "/home/me/.local/share/tty7/bin/tty7-server-26.7.6";
+    fn pane_channel_marks_the_bridge_command() {
+        let base = "/home/me/.local/share/tty7/bin/tty7-server";
+        assert_eq!(RouteChannel::Control.bridge_command(base), base);
         assert_eq!(
-            wsl_link_argv(server, RouteChannel::Control),
-            vec![server, "--stdio"]
-        );
-        assert_eq!(
-            wsl_link_argv(server, RouteChannel::Pane),
-            vec![server, "--stdio", "--pane"]
+            RouteChannel::Pane.bridge_command(base),
+            format!("{base} --pane")
         );
     }
 

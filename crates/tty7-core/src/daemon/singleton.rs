@@ -299,27 +299,7 @@ fn open_exclusive(path: &std::path::Path) -> std::io::Result<Option<File>> {
     }
 }
 
-#[cfg(windows)]
-fn open_exclusive(path: &std::path::Path) -> std::io::Result<Option<File>> {
-    use std::os::windows::fs::OpenOptionsExt as _;
-
-    // share_mode(0) is the whole mechanism: the file stays open for as long as
-    // the server runs, and every other open of it fails until this handle is
-    // closed — by `drop`, or by Windows when the process ends.
-    match File::options()
-        .create(true)
-        .read(true)
-        .write(true)
-        .share_mode(0)
-        .open(path)
-    {
-        Ok(file) => Ok(Some(file)),
-        Err(e) if e.raw_os_error() == Some(32) => Ok(None), // ERROR_SHARING_VIOLATION
-        Err(e) => Err(e),
-    }
-}
-
-#[cfg(not(any(unix, windows)))]
+#[cfg(not(unix))]
 fn open_exclusive(_path: &std::path::Path) -> std::io::Result<Option<File>> {
     // No lock primitive here. `Ok(None)` would read as "taken" and stop the
     // server from ever starting; not being able to ask is `Unavailable`.

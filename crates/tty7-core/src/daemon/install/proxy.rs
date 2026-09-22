@@ -61,11 +61,6 @@ fn parse_manual(value: &str) -> Option<Proxy> {
     proxy_from_url(&normalize_manual(value)?, &[]).ok()
 }
 
-#[cfg(windows)]
-fn system_proxy(target_url: &str) -> Option<Proxy> {
-    windows::system_proxy(target_url)
-}
-
 #[cfg(target_os = "macos")]
 fn system_proxy(target_url: &str) -> Option<Proxy> {
     macos::system_proxy(target_url)
@@ -182,39 +177,6 @@ fn parse_windows_proxy_server(server: &str, target_scheme: &str) -> Option<Strin
             format!("socks5://{addr}")
         }
     })
-}
-
-#[cfg(windows)]
-mod windows {
-    use super::{parse_windows_proxy_server, proxy_from_url, target_scheme};
-    use ureq::Proxy;
-    use winreg::RegKey;
-    use winreg::enums::HKEY_CURRENT_USER;
-
-    const INTERNET_SETTINGS: &str = r"Software\Microsoft\Windows\CurrentVersion\Internet Settings";
-
-    pub fn system_proxy(target_url: &str) -> Option<Proxy> {
-        let key = RegKey::predef(HKEY_CURRENT_USER)
-            .open_subkey(INTERNET_SETTINGS)
-            .ok()?;
-        let enabled: u32 = key.get_value("ProxyEnable").ok()?;
-        if enabled != 1 {
-            return None;
-        }
-        let server: String = key.get_value("ProxyServer").ok()?;
-        let overrides: String = key.get_value("ProxyOverride").unwrap_or_default();
-        // `<local>` means "any hostname without a dot", which ureq's no-proxy
-        // matcher cannot express, so localhost is not bypassed.
-        let no_proxy: Vec<String> = overrides
-            .split(';')
-            .map(str::trim)
-            .filter(|s| !s.is_empty() && *s != "<local>")
-            .map(String::from)
-            .collect();
-
-        let proxy_url = parse_windows_proxy_server(&server, target_scheme(target_url))?;
-        proxy_from_url(&proxy_url, &no_proxy).ok()
-    }
 }
 
 #[cfg(target_os = "macos")]
