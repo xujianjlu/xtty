@@ -2,7 +2,7 @@
 # Usage: stamp-version.sh <version>
 # Rewrite the package version in Cargo.toml. Used by the nightly workflow, where
 # every versioned artifact — the binary's CARGO_PKG_VERSION, asset names, the DMG
-# plist, the Inno installer — reads Cargo.toml, so this one edit covers them all.
+# plist — reads Cargo.toml, so this one edit covers them all.
 # Cargo.lock is left alone: cargo refreshes the root package's own lock entry
 # automatically, without network access.
 #

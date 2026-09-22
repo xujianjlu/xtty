@@ -5,9 +5,9 @@
 # Once a workspace can live on a remote machine, a path held by `ui::` or
 # `terminal::` is not necessarily a path on *this* box, and `std::path`'s
 # fs-backed APIs quietly answer for the wrong machine:
-# `canonicalize` walks the local filesystem, `is_absolute` says `false` for
-# `/home/me` on Windows, `read_dir` lists the client's disk. Everything that may
-# be looking at a workspace path has to go through `ui::host_ops` / the `Host`
+# `canonicalize` walks the local filesystem, `read_dir` lists the client's disk.
+# Everything that may be looking at a workspace path — including one that lives
+# on a remote Linux or macOS host — has to go through `ui::host_ops` / the `Host`
 # trait, which routes to the local disk or the far side as appropriate.
 #
 # This script enforces that. It is deliberately *not* the raw grep from the

@@ -7,8 +7,8 @@ Open tty7 and you get a window with one tab and one shell, and a tab sidebar
 down the left. Everything below is optional — but these are the settings people
 end up changing anyway, so they are worth five minutes now.
 
-Open Settings with <kbd>⌘ ,</kbd> (<kbd>Ctrl ,</kbd> on Windows and Linux), or
-from the command palette (<kbd>⌘ P</kbd> → *Settings*).
+Open Settings with <kbd>⌘ ,</kbd>, or from the command palette
+(<kbd>⌘ P</kbd> → *Settings*).
 
 <Frame caption="Placeholder — screenshot: the Settings window, Appearance section">
   <img src="/images/placeholder.svg" alt="tty7 Settings" />
@@ -25,8 +25,7 @@ tty7 then follows the OS appearance live.
 
 Transparency lives on the same page, under **Transparency** — opacity applies to
 every theme, and *Follow theme* hands the decision back to the theme's own
-setting. On Windows there is also a **Background material** picker (Mica,
-Acrylic, and friends).
+setting. **Blur** softens whatever is behind a translucent window.
 
 [More about themes →](/customization/themes)
 
@@ -107,10 +106,10 @@ whatever is running.
 
 ## Where things live
 
-| | macOS / Linux | Windows |
-|---|---|---|
-| Settings file | `~/.config/tty7/config.json` | `%APPDATA%\tty7\config.json` |
-| Custom themes | `~/.config/tty7/themes/` | `%APPDATA%\tty7\themes\` |
+| | Path |
+|---|---|
+| Settings file | `~/.config/tty7/config.json` |
+| Custom themes | `~/.config/tty7/themes/` |
 
 Everything in the Settings window writes to `config.json`, and you can edit it
 by hand instead — see the [configuration reference](/reference/configuration).

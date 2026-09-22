@@ -47,8 +47,7 @@ Everything the Settings window writes goes to one file:
 
 | | |
 |---|---|
-| macOS / Linux | `~/.config/tty7/config.json` |
-| Windows | `%APPDATA%\tty7\config.json` |
+| macOS | `~/.config/tty7/config.json` |
 
 Set `TTY7_CONFIG_DIR` to point the whole directory — config, themes, state —
 somewhere else.
@@ -69,8 +68,8 @@ The file is written atomically, and read forgivingly:
   copy at `config.json.corrupt`, and says so in the log.
 
 <Note>
-  A UTF-8 BOM at the start of the file is tolerated, which matters if you edited
-  it in a Windows editor.
+  A UTF-8 BOM at the start of the file is tolerated, in case an editor wrote
+  one.
 </Note>
 
 ## Language

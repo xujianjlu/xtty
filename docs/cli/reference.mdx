@@ -34,7 +34,7 @@ Outside a tty7 shell, address-taking verbs fail with
 | `1` | The command failed; one line on stderr, prefixed `tty7:` |
 | `2` | Usage error — unknown verb, missing argument, bad type |
 | `124` | `tty7 wait` timed out (the `timeout(1)` convention) |
-| `141` | Unix only: the reader hung up — piping into `head -1`, say — and SIGPIPE ended it, exactly as it ends `cat`. Not a failure. Windows reports 0 for the same thing, having no signal to imitate. |
+| `141` | The reader hung up — piping into `head -1`, say — and SIGPIPE ended it, exactly as it ends `cat`. Not a failure. |
 | *other* | Only from `tty7 run`, which passes the child's exit code through |
 
 If `run` cannot learn the child's code it prints a note to stderr and exits 1
@@ -156,8 +156,8 @@ decoded as UTF-8 (invalid bytes become U+FFFD). With `--plain`, those bytes
 replayed through a terminal grid and printed as the text they produced.
 
 **How many lines** — all of them by default, the last `N` with `--tail N`, which
-answers "how did the last command end?" without a pipe through `tail(1)` (a
-program Windows does not have). The trim happens last, after `--plain` has
+answers "how did the last command end?" without a pipe through `tail(1)`. The
+trim happens last, after `--plain` has
 decided what a line is: a wrapped line is one line to the grid, so `--plain
 --tail 1` gives you the whole of the last line and not its final row. `N` must
 be at least 1 — a tail of nothing would read as a blank pane. The daemon still
