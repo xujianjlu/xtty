@@ -9514,6 +9514,7 @@ dependencies = [
  "unicode-width",
  "url",
  "uuid",
+ "zmodem2",
 ]
 
 [[package]]
@@ -11489,6 +11490,17 @@ name = "zmij"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
+
+[[package]]
+name = "zmodem2"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f6789cf75638bb3ae07e623298a29ded07019b175e536abd00bbcc1fcbb3a4e0"
+dependencies = [
+ "bitflags 2.13.1",
+ "hex",
+ "thiserror 1.0.69",
+]
 
 [[package]]
 name = "ztracing"
