@@ -19,6 +19,7 @@ pub mod palette;
 pub(crate) mod pane_liveness;
 mod password_trigger;
 mod remote;
+mod zmodem;
 mod reverse_search;
 pub(crate) mod scrollbar;
 pub mod search;

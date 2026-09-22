@@ -99,6 +99,8 @@ struct ReaderSignals {
     /// Live PTY bytes waiting for the UI-side password trigger matcher. Replay
     /// is excluded so reopening a pane cannot resend an old password.
     trigger_output: Arc<Mutex<Vec<u8>>>,
+    /// ZMODEM divert pipe shared with the UI (`terminal::zmodem`).
+    zmodem: Arc<crate::terminal::zmodem::ZmodemPipe>,
     auth: Arc<Mutex<VecDeque<(u64, AuthPromptKind)>>>,
     phase: Arc<Mutex<Option<SshPhase>>>,
     /// Kitty-graphics images the daemon lifted out of the stream (issue #213),
@@ -535,6 +537,7 @@ pub struct RemoteTerminal {
     /// The close confirmation has to name what it is about to end.
     running_command: Arc<Mutex<String>>,
     trigger_output: Arc<Mutex<Vec<u8>>>,
+    zmodem: Arc<crate::terminal::zmodem::ZmodemPipe>,
     auth_prompts: Arc<Mutex<VecDeque<(u64, AuthPromptKind)>>>,
     ssh_phase: Arc<Mutex<Option<SshPhase>>>,
     ssh_endpoint: Option<(String, u16)>,
@@ -583,6 +586,11 @@ impl RemoteTerminal {
             .lock()
             .map(|mut output| std::mem::take(&mut *output))
             .unwrap_or_default()
+    }
+
+    /// Shared ZMODEM divert pipe for this pane.
+    pub(crate) fn zmodem_pipe(&self) -> Arc<crate::terminal::zmodem::ZmodemPipe> {
+        self.zmodem.clone()
     }
 
     pub fn spawn(
@@ -886,6 +894,7 @@ impl RemoteTerminal {
                 shell_vi_mode: self.shell_vi_mode.clone(),
                 running_command: self.running_command.clone(),
                 trigger_output: self.trigger_output.clone(),
+                zmodem: self.zmodem.clone(),
                 auth: self.auth_prompts.clone(),
                 phase: self.ssh_phase.clone(),
                 images: self.images.clone(),
@@ -964,6 +973,7 @@ impl RemoteTerminal {
         let shell_vi_mode = Arc::new(AtomicBool::new(false));
         let running_command: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
         let trigger_output: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+        let zmodem = crate::terminal::zmodem::ZmodemPipe::new();
         let auth_prompts: Arc<Mutex<VecDeque<(u64, AuthPromptKind)>>> =
             Arc::new(Mutex::new(VecDeque::new()));
         let ssh_phase: Arc<Mutex<Option<SshPhase>>> = Arc::new(Mutex::new(None));
@@ -991,6 +1001,7 @@ impl RemoteTerminal {
                 shell_vi_mode: shell_vi_mode.clone(),
                 running_command: running_command.clone(),
                 trigger_output: trigger_output.clone(),
+                zmodem: zmodem.clone(),
                 auth: auth_prompts.clone(),
                 phase: ssh_phase.clone(),
                 images: images.clone(),
@@ -1022,6 +1033,7 @@ impl RemoteTerminal {
             shell_vi_mode,
             running_command,
             trigger_output,
+            zmodem,
             auth_prompts,
             ssh_phase,
             ssh_endpoint: None,
@@ -1102,6 +1114,7 @@ impl RemoteTerminal {
                     shell_vi_mode,
                     running_command,
                     trigger_output,
+                    zmodem,
                     auth,
                     phase,
                     images,
@@ -1319,6 +1332,18 @@ impl RemoteTerminal {
                                 // agent it ran *later* reported for the first
                                 // time, and that report would be discounted.
                                 awaiting_replay = false;
+                                // Peel ZMODEM handshakes out of the VT stream
+                                // so `rz`/`sz` binary frames do not paint as
+                                // garbage — and so the UI can drive the transfer.
+                                let bytes = zmodem.filter_output(&bytes);
+                                if bytes.is_empty() {
+                                    // Still wake the UI so it can poll the pipe.
+                                    if zmodem.is_diverting() {
+                                        flush_batch!();
+                                        proxy.send_event(AlacEvent::Wakeup);
+                                    }
+                                    continue;
+                                }
                                 if let Ok(mut output) = trigger_output.lock() {
                                     // Bound producer memory even if the UI is paused. Keeping the
                                     // newest bytes is sufficient because matching also retains a

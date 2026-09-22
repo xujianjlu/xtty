@@ -100,6 +100,10 @@ plist = "1"
 # code, so pinning it here adds no new native code.
 image = "0.25"
 
+# In-pane ZMODEM for remote `rz`/`sz` (`terminal::zmodem`). Caller-driven
+# state machine; we own the file dialogs and the PTY wire.
+zmodem2 = "0.6"
+
 # HTTP client for the startup update check (`core::update`): one GET to the
 # GitHub releases API to see if a newer version has shipped. `reqwest_client`
 # wraps Zed's `zed-reqwest` fork behind gpui's `http_client` trait (re-exported

@@ -342,6 +342,10 @@ pub struct TerminalView {
     /// detected coding agent is allowed to name the tab while it is active.
     terminal_identity: Option<String>,
     password_trigger: super::password_trigger::PasswordTriggerMatcher,
+    /// Active in-pane ZMODEM transfer (`rz`/`sz`), if any.
+    zmodem: Option<super::zmodem::ZmodemSession>,
+    /// True while the native file picker for an `rz` upload is open.
+    zmodem_picker_open: bool,
     /// A title the pane has been told about but has not adopted yet — see
     /// `set_title_when_settled`. `None` means the tab is showing the newest
     /// title there is.
@@ -1490,6 +1494,8 @@ impl TerminalView {
             title: DEFAULT_TITLE.to_string(),
             terminal_identity: None,
             password_trigger: Default::default(),
+            zmodem: None,
+            zmodem_picker_open: false,
             pending_title: None,
             default_title: DEFAULT_TITLE.to_string(),
             relink_abandoned: false,
@@ -2080,6 +2086,7 @@ impl TerminalView {
         match ev {
             AlacEvent::Wakeup => {
                 self.poll_password_triggers(cx);
+                self.poll_zmodem(cx);
                 // The grid moved under whatever the search bar last measured.
                 self.note_output_under_search(cx);
                 // Only a pane that is on screen repaints on output. The
@@ -2196,6 +2203,149 @@ impl TerminalView {
                 "password trigger '{}' could not read the keychain: {error}",
                 hit.credential
             ),
+        }
+    }
+
+    fn poll_zmodem(&mut self, cx: &mut Context<Self>) {
+        use super::zmodem::{ZmodemRole, ZmodemSession, ZmodemUiAction, cancel_sequence};
+
+        let pipe = self.terminal.zmodem_pipe();
+
+        if let Some(role) = pipe.take_pending_role() {
+            match role {
+                ZmodemRole::Receive => match ZmodemSession::start_receive() {
+                    Ok(mut session) => {
+                        let zrinit = session.take_initial_outgoing();
+                        if !zrinit.is_empty() {
+                            self.terminal.write(zrinit);
+                        }
+                        self.zmodem = Some(session);
+                        self.zmodem_picker_open = false;
+                    }
+                    Err(err) => {
+                        log::warn!("zmodem receive failed to start: {err}");
+                        pipe.end();
+                        self.terminal.write(cancel_sequence());
+                    }
+                },
+                ZmodemRole::Send => {
+                    let initial = pipe.take_inbound();
+                    self.zmodem = Some(ZmodemSession::start_awaiting_picker(initial));
+                    if !self.zmodem_picker_open {
+                        self.zmodem_picker_open = true;
+                        self.open_zmodem_send_picker(cx);
+                    }
+                }
+            }
+        }
+
+        let inbound = pipe.take_inbound();
+        if self.zmodem.is_none() {
+            return;
+        }
+
+        if let Some(session) = self.zmodem.as_mut() {
+            if session.is_awaiting_picker() {
+                if !inbound.is_empty() {
+                    session.buffer_while_awaiting(&inbound);
+                }
+                return;
+            }
+        }
+
+        let Some(session) = self.zmodem.as_mut() else {
+            return;
+        };
+        match session.pump(&inbound) {
+            Ok((wire, action)) => {
+                if !wire.is_empty() {
+                    self.terminal.write(wire);
+                }
+                if let Some(action) = action {
+                    self.finish_zmodem(action, cx);
+                }
+            }
+            Err(err) => {
+                log::warn!("zmodem transfer error: {err}");
+                self.finish_zmodem(
+                    ZmodemUiAction::Failed { detail: err },
+                    cx,
+                );
+            }
+        }
+    }
+
+    fn open_zmodem_send_picker(&mut self, cx: &mut Context<Self>) {
+        let rx = cx.prompt_for_paths(gpui::PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: true,
+            prompt: None,
+        });
+        cx.spawn(async move |this, cx| {
+            let paths = match rx.await {
+                Ok(Ok(Some(paths))) if !paths.is_empty() => paths,
+                _ => {
+                    let _ = this.update(cx, |this, cx| {
+                        this.cancel_zmodem_picker(cx);
+                    });
+                    return;
+                }
+            };
+            let _ = this.update(cx, |this, cx| {
+                this.zmodem_picker_open = false;
+                let Some(session) = this.zmodem.as_mut() else {
+                    return;
+                };
+                match session.begin_send_with_paths(paths) {
+                    Ok(wire) => {
+                        if !wire.is_empty() {
+                            this.terminal.write(wire);
+                        }
+                        // Drain anything that arrived while we started.
+                        this.poll_zmodem(cx);
+                    }
+                    Err(err) => {
+                        log::warn!("zmodem send rejected: {err}");
+                        this.finish_zmodem(
+                            super::zmodem::ZmodemUiAction::Failed { detail: err },
+                            cx,
+                        );
+                    }
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn cancel_zmodem_picker(&mut self, cx: &mut Context<Self>) {
+        self.zmodem_picker_open = false;
+        self.finish_zmodem(
+            super::zmodem::ZmodemUiAction::Failed {
+                detail: "file picker cancelled".into(),
+            },
+            cx,
+        );
+    }
+
+    fn finish_zmodem(&mut self, action: super::zmodem::ZmodemUiAction, cx: &mut Context<Self>) {
+        use super::zmodem::{ZmodemUiAction, cancel_sequence};
+
+        self.zmodem = None;
+        self.zmodem_picker_open = false;
+        let pipe = self.terminal.zmodem_pipe();
+        pipe.end();
+
+        match action {
+            ZmodemUiAction::Done { detail } => {
+                log::info!("zmodem: {detail}");
+                cx.notify();
+            }
+            ZmodemUiAction::Failed { detail } => {
+                log::warn!("zmodem failed: {detail}");
+                self.terminal.write(cancel_sequence());
+                cx.notify();
+            }
         }
     }
 
@@ -2972,6 +3122,19 @@ impl TerminalView {
 
     fn send_to_pty(&mut self, bytes: &[u8], cx: &mut Context<Self>) {
         if self.terminal.exited || !self.accepts_input(cx) {
+            return;
+        }
+        if self.zmodem.is_some() {
+            // During a transfer, only Ctrl-C / CAN aborts; other keystrokes
+            // would corrupt the ZMODEM stream.
+            if bytes == [0x03] || bytes.iter().all(|&b| b == 0x18) {
+                self.finish_zmodem(
+                    super::zmodem::ZmodemUiAction::Failed {
+                        detail: "cancelled".into(),
+                    },
+                    cx,
+                );
+            }
             return;
         }
         self.terminal.write(bytes.to_vec());
