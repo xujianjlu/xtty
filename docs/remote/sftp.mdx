@@ -7,6 +7,12 @@ While a pane is in an SSH session, *SSH: Remote Files* (command palette) slides
 a file panel in over it. It is a real SFTP client on the same connection — no
 second login, no second password.
 
+Profiles that use a configured jump host work the same way: SFTP follows the
+profile's SSH route and key. An `ssh`/jumper command typed manually inside an
+already-open shell is opaque terminal traffic, so the panel cannot discover
+that inner connection; save that destination as an SSH profile with its jump
+host to browse and transfer files through it.
+
 <Frame caption="Placeholder — screenshot: the SFTP panel over a pane, with a transfer in progress">
   <img src="/images/placeholder.svg" alt="The tty7 SFTP panel" />
 </Frame>
