@@ -2267,10 +2267,7 @@ impl TerminalView {
             }
             Err(err) => {
                 log::warn!("zmodem transfer error: {err}");
-                self.finish_zmodem(
-                    ZmodemUiAction::Failed { detail: err },
-                    cx,
-                );
+                self.finish_zmodem(ZmodemUiAction::Failed { detail: err }, cx);
             }
         }
     }

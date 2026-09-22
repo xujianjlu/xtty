@@ -100,6 +100,11 @@ src/ui/code_editor.rs|std::fs::metadata
 # that copy goes through `Host`, and the one `std::fs::copy` that touches a
 # destination sits inside a branch already gated on `host.id().is_local()`.
 src/ui/file_copy.rs|std::fs::
+
+# In-pane ZMODEM stages receives into this machine's ~/Downloads and sends
+# files from the native picker — always client-local. The far side is the
+# rz/sz peer on the PTY, not a workspace path on Host.
+src/terminal/zmodem.rs|std::fs::
 EOF
 )
 
