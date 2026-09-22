@@ -1727,8 +1727,8 @@ impl TerminalView {
     /// which is what lets the tab strip and the switcher name a tab the same
     /// way.
     pub(crate) fn stated_title(&self) -> Option<&str> {
-        let agent_active = self.terminal.foreground_agent().is_some()
-            || self.terminal.agent_session().is_some();
+        let agent_active =
+            self.terminal.foreground_agent().is_some() || self.terminal.agent_session().is_some();
         if agent_active {
             stated_title(&self.title).or(self.terminal_identity.as_deref())
         } else {
@@ -2340,9 +2340,8 @@ impl TerminalView {
         // shell integration. A second ssh/su entered inside a pane cannot emit
         // tty7's OSC prompt marks, but Cmd/Ctrl+R must still open the same
         // history UI there. Full-screen applications keep the shortcut.
-        let history_shortcut = ks.key == "r"
-            && !m.alt
-            && ((m.control && !m.platform) || (m.platform && !m.control));
+        let history_shortcut =
+            ks.key == "r" && !m.alt && ((m.control && !m.platform) || (m.platform && !m.control));
         if history_shortcut
             && cx.global::<Config>().history_search
             && self.accepts_input(cx)
