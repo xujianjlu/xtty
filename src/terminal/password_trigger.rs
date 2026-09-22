@@ -18,11 +18,7 @@ pub(crate) struct PasswordTriggerMatcher {
 }
 
 impl PasswordTriggerMatcher {
-    pub(crate) fn feed(
-        &mut self,
-        bytes: &[u8],
-        rules: &[PasswordTrigger],
-    ) -> Option<TriggerMatch> {
+    pub(crate) fn feed(&mut self, bytes: &[u8], rules: &[PasswordTrigger]) -> Option<TriggerMatch> {
         self.feed_at(bytes, rules, Instant::now())
     }
 
@@ -51,8 +47,7 @@ impl PasswordTriggerMatcher {
             }
 
             let matched = if rule.regex {
-                regex::Regex::new(&rule.pattern)
-                    .is_ok_and(|pattern| pattern.is_match(&visible))
+                regex::Regex::new(&rule.pattern).is_ok_and(|pattern| pattern.is_match(&visible))
             } else {
                 visible.contains(&rule.pattern)
             };
@@ -131,7 +126,10 @@ mod tests {
     #[test]
     fn matches_literal_across_frames_and_ignores_colour() {
         let mut matcher = PasswordTriggerMatcher::default();
-        assert_eq!(matcher.feed(b"\x1b[31mPass", &[rule("Password:", false)]), None);
+        assert_eq!(
+            matcher.feed(b"\x1b[31mPass", &[rule("Password:", false)]),
+            None
+        );
         assert_eq!(
             matcher.feed(b"word:\x1b[0m ", &[rule("Password:", false)]),
             Some(TriggerMatch {
@@ -144,9 +142,14 @@ mod tests {
     #[test]
     fn regex_matches_a_dynamic_sudo_prompt() {
         let mut matcher = PasswordTriggerMatcher::default();
-        assert!(matcher
-            .feed(b"[sudo] password for search: ", &[rule(r"password for [^:]+:", true)])
-            .is_some());
+        assert!(
+            matcher
+                .feed(
+                    b"[sudo] password for search: ",
+                    &[rule(r"password for [^:]+:", true)]
+                )
+                .is_some()
+        );
     }
 
     #[test]
