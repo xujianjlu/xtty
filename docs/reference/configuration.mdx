@@ -114,7 +114,8 @@ their id from the file name. [More about themes →](/customization/themes)
 |---|---|---|---|
 | `prompt_editor` | bool | `true` | tty7 edits the shell prompt. Off sends every key at the prompt to the shell, so its own line editor (ZLE, readline) owns editing. Shell integration stays on. |
 | `tab_completion` | bool | `true` | tty7's completion menu on <kbd>⇥</kbd>. Off hands the key to the shell. Needs `prompt_editor`. |
-| `history_search` | bool | `true` | tty7's fuzzy history on <kbd>⌃ R</kbd>. Off hands the key to the shell. Needs `prompt_editor`. |
+| `history_search` | bool | `true` | tty7's fuzzy history on <kbd>⌃ R</kbd> or <kbd>⌘ R</kbd>. It also works after an inner SSH/jumper/su where shell integration is unavailable. Off hands the key to the shell. |
+| `password_triggers` | array | `[]` | Match terminal output and send a secret held in the OS keychain. Supports literal strings and regular expressions; see below. |
 | `smart_select` | bool | `true` | Double-click grabs URLs, paths, bracket pairs, CJK words. |
 | `word_separators` | string | see below | Characters that end a word. Used when smart selection is off. |
 | `copy_on_select` | bool | `false` | |
@@ -131,6 +132,44 @@ angle brackets, and a tab:
 ```json
 { "word_separators": ",│`|:\"' ()[]{}<>\t" }
 ```
+
+### Password triggers
+
+Rules contain no password. `credential` names an OS-keychain entry in the
+`tty7-password-trigger` service. On macOS, create or replace one without putting
+the secret in shell history:
+
+```bash
+security add-generic-password -U -s tty7-password-trigger -a su-search -w
+```
+
+Then add a literal or regular-expression rule:
+
+```json
+{
+  "password_triggers": [
+    {
+      "name": "su search",
+      "pattern": "Password:",
+      "regex": false,
+      "credential": "su-search",
+      "send_enter": true,
+      "enabled": true,
+      "cooldown_ms": 1500
+    },
+    {
+      "name": "sudo",
+      "pattern": "(?i)password for [^:]+:",
+      "regex": true,
+      "credential": "su-search"
+    }
+  ]
+}
+```
+
+Matching follows live PTY output rather than a command name, works across
+split output frames, and ignores terminal colour/title escape sequences. Old
+scrollback is never replayed into the matcher when a pane is restored.
 
 ## Links
 
