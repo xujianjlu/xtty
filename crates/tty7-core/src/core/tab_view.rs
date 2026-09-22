@@ -120,6 +120,128 @@ fn short_connection_host(host: &str) -> &str {
     host.split('.').next().unwrap_or(host)
 }
 
+/// Identity for an OpenSSH destination (`user@host`, bare `host`, optional
+/// `[ipv6]`). Bare hostnames need `fallback_user` (usually the previous hop's
+/// user, or the local account).
+pub fn identity_from_ssh_target(target: &str, fallback_user: Option<&str>) -> Option<String> {
+    let target = target.trim();
+    if target.is_empty() {
+        return None;
+    }
+    if let Some((user, host)) = target.split_once('@') {
+        return connection_identity(user, host);
+    }
+    let user = fallback_user?;
+    connection_identity(user, target)
+}
+
+/// Rebuild `user@host` when OSC 7 reports a new hostname (nested hop whose
+/// shell integration still sends cwd but whose OSC 0 is path-only).
+pub fn identity_with_host(current: Option<&str>, host: &str) -> Option<String> {
+    let user = current
+        .and_then(|id| id.split_once('@').map(|(u, _)| u))
+        .filter(|u| !u.is_empty())?;
+    connection_identity(user, host)
+}
+
+/// Identity for an interactive `ssh …` command line (OSC 133;C payload).
+/// One-shot `ssh host cmd` and forward-only sessions are ignored.
+pub fn identity_from_ssh_command(cmd: &str, fallback_user: Option<&str>) -> Option<String> {
+    let tokens: Vec<&str> = cmd.split_whitespace().collect();
+    let prog = tokens
+        .first()
+        .and_then(|p| std::path::Path::new(p).file_name().and_then(|n| n.to_str()))?;
+    if prog != "ssh" {
+        return None;
+    }
+    let mut fallback = fallback_user;
+    let mut i = 1usize;
+    let mut destination = None;
+    while i < tokens.len() {
+        let arg = tokens[i];
+        if arg == "--" {
+            i += 1;
+            break;
+        }
+        if !arg.starts_with('-') || arg == "-" {
+            destination = Some(arg);
+            i += 1;
+            break;
+        }
+        if arg == "-W" || arg == "-w" || arg == "-L" || arg == "-R" || arg == "-D" {
+            return None;
+        }
+        if arg == "-N" || arg == "-f" {
+            return None;
+        }
+        if arg == "-l" {
+            i += 1;
+            fallback = tokens.get(i).copied().or(fallback);
+            i += 1;
+            continue;
+        }
+        if let Some(user) = arg.strip_prefix("-l") {
+            if !user.is_empty() {
+                fallback = Some(user);
+            }
+            i += 1;
+            continue;
+        }
+        // Short cluster or long option with a value: advance past the value
+        // when the flag is one that consumes an argument.
+        if arg.len() == 2 {
+            let flag = arg.as_bytes()[1] as char;
+            if ssh_option_takes_value(flag) {
+                i += 2;
+                continue;
+            }
+        }
+        if let Some(short) = arg.strip_prefix('-')
+            && !short.starts_with('-')
+            && short.len() > 1
+        {
+            let flag = short.chars().next()?;
+            if ssh_option_takes_value(flag) && short.len() == 1 {
+                i += 2;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    let destination = destination?;
+    // Anything after the destination is a remote command — not an interactive hop.
+    if i < tokens.len() {
+        return None;
+    }
+    identity_from_ssh_target(destination, fallback)
+}
+
+fn ssh_option_takes_value(flag: char) -> bool {
+    matches!(
+        flag,
+        'B' | 'b'
+            | 'c'
+            | 'D'
+            | 'E'
+            | 'e'
+            | 'F'
+            | 'I'
+            | 'i'
+            | 'J'
+            | 'L'
+            | 'l'
+            | 'm'
+            | 'O'
+            | 'o'
+            | 'p'
+            | 'Q'
+            | 'R'
+            | 'S'
+            | 'W'
+            | 'w'
+    )
+}
+
 /// Cuts the `user@host:` head that a shell integration writes into its title,
 /// leaving the path (or command) it actually names. A title with no such head —
 /// an agent's, which is prose — comes back untouched, and so does a bare
@@ -325,6 +447,37 @@ mod tests {
         );
         assert_eq!(connection_identity("", "host"), None);
         assert_eq!(connection_identity("u", "  "), None);
+    }
+
+    #[test]
+    fn ssh_target_and_osc7_host_rebuild_identity() {
+        assert_eq!(
+            identity_from_ssh_target("xujian6@dev-box", None),
+            Some("xujian6@dev-box".into())
+        );
+        assert_eq!(
+            identity_from_ssh_target("dev-box.corp", Some("xujian6")),
+            Some("xujian6@dev-box".into())
+        );
+        assert_eq!(identity_from_ssh_target("dev-box", None), None);
+        assert_eq!(
+            identity_with_host(Some("alice@jumper"), "dev-box.corp"),
+            Some("alice@dev-box".into())
+        );
+        assert_eq!(identity_with_host(None, "dev-box"), None);
+        assert_eq!(
+            identity_from_ssh_command("ssh xujian6@dev-box", None),
+            Some("xujian6@dev-box".into())
+        );
+        assert_eq!(
+            identity_from_ssh_command("ssh -p 2222 -l alice jumper.corp", Some("bob")),
+            Some("alice@jumper".into())
+        );
+        assert_eq!(
+            identity_from_ssh_command("ssh host uptime", Some("u")),
+            None,
+            "one-shot remote commands are not hops"
+        );
     }
 
     /// The marks come off, whichever alphabet the agent picked.

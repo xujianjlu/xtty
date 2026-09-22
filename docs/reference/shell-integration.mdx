@@ -113,3 +113,8 @@ For a remote workspace or an SSH pane, the same scripts are sent over the
 connection at login, so a remote pane reports its cwd, exit codes, and prompt
 marks exactly like a local one. Turn it off for a particular host under that
 profile's **Advanced → Session**.
+
+Nested `ssh` hops (local → jumper → dev box) do not re-inject integration into
+inner shells. Tab chips still track the *current* machine via the dialled
+identity seed, process-table / OSC 133;C hop detection, OSC 0 `user@host`, and
+OSC 7 host retargeting — they do not fall through to cwd paths.
