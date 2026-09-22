@@ -23,8 +23,9 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::core::config::{
-    BellMode, CURSOR_BLINK_INTERVAL_MS_STEP, Config, CursorStyle, LinkFileOpen, MouseZoomModifier,
-    NewTabPosition, NotifyMode, TabBarPosition, UI_FONT_SIZE_DEFAULT, UpdateChannel,
+    BellMode, CURSOR_BLINK_INTERVAL_SECS_STEP, Config, CursorStyle, LinkFileOpen,
+    MouseZoomModifier, NewTabPosition, NotifyMode, TabBarPosition, UI_FONT_SIZE_DEFAULT,
+    UpdateChannel,
 };
 use crate::core::keychain::{
     CredentialRef, CredentialStore as _, OsCredentialStore, key_account_from_contents,
@@ -2454,7 +2455,7 @@ impl Tty7App {
         let cfg = cx.global::<Config>();
         let cursor_style = cfg.cursor_style;
         let cursor_blink = cfg.cursor_blink;
-        let cursor_blink_interval_ms = cfg.cursor_blink_interval_ms;
+        let cursor_blink_interval_secs = cfg.cursor_blink_interval_secs;
         let font_ligatures = cfg.font_features.as_ref().is_some_and(|features| {
             features.is_calt_enabled() == Some(true)
                 || features
@@ -2611,11 +2612,11 @@ impl Tty7App {
             .into_any_element();
         let blink_interval_control = stepper_row(
             step("cursor-blink-interval-dec", "−", 0).on_click(cx.listener(|this, _, _w, cx| {
-                this.change_cursor_blink_interval(-(CURSOR_BLINK_INTERVAL_MS_STEP as i64), cx)
+                this.change_cursor_blink_interval(-CURSOR_BLINK_INTERVAL_SECS_STEP, cx)
             })),
-            format!("{cursor_blink_interval_ms}"),
+            format!("{cursor_blink_interval_secs:.2}s"),
             step("cursor-blink-interval-inc", "+", 2).on_click(cx.listener(|this, _, _w, cx| {
-                this.change_cursor_blink_interval(CURSOR_BLINK_INTERVAL_MS_STEP as i64, cx)
+                this.change_cursor_blink_interval(CURSOR_BLINK_INTERVAL_SECS_STEP, cx)
             })),
             Button::new("cursor-blink-interval-reset")
                 .label(t(L10nKey::Reset))

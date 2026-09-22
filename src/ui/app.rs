@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use crate::core::actions::*;
 use crate::core::config::{
-    CURSOR_BLINK_INTERVAL_MS_MAX, CURSOR_BLINK_INTERVAL_MS_MIN, Config,
+    CURSOR_BLINK_INTERVAL_SECS_MAX, CURSOR_BLINK_INTERVAL_SECS_MIN, Config,
     CursorStyle as ConfigCursorStyle, MouseZoomModifier, NewTabPosition, RightPanelTab,
     ShellConfig, TabBarPosition,
 };
@@ -1567,16 +1567,12 @@ impl Tty7App {
         // rebuilding the window.
         cx.spawn(async move |this, cx| {
             loop {
-                let Ok(interval_ms) = this.update(cx, |_, cx| {
-                    cx.global::<Config>()
-                        .cursor_blink_interval_ms
-                        .clamp(CURSOR_BLINK_INTERVAL_MS_MIN, CURSOR_BLINK_INTERVAL_MS_MAX)
-                }) else {
+                let Ok(interval) =
+                    this.update(cx, |_, cx| cx.global::<Config>().cursor_blink_interval())
+                else {
                     break;
                 };
-                cx.background_executor()
-                    .timer(std::time::Duration::from_millis(interval_ms))
-                    .await;
+                cx.background_executor().timer(interval).await;
                 if this
                     .update(cx, |this, cx| {
                         if this.tabs.is_empty() {
@@ -3217,24 +3213,27 @@ impl Tty7App {
         }
     }
 
-    pub(crate) fn set_cursor_blink_interval(&mut self, ms: u64, cx: &mut Context<Self>) {
+    pub(crate) fn set_cursor_blink_interval(&mut self, secs: f64, cx: &mut Context<Self>) {
         self.update_config(cx, |cfg| {
-            cfg.cursor_blink_interval_ms =
-                ms.clamp(CURSOR_BLINK_INTERVAL_MS_MIN, CURSOR_BLINK_INTERVAL_MS_MAX)
+            let secs = if secs.is_finite() && secs > 0.0 {
+                secs.clamp(
+                    CURSOR_BLINK_INTERVAL_SECS_MIN,
+                    CURSOR_BLINK_INTERVAL_SECS_MAX,
+                )
+            } else {
+                crate::core::config::CURSOR_BLINK_INTERVAL_SECS_DEFAULT
+            };
+            cfg.cursor_blink_interval_secs = secs;
         });
     }
 
-    pub(crate) fn change_cursor_blink_interval(&mut self, delta: i64, cx: &mut Context<Self>) {
-        let current = cx.global::<Config>().cursor_blink_interval_ms as i64;
-        let next = (current + delta).clamp(
-            CURSOR_BLINK_INTERVAL_MS_MIN as i64,
-            CURSOR_BLINK_INTERVAL_MS_MAX as i64,
-        ) as u64;
-        self.set_cursor_blink_interval(next, cx);
+    pub(crate) fn change_cursor_blink_interval(&mut self, delta: f64, cx: &mut Context<Self>) {
+        let current = cx.global::<Config>().cursor_blink_interval_secs;
+        self.set_cursor_blink_interval(current + delta, cx);
     }
 
     pub(crate) fn reset_cursor_blink_interval(&mut self, cx: &mut Context<Self>) {
-        self.set_cursor_blink_interval(crate::core::config::CURSOR_BLINK_INTERVAL_MS_DEFAULT, cx);
+        self.set_cursor_blink_interval(crate::core::config::CURSOR_BLINK_INTERVAL_SECS_DEFAULT, cx);
     }
 
     pub(crate) fn set_scrollback_limit(&mut self, lines: usize, cx: &mut Context<Self>) {
@@ -10103,9 +10102,7 @@ mod cursor_blink_gpui_tests {
         });
 
         vcx.executor()
-            .advance_clock(std::time::Duration::from_millis(
-                crate::core::config::CURSOR_BLINK_INTERVAL_MS_DEFAULT,
-            ));
+            .advance_clock(crate::core::config::Config::default().cursor_blink_interval());
         vcx.background_executor.run_until_parked();
 
         app.update(&mut vcx, |_, cx| {

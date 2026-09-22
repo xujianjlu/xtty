@@ -122,7 +122,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::SettingsCursorBlinkDesc => "Pulse the cursor while the terminal is focused.",
         L10nKey::SettingsCursorBlinkInterval => "Blink interval",
         L10nKey::SettingsCursorBlinkIntervalDesc => {
-            "Milliseconds between each on/off phase of the cursor (100–2000)."
+            "Seconds between each on/off phase of the cursor (0.1–2). Decimals allowed."
         }
         L10nKey::SettingsLanguage => "Language",
         L10nKey::SettingsLanguageDesc => "Choose the language used for the tty7 interface.",
@@ -784,7 +784,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::SettingsSearchCopyOnSelectKeywords => "clipboard selection yank mouse",
         L10nKey::SettingsSearchCursorBlinkKeywords => "caret blinking flash",
         L10nKey::SettingsSearchCursorBlinkIntervalKeywords => {
-            "caret blink rate speed frequency interval milliseconds ms slow fast"
+            "caret blink rate speed frequency interval seconds sec s slow fast"
         }
         L10nKey::SettingsSearchCursorShapeKeywords => "caret block bar underline beam",
         L10nKey::SettingsSearchCustomThemesKeywords => {
