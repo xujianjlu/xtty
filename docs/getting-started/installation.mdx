@@ -1,0 +1,74 @@
+---
+title: "Installation"
+description: "Native builds for macOS — plus building from source."
+---
+
+Every release publishes native builds on
+[**GitHub Releases**](https://github.com/xujianjlu/tty7/releases). There is no
+runtime to install first: fonts are embedded in the binary.
+
+Download the DMG that matches your Mac and drag **tty7** into Applications.
+
+| Mac | File |
+|---|---|
+| Apple silicon (M1 and later) | `tty7-<version>-macos-arm64.dmg` |
+| Intel | `tty7-<version>-macos-x86_64.dmg` |
+
+Builds are signed with a Developer ID certificate and notarized by Apple, so
+Gatekeeper opens them without a right-click dance.
+
+<Note>
+  Builds are produced on macOS 14 and macOS 15. macOS 14 (Sonoma) or later
+  is the tested range.
+</Note>
+
+## The `tty7` command
+
+Every installer ships the `tty7` CLI beside the app, and the app puts it on your
+PATH the first time it launches. That is what lets a script — or a coding agent
+in some other terminal — open panes and read them back.
+
+It is a symlink into whichever of `/opt/homebrew/bin`, `/usr/local/bin`,
+`~/.local/bin`, `~/bin`, or `~/.cargo/bin` your PATH already covers.
+
+A `tty7` you installed yourself — a `cargo install` build, a package manager's
+copy — is never replaced. To turn the whole thing off, uncheck **Settings →
+Agents → Install the tty7 command on PATH**.
+
+<Tip>
+  Inside a tty7 pane the CLI works regardless of PATH, because panes inherit the
+  app's environment.
+</Tip>
+
+## Updating
+
+tty7 checks for updates every six hours and can update itself: **Settings →
+About → Check now**, then **Update and relaunch**. Releases are downloaded and
+verified in the background so applying one is just a restart.
+
+Pick **Stable** or **Nightly** under **Settings → About → Update channel**. See
+[Updates and channels](/reference/updates) for what each feed publishes and how
+switching behaves.
+
+## Building from source
+
+You need a stable Rust toolchain. The build is a plain `cargo build`; the app
+binary is `tty7-app`.
+
+```bash
+git clone https://github.com/xujianjlu/tty7
+cd tty7
+cargo build --release
+```
+
+<Warning>
+  A source build does not update itself, and it will not replace an installed
+  copy's server. If you run both, see
+  [Troubleshooting](/reference/troubleshooting).
+</Warning>
+
+## Uninstalling
+
+Quit tty7 (use **Quit and Stop Server** from the tray menu so the background
+server stops too), then drag the app to the Trash. Your settings live in
+`~/.config/tty7` and are left alone; delete that folder to remove them.

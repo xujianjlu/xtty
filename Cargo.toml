@@ -1,0 +1,312 @@
+[package]
+name = "tty7"
+version.workspace = true
+edition = "2024"
+description = "A terminal workbench: shells, persistent sessions, SSH, coding agents — GPU-rendered on Zed's gpui, pure Rust"
+repository = "https://github.com/l0ng-ai/tty7"
+license = "Apache-2.0"
+readme = "README.md"
+publish = false
+default-run = "tty7-app"
+
+[[bin]]
+name = "tty7-app"
+path = "src/main.rs"
+
+[[bin]]
+name = "tty7-updater"
+path = "src/bin/tty7-updater.rs"
+required-features = ["updater"]
+
+[dependencies]
+# The framework-free half of tty7: wire protocol, session daemon, PTY, the
+# native SSH engine, and the domain model the headless `tty7-server` shares with
+# this GUI. Everything that does *not* need gpui lives there.
+# `gssapi` is off in tty7-core's defaults (a static musl `tty7-server` cannot
+# link the system krb5 it binds); the GUI, which builds against a real desktop
+# toolchain, turns it on so managed SSH connections keep offering
+# `gssapi-with-mic` exactly as before.
+#
+# `remote-install` is off there for the same shape of reason: it pulls an HTTPS
+# client used only to *download* a `tty7-server` onto a remote machine
+# (decision D5). The server binary is the thing being downloaded, so it can
+# never take that path; the GUI, which is the client that pushes it, can.
+tty7-core = { path = "crates/tty7-core", features = ["gssapi", "remote-install"] }
+
+gpui = { workspace = true }
+gpui_platform = { workspace = true }
+gpui-component = { workspace = true }
+gpui-component-assets = { workspace = true }
+
+anyhow.workspace = true
+log.workspace = true
+# Smart double-click selection patterns (URL/email/path). Already in the tree
+# transitively, so pinning it here adds no new native code.
+regex = "1"
+# Grapheme-cluster boundaries for the sidebar's label elision
+# (`ui::tab_strip`). Cutting a label by `char` tears emoji apart: a ZWJ
+# sequence loses its joiner, `❤️` loses the variation selector that makes it an
+# emoji, and half a flag renders as a bare letter. Already in the tree via
+# gpui, so this pins no new code.
+unicode-segmentation = "1"
+# Column widths for the input bar (`terminal::view`). The bar has to lay text
+# out the way the terminal grid will, and the grid gets its widths from this
+# same crate by way of `alacritty_terminal` — a hand-rolled code-point table
+# drifts from it the moment Unicode adds a block. Already in the tree via
+# `tty7-cli`, so this pins no new code.
+unicode-width = "0.2"
+smol.workspace = true
+smallvec.workspace = true
+serde = { workspace = true }
+serde_json.workspace = true
+tempfile = "3"
+# LaunchServices sends files and custom URL schemes through gpui's unified
+# open-URL callback. `url` keeps the decoding and SSH authority parsing here
+# standards-compliant rather than treating percent escapes as literal paths,
+# and `percent-encoding` — already in the tree under `url` — spells the
+# userinfo and man-page names back out.
+url = "2"
+percent-encoding = "2"
+
+# SSH profile ids in the connection manager UI (`ui::ssh_connect`,
+# `ui::settings`, the command palette). The profiles themselves — and the
+# secret-free `CredentialRef` they carry — live in `tty7-core`, which `Config`
+# needs to parse `config.json` without gpui.
+uuid = { version = "1", features = ["v4", "serde"] }
+
+# The credential vault's storage half (`core::keychain`). `keyring` 4.x's default
+# `v1` feature auto-selects the platform store (macOS Keychain here); no
+# per-platform guards are needed.
+#
+# It sits here rather than in `tty7-core` on purpose: every caller is in `ui::`
+# (`ssh_prompt`, `ssh_connect`, `settings`, `app`), and leaving it downstairs made
+# the headless `tty7-server` — a static binary pushed onto machines that have no
+# keychain at all — link `zbus`/`secret-service` and thirty-odd crates behind them
+# for code it can never reach. Only the secret-free naming half (`CredentialRef`,
+# the account scheme) stays in core, where `config.json` parsing needs it.
+keyring = "4"
+
+# Theme files. tty7 themes are authored as YAML (`~/.config/tty7/themes/*.yaml`,
+# our own schema); `plist` parses imported iTerm2 `.itermcolors` schemes (XML
+# plist) so the large iTerm color-scheme ecosystem drops straight in. serde_yaml
+# is already in the tree transitively, so it pins no new code; plist is pure Rust.
+serde_yaml = "0.9"
+plist = "1"
+
+# Clipboard-image paste (`terminal::view`). When the clipboard holds a screenshot
+# and a coding-agent TUI (Claude Code &co.) is in the pane, the image is staged
+# to a temp file and its path pasted — agents attach an image path the same way
+# they do a drag-drop. `image` is already in the tree via gpui's own clipboard
+# code, so pinning it here adds no new native code.
+image = "0.25"
+
+# HTTP client for the startup update check (`core::update`): one GET to the
+# GitHub releases API to see if a newer version has shipped. `reqwest_client`
+# wraps Zed's `zed-reqwest` fork behind gpui's `http_client` trait (re-exported
+# as `gpui::http_client`) and manages its own tokio runtime. That reqwest+rustls
+# stack is *already* compiled into the tree via `gpui-component-assets`, so this
+# pins no new native code — it only exposes what we're already building. Pinned
+# to gpui's rev so the shared `http_client`/`zed-reqwest` versions stay aligned.
+reqwest_client = { git = "https://github.com/zed-industries/zed", rev = "1d217ee39d381ac101b7cf49d3d22451ac1093fe" }
+
+# See `[workspace.dependencies]`: the pin is shared with tty7-cli, which parses
+# `capture` output through the same grid.
+alacritty_terminal.workspace = true
+
+# Desktop notifications. On macOS only its `set_application` is used — never
+# `show`; see `terminal::remote::macos_notify` for why.
+notify-rust = "4"
+
+# Filesystem watcher for live config reload: watches `config.json` and reloads
+# `Config` + re-applies the theme without a restart. The code panel (file tree /
+# editor, `ui::code`) reuses it to refresh the tree and detect external edits.
+notify = "8"
+
+# System tray / menu bar status item (`ui::tray`). Rasterizes the bundled SVG
+# logo into the tray bitmap at runtime — gpui's own SVG path only yields a
+# tinted alpha mask, not raw RGBA. The gpui and gpui-component forks both pin
+# the same 0.47, so the whole tree shares a single resvg/usvg/tiny-skia stack;
+# default features off drops the text/font machinery our icon SVGs don't use.
+resvg = { version = "0.47", default-features = false }
+
+# The tray icon itself (macOS NSStatusItem via objc2, already in the tree).
+[target.'cfg(target_os = "macos")'.dependencies]
+tray-icon = "0.24"
+# gpui only *reads* the macOS window appearance; it never sets it. We force the
+# app appearance to match the active theme (see `ui::theme::sync_native_appearance`)
+# so the native traffic-light buttons render in the right light/dark style.
+# CFStringTokenizer FFI for dictionary-based CJK word segmentation on
+# double-click (`terminal::smart_select`). Already in the tree transitively.
+core-foundation = "0.10"
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSResponder", "NSAppearance", "NSGraphics", "NSImage"] }
+# NSData feeds the runtime Dock icon for bare (non-bundled) binaries — see
+# `set_dock_icon_for_bare_binary` in main.rs.
+# NSUserNotification is the click-to-reveal notification path — see
+# `terminal::remote::macos_notify` for why it is driven directly.
+objc2-foundation = { version = "0.3", features = ["NSData", "NSString", "NSUserNotification"] }
+
+# The pty-size ioctl in `terminal::generator` is the only libc user left in the
+# GUI (the daemon's own libc calls went to tty7-core), and it is Unix-only — so
+# the dep is Unix-only too. Also used when building against a Unix remote-server
+# host toolchain.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+# gpui's `test-support` unlocks `#[gpui::test]` + `TestAppContext`, the headless
+# App/Window harness the view/event tests run on. Dev-only: the feature merges
+# into test builds and never reaches a release binary.
+[dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }
+
+[lints]
+workspace = true
+
+[features]
+default = []
+# macOS updater extracts with `/usr/bin/ditto`; no optional crate deps.
+updater = []
+
+# ---- Standalone workspace mirroring gpui-component's pins so the git/source
+# ---- caches are shared and versions stay aligned. ----
+[workspace]
+members = ["crates/*"]
+# The root `tty7` package is a member implicitly; naming every crate here is
+# what makes a bare `cargo build` / `cargo test` at the root cover the whole
+# workspace, which is how CI invokes them.
+default-members = [".", "crates/tty7-core", "crates/tty7-server", "crates/tty7-cli"]
+
+[workspace.package]
+edition = "2024"
+# The single version for all three crates — `tty7`, `tty7-core`, `tty7-server`
+# all inherit it with `version.workspace = true`. They ship together and a
+# client talking to a server of a different build has to be able to say so, so
+# they must never drift apart. This is the line a release bump edits (and the
+# one nightly's `awk '/^version = /'` stamps: it is the first such line in the
+# file, since the package entries above are all `version.workspace = true`).
+version = "26.9.2"
+
+[workspace.dependencies]
+# Our fork's `tty7` branch carries the local customizations tty7 relies on:
+# `PopupMenu::with_size`, the 1px hairline menu separator, and the custom-button
+# label color the chrome tiles need. The exact commit is still pinned by
+# Cargo.lock. For co-developing the UI crate, point these back at a sibling
+# checkout: `path = "../gpui-component/crates/{ui,assets}"` — but never commit
+# that, since a path dependency can't resolve on CI.
+#
+# `tree-sitter-languages` compiles the grammars the code editor highlights with.
+gpui-component = { git = "https://github.com/l0ng-ai/gpui-component", branch = "tty7", version = "0.5.2", features = [
+    "tree-sitter-languages",
+] }
+gpui-component-assets = { git = "https://github.com/l0ng-ai/gpui-component", branch = "tty7", version = "0.5.1" }
+
+gpui = { git = "https://github.com/zed-industries/zed", rev = "1d217ee39d381ac101b7cf49d3d22451ac1093fe" }
+# Base features (`font-kit`, `runtime_shaders`) map to the macOS gpui backend.
+gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "1d217ee39d381ac101b7cf49d3d22451ac1093fe", features = ["font-kit", "runtime_shaders"] }
+
+# Our fork of Zed's alacritty_terminal fork: the VT parser + grid
+# (`Term`/`ansi::Processor`). Two packages read it and they must agree, hence
+# this being a workspace pin rather than one each — the GUI (`terminal::remote`)
+# to render the live mirror, and tty7-cli to turn a captured pane back into text
+# (`tty7 capture --plain`). The daemon parses nothing; it is a byte pipe, and its
+# PTY is driven by `portable-pty`.
+#
+# The `tty7` branch is Zed's `fcf32fe` (the rev Zed pins) plus two commits, both
+# still missing from alacritty master as of 852e971:
+#
+# 1. `push_keyboard_mode` capped its stack by removing from `title_stack` instead
+#    of `keyboard_mode_stack` — a copy-paste slip from `push_title` that compiles
+#    because both are `Vec`s. With `kitty_keyboard` on (see
+#    `terminal_config_from_user`) every overflowing push silently drops a saved
+#    title, and once the title stack is empty `Vec::remove(0)` panics — 4097
+#    unpopped `CSI > 1 u` pushes, about 20KB of output, kill the reader thread and
+#    freeze the pane.
+# 2. `input` reserves columns per `char`, so an emoji written as base + U+FE0F
+#    (`❤️`, `🗂️`, `⚠️` — any base whose East Asian Width is Neutral) gets one
+#    column instead of two and shifts the rest of the line left by one. The fork
+#    re-scores the sequence with `UnicodeWidthStr` and widens the cell (issue
+#    #203).
+#
+# Each patch has a guard test in `src/terminal/remote.rs`; drop this fork once
+# both land upstream.
+alacritty_terminal = { git = "https://github.com/l0ng-ai/alacritty", rev = "1276f128fbaa8832cbc66210675cbe8aeb570499" }
+
+anyhow = "1"
+log = "0.4"
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1"
+smallvec = "1"
+smol = "2"
+
+[patch.crates-io]
+# Temporary until upstream russh releases gssapi-with-mic client auth support
+# (https://github.com/Eugeny/russh/pull/737) — remove this patch and take the
+# crates.io release once it lands. Pinned to an exact rev (never a branch):
+# russh is the SSH protocol layer handling user credentials, and a moving
+# branch on a third-party fork could change what `cargo update` builds.
+russh = { git = "https://github.com/ayamir/russh", rev = "0d1d073350ed823069252075cbf3db9672d5b490" }
+
+[workspace.lints.clippy]
+dbg_macro = "deny"
+todo = "deny"
+type_complexity = "allow"
+
+[profile.dev]
+codegen-units = 16
+debug = "limited"
+split-debuginfo = "unpacked"
+
+[profile.dev.package]
+resvg = { opt-level = 3 }
+rustybuzz = { opt-level = 3 }
+taffy = { opt-level = 3 }
+ttf-parser = { opt-level = 3 }
+smol = { opt-level = 3 }
+gpui = { opt-level = 3 }
+gpui_platform = { opt-level = 3 }
+gpui_macros = { opt-level = 3 }
+# The VT parser + grid run on every PTY byte; at opt-level 0 a `cat bigfile`
+# crawls under `cargo dev`.
+alacritty_terminal = { opt-level = 3 }
+
+# The render/parse hot path crosses the tty7 ↔ alacritty_terminal ↔ gpui crate
+# boundaries, so cross-crate inlining (thin LTO, like Zed ships) buys real
+# throughput there; single codegen unit for the same reason.
+[profile.release]
+lto = "thin"
+codegen-units = 1
+
+# ---- gpui fork ------------------------------------------------------------
+# Our `tty7` branch (cut from the pinned upstream rev) carries:
+#
+# 1. `prefers_ime_for_printable_keys` takes the keystroke, so an input handler can
+#    answer per key instead of per view. tty7 needs it for Option-as-Meta — macOS
+#    routes ⌥-chords to the IME whenever a CJK input source is active, and without
+#    the keystroke there is no way to decline just those chords (see
+#    `terminal::input::prefers_ime_for_printable_keys`, issue #177).
+#
+# 2. resvg/usvg bumped 0.45 → 0.47 so gpui's SVG stack unifies with the resvg
+#    tty7 pins directly above (follow-up to the #227 dependabot bump).
+#
+# 3. `ListState::with_size_hint`. A list counts an item it has not laid out yet
+#    as zero tall, so a long document reports itself as about one viewport and
+#    a scrollbar reading that height drags one viewport and stops — the diff
+#    overlay scrolls a whole working tree through one of these. The hint counts
+#    the unmeasured items at an estimate instead, which `measure_all` would
+#    settle exactly at the price of laying out the whole document on the first
+#    frame (see `ui::diff_overlay::DIFF_LINE_H`).
+#
+# Patching by source rather than editing the `gpui`/`gpui_platform` pins above is
+# deliberate: `gpui-component` declares its own `gpui` from the upstream URL, and
+# a plain pin swap would put two incompatible copies of gpui in the tree. `[patch]`
+# rewrites the source for every dependent at once, so the fork's sibling crates
+# (`gpui_macos`, `gpui_web`, …) come along through their in-repo path deps.
+#
+# When bumping the upstream rev: rebase the fork's `tty7` branch onto the new rev,
+# push, then update the `rev` pins above — the branch here follows automatically.
+[patch."https://github.com/zed-industries/zed"]
+gpui = { git = "https://github.com/l0ng-ai/zed", branch = "tty7" }
+gpui_platform = { git = "https://github.com/l0ng-ai/zed", branch = "tty7" }
+gpui_macros = { git = "https://github.com/l0ng-ai/zed", branch = "tty7" }
+gpui_web = { git = "https://github.com/l0ng-ai/zed", branch = "tty7" }
+reqwest_client = { git = "https://github.com/l0ng-ai/zed", branch = "tty7" }

@@ -1,0 +1,2453 @@
+use anyhow::{Context as _, Result};
+use gpui::http_client::{AsyncBody, HttpClient as _, HttpRequestExt as _, RedirectPolicy};
+use gpui::{AnyWindowHandle, App, AsyncApp, Global, PromptLevel, Window, http_client};
+use reqwest_client::ReqwestClient;
+use smol::future::FutureExt as _;
+use smol::io::AsyncReadExt as _;
+use std::ops::ControlFlow;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::time::Duration;
+use tty7_core::daemon::install::AssetFetcher as _;
+
+use crate::core::config::{Config, UpdateChannel};
+use crate::ui::i18n::{L10nKey, t, t_fmt};
+
+const REPO: &str = "l0ng-ai/tty7";
+
+/// The rolling prerelease the Nightly channel follows. Force-moved to a new
+/// commit every night, which is exactly why it cannot double as a version.
+const NIGHTLY_TAG: &str = "nightly";
+
+/// Published beside the nightly packages so the version is stated rather than
+/// inferred. See `resolve_version`.
+const NIGHTLY_MANIFEST: &str = "nightly.json";
+
+pub const RELEASES_URL: &str = "https://github.com/l0ng-ai/tty7/releases/latest";
+
+/// The nightly release's own page. Unlike Stable's, this URL is stable across
+/// nights — the tag stays put even as the commit under it moves. Spelled out
+/// rather than built from `NIGHTLY_TAG`, which `concat!` cannot take; the tail
+/// is asserted against it in `each_channel_reads_its_own_feed` instead.
+pub const NIGHTLY_RELEASE_URL: &str = "https://github.com/l0ng-ai/tty7/releases/tag/nightly";
+
+const CHECK_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// A terminal workbench is left open for weeks, so a launch-only check reaches
+/// only the people who restart anyway — the ones who would have found the
+/// update themselves.
+const RECHECK_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
+
+/// How long "Later" silences one version for. It has to be a real delay rather
+/// than the old behaviour (prompted once, then silent forever), or declining an
+/// update once removes it from the user's world permanently.
+const REMIND_LATER: Duration = Duration::from_secs(3 * 24 * 60 * 60);
+
+/// Staging directories older than this belong to a run that died before its
+/// updater could clean up — a download the user cancelled by quitting, or a
+/// crash. On macOS they sit in /Applications, so nobody finds them by accident.
+const STAGE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// Set by `cancel_download`, read by the transfer's progress callback. One
+/// download runs at a time (`spawn_download` refuses to start a second), so a
+/// single flag is the whole mechanism.
+static DOWNLOAD_CANCELLED: AtomicBool = AtomicBool::new(false);
+
+/// Bumped by `switch_channel`. A download carries the value it started under,
+/// so a package prepared for the feed the user just left is thrown away instead
+/// of being staged. `DOWNLOAD_CANCELLED` handles the common case — a transfer
+/// still reading bytes — but stops being observed once the download is through
+/// and the work moves on to hashing and unpacking, and that tail is exactly
+/// long enough for a switch to land inside it.
+static CHANNEL_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+/// Whether the user has asked to install as soon as the package is ready. Set
+/// by pressing the install button while a background download is still going,
+/// which is the common case now that checking starts one on its own.
+static INSTALL_WHEN_READY: AtomicBool = AtomicBool::new(false);
+
+/// Whether the staged package should be applied by the next launch without
+/// asking again.
+static APPLY_ON_LAUNCH: AtomicBool = AtomicBool::new(false);
+
+/// Byte counters the download thread publishes and the UI samples. Cheaper and
+/// less fussy than a channel for something the user reads a few times a second.
+static DOWNLOAD_RECEIVED: AtomicU64 = AtomicU64::new(0);
+/// Zero when the server sent no usable `content-length`.
+static DOWNLOAD_TOTAL: AtomicU64 = AtomicU64::new(0);
+/// Set once the bytes are in and the hashing, unpacking and signature checks
+/// start. That work has no progress to report, and a percentage frozen at 100
+/// is indistinguishable from a hang.
+static DOWNLOAD_VERIFYING: AtomicBool = AtomicBool::new(false);
+
+const PROGRESS_TICK: Duration = Duration::from_millis(120);
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AvailableUpdate {
+    pub version: String,
+    pub installable: bool,
+    pub install_hint: Option<UpdateInstallHint>,
+    asset: Option<ReleaseAsset>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum UpdateInstallHint {
+    UnsupportedMacos,
+    MissingPackage(String),
+    MissingChecksums,
+}
+
+impl UpdateInstallHint {
+    /// The reason in plain English, pinned by tests. Anything a user reads
+    /// goes through `localized_update_install_hint` instead (#602).
+    #[cfg_attr(not(test), allow(dead_code))]
+    fn english(&self) -> String {
+        match self {
+            Self::UnsupportedMacos => "This copy is not running from a writable tty7.app bundle, so replacing it would be unsafe. Move tty7 to Applications or another writable folder, or open the release page to install the update.".to_string(),
+            Self::MissingPackage(name) => format!(
+                "The release has no {name} package for this installation. Open the release page to choose another package."
+            ),
+            Self::MissingChecksums => "The release has no checksums.txt, so tty7 refuses to install it automatically.".to_string(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum UpdatePhase {
+    #[default]
+    Idle,
+    Checking,
+    UpToDate,
+    Downloading {
+        received: u64,
+        total: Option<u64>,
+    },
+    /// Hashing the package and running the updater's pre-flight checks. Split
+    /// out from `Downloading` because it is the part with no progress to show,
+    /// and a percentage frozen at 100 reads as a hang.
+    Verifying,
+    Installing,
+    Failed(UpdateFailure),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum UpdateFailure {
+    Check(String),
+    Prepare(String),
+    Launch(String),
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct UpdateStatus {
+    pub available: Option<AvailableUpdate>,
+    pub phase: UpdatePhase,
+    /// A package that is downloaded, verified and waiting. Mirrors what is on
+    /// disk in `update.json` so the UI can offer "install now" without knowing
+    /// where the staging directory is.
+    pub ready: Option<PendingUpdate>,
+    /// The last failure, carried across restarts. A failure that evaporates
+    /// when the app closes is one the user can neither act on nor report.
+    pub failure: Option<FailureRecord>,
+}
+
+impl Global for UpdateStatus {}
+
+pub fn spawn_check(cx: &mut App) {
+    let finished_backups: Vec<PathBuf> = Vec::new();
+    // Before the config gate: a package staged by an earlier run, or a failure
+    // from one, has to reach Settings whether or not checking is still on.
+    hydrate_from_disk(cx);
+    // Off the startup path: this can remove a 30 MB directory, and nothing
+    // waits on the result.
+    let keep = UpdateState::load().pending.map(|pending| pending.stage);
+    cx.background_executor()
+        .spawn(async move {
+            for backup in finished_backups {
+                log::info!(
+                    "removing a completed update's leftover backup at {}",
+                    backup.display()
+                );
+                let _ = std::fs::remove_dir_all(&backup);
+            }
+            sweep_orphaned_stages(keep)
+        })
+        .detach();
+    if !cx.global::<Config>().check_for_updates {
+        return;
+    }
+    spawn_check_inner(false, cx);
+    spawn_recheck_loop(cx);
+}
+
+pub fn spawn_check_forced(cx: &mut App) {
+    spawn_check_inner(true, cx);
+}
+
+/// Republishes what the last run left on disk. Without this the UI opens
+/// claiming nothing is happening while a verified package sits in staging.
+fn hydrate_from_disk(cx: &mut App) {
+    let mut state = UpdateState::load();
+    // A package for a version we are already running is finished business —
+    // most often because it is the very update that just installed itself.
+    if let Some(pending) = &state.pending
+        && (!pending.is_usable() || !is_update_available(&pending.version, current_version()))
+    {
+        let stage = pending.stage.clone();
+        state.pending = None;
+        state.save();
+        let _ = std::fs::remove_dir_all(stage);
+    }
+    let (ready, failure) = (state.pending.clone(), state.last_failure.clone());
+    update_status(cx, |status| {
+        status.ready = ready;
+        status.failure = failure;
+    });
+}
+
+fn spawn_recheck_loop(cx: &mut App) {
+    // No exit condition: the task is dropped with the executor when the app
+    // shuts down, and the config is re-read each time so switching checking off
+    // takes effect without tearing the loop down.
+    cx.spawn(async move |cx| {
+        loop {
+            cx.background_executor().timer(RECHECK_INTERVAL).await;
+            cx.update(|cx| {
+                if cx.global::<Config>().check_for_updates {
+                    spawn_check_inner(false, cx);
+                }
+            });
+        }
+    })
+    .detach();
+}
+
+fn spawn_check_inner(report_failure: bool, cx: &mut App) {
+    if is_busy(cx) {
+        return;
+    }
+    update_status(cx, |status| status.phase = UpdatePhase::Checking);
+
+    let manual_proxy = cx.global::<Config>().http_proxy.clone();
+    let auto_download = cx.global::<Config>().auto_download_updates;
+    let channel = cx.global::<Config>().update_channel;
+
+    cx.spawn(async move |cx| {
+        let current = current_version();
+        let (release, version) = match fetch_latest_release(channel, manual_proxy)
+            .or(async {
+                cx.background_executor().timer(CHECK_TIMEOUT).await;
+                Err(anyhow::anyhow!("timed out after {CHECK_TIMEOUT:?}"))
+            })
+            .await
+        {
+            Ok(v) => v,
+            Err(e) => {
+                log::debug!("update check skipped: {e:#}");
+                let detail = format!("{e:#}");
+                cx.update(|cx| {
+                    update_status(cx, |status| {
+                        status.phase = if report_failure {
+                            UpdatePhase::Failed(UpdateFailure::Check(detail))
+                        } else {
+                            UpdatePhase::Idle
+                        };
+                    })
+                });
+                return;
+            }
+        };
+
+        if !is_update_available(&version, current) {
+            log::debug!("update check: up to date ({channel:?} {version}, running {current})");
+            cx.update(|cx| {
+                update_status(cx, |status| {
+                    status.available = None;
+                    status.phase = UpdatePhase::UpToDate;
+                })
+            });
+            return;
+        }
+
+        let selection = select_release_asset(&version, &release.assets);
+        let available = AvailableUpdate {
+            version: version.clone(),
+            installable: selection.asset.is_some(),
+            install_hint: selection.reason,
+            asset: selection.asset,
+        };
+        log::info!("update available: {version} (running {current})");
+
+        cx.update(|cx| {
+            update_status(cx, |status| {
+                status.available = Some(available.clone());
+                status.phase = UpdatePhase::Idle;
+            })
+        });
+
+        let state = UpdateState::load();
+        // Fetch while the prompt is up rather than after it: the answer people
+        // give depends on how long the work sounds, and by the time they have
+        // read the dialog the package is usually already there.
+        let staged = state.pending.as_ref().is_some_and(|p| p.version == version);
+        if auto_download && available.installable && !staged {
+            // Fetching ahead is not consent to install. Cleared explicitly
+            // because the flag outlives one download: a package armed by an
+            // earlier "Install on Next Launch" must not arm this one too.
+            APPLY_ON_LAUNCH.store(false, Ordering::Relaxed);
+            cx.update(|cx| spawn_download(available.clone(), cx));
+        }
+
+        if !should_prompt(&state, &version) {
+            return;
+        }
+        let Some(window) = wait_for_window(cx).await else {
+            return;
+        };
+        let shown = cx.update(|cx| {
+            window
+                .update(cx, |_root, window, cx| {
+                    prompt_update(&available, window, cx)
+                })
+                .is_ok()
+        });
+        if shown {
+            let mut state = UpdateState::load();
+            state.last_prompted = Some(version);
+            state.remind_after = None;
+            state.save();
+        }
+    })
+    .detach();
+}
+
+/// Whether this version has earned another interruption.
+///
+/// The rule this replaces was "prompted once, never again", which meant a
+/// failed install — or a mis-click — retired the version permanently and left
+/// Settings as the only place it still existed.
+fn should_prompt(state: &UpdateState, version: &str) -> bool {
+    if state.last_prompted.as_deref() != Some(version) {
+        return true;
+    }
+    // Same version we already asked about: only once "Later" has expired.
+    state.remind_after.is_some_and(|due| now_secs() >= due)
+}
+
+fn is_busy(cx: &App) -> bool {
+    cx.try_global::<UpdateStatus>().is_some_and(|status| {
+        matches!(
+            status.phase,
+            UpdatePhase::Checking
+                | UpdatePhase::Downloading { .. }
+                | UpdatePhase::Verifying
+                | UpdatePhase::Installing
+        )
+    })
+}
+
+fn current_version() -> &'static str {
+    env!("CARGO_PKG_VERSION")
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs())
+        .unwrap_or(0)
+}
+
+fn update_status(cx: &mut App, edit: impl FnOnce(&mut UpdateStatus)) {
+    let mut status = cx.try_global::<UpdateStatus>().cloned().unwrap_or_default();
+    edit(&mut status);
+    cx.set_global(status);
+    cx.refresh_windows();
+}
+
+async fn wait_for_window(cx: &mut AsyncApp) -> Option<AnyWindowHandle> {
+    for _ in 0..50 {
+        if let Some(handle) = cx.update(|cx| cx.windows().first().copied()) {
+            return Some(handle);
+        }
+        cx.background_executor()
+            .timer(Duration::from_millis(100))
+            .await;
+    }
+    None
+}
+
+fn prompt_update(update: &AvailableUpdate, window: &mut Window, cx: &mut App) {
+    let hint = update
+        .install_hint
+        .as_ref()
+        .map(localized_update_install_hint);
+    let detail = if update.installable {
+        // Windows cannot replace a running daemon's image, so its install path
+        // stops the background service — the promise that panes survive is
+        // only true where the daemon really does keep running (macOS).
+        let detail_key = L10nKey::UpdateDialogDetail;
+        let base = t_fmt(
+            detail_key,
+            &[
+                ("version", update.version.as_str()),
+                ("current", current_version()),
+            ],
+        );
+        match hint.as_deref() {
+            Some(note) => format!("{base} {note}"),
+            None => base,
+        }
+    } else {
+        t_fmt(
+            L10nKey::UpdateDialogDetailManual,
+            &[
+                ("version", update.version.as_str()),
+                ("current", current_version()),
+                (
+                    "hint",
+                    hint.as_deref()
+                        .unwrap_or_else(|| t(L10nKey::UpdateDialogCannotSelfUpdate)),
+                ),
+            ],
+        )
+    };
+    // "Later" is the cancel answer: it takes Escape, and a closed window or a
+    // dropped channel falls through to it too, so the outcome nobody chose is
+    // always the one that changes nothing. Skipping a version is a decision
+    // people should have to reach for — it lives in Settings, not one stray
+    // keystroke away.
+    let buttons: Vec<gpui::PromptButton> = if update.installable {
+        let mut buttons = vec![gpui::PromptButton::ok(t(
+            L10nKey::SettingsUpdateAndRelaunch,
+        ))];
+        buttons.push(gpui::PromptButton::ok(t(L10nKey::UpdateDialogNextLaunch)));
+        buttons.push(gpui::PromptButton::cancel(t(L10nKey::UpdateDialogLater)));
+        buttons
+    } else {
+        vec![
+            gpui::PromptButton::ok(t(L10nKey::SettingsUpdateViewRelease)),
+            gpui::PromptButton::cancel(t(L10nKey::UpdateDialogLater)),
+        ]
+    };
+    let answer = window.prompt(
+        PromptLevel::Info,
+        t(L10nKey::UpdateDialogTitle),
+        Some(&detail),
+        &buttons,
+        cx,
+    );
+    let update = update.clone();
+    cx.spawn(async move |cx| {
+        let installable = update.installable;
+        let offered_next_launch = installable;
+        match answer.await {
+            Ok(0) if installable => {
+                cx.update(install_available);
+            }
+            Ok(0) => open_releases_page(),
+            Ok(1) if offered_next_launch => {
+                cx.update(|cx| stage_for_next_launch(update, cx));
+            }
+            // "Later" — index 1 or 2 depending on the shape — plus a dropped
+            // channel and a closed window. All of them change nothing.
+            _ => remind_later(),
+        }
+    })
+    .detach();
+}
+
+/// Pushes this version's next prompt out by `REMIND_LATER` instead of retiring
+/// it. Any background download already under way is left alone: the package
+/// being ready costs nothing and turns the next prompt into one keystroke.
+fn remind_later() {
+    let mut state = UpdateState::load();
+    state.remind_after = Some(now_secs() + REMIND_LATER.as_secs());
+    state.save();
+}
+
+/// Drops everything the previous channel produced, then checks the new feed.
+///
+/// A staged package and a deferred prompt are both answers to a question the
+/// old feed asked; neither carries over. The staged package especially — one
+/// armed for the next launch would otherwise install a Stable build onto
+/// someone who just moved to Nightly.
+///
+/// "Everything" includes a download still in flight, which is the likely one:
+/// checking starts a background transfer on its own, so the seconds spent
+/// finding this setting are seconds that transfer is running. Cancelling stops
+/// it where it can be stopped, and the generation bump covers the rest.
+///
+/// Nightly to Stable deliberately does *not* downgrade. The nightly in hand
+/// keeps running until a stable release supersedes it, which is already how
+/// `parse_version` orders a release above the prerelease sharing its core
+/// version. Rolling back to an older build to honour the switch immediately
+/// would be a bigger surprise than arriving there one release later.
+pub fn switch_channel(cx: &mut App) {
+    CHANNEL_GENERATION.fetch_add(1, Ordering::Relaxed);
+    cancel_download(cx);
+    discard_pending(cx);
+    let mut state = UpdateState::load();
+    state.last_prompted = None;
+    state.remind_after = None;
+    state.last_failure = None;
+    state.save();
+    update_status(cx, |status| {
+        status.available = None;
+        status.failure = None;
+        status.phase = UpdatePhase::Idle;
+    });
+    spawn_check_forced(cx);
+}
+
+/// Abandons the transfer. The staging directory is removed by the download
+/// thread as it unwinds, so nothing is left to collect.
+pub fn cancel_download(cx: &mut App) {
+    DOWNLOAD_CANCELLED.store(true, Ordering::Relaxed);
+    INSTALL_WHEN_READY.store(false, Ordering::Relaxed);
+    APPLY_ON_LAUNCH.store(false, Ordering::Relaxed);
+    update_status(cx, |status| status.phase = UpdatePhase::Idle);
+}
+
+/// Install as soon as there is something to install: now if the package is
+/// already staged, otherwise when the download in flight finishes.
+pub fn install_available(cx: &mut App) {
+    let status = cx.try_global::<UpdateStatus>().cloned().unwrap_or_default();
+    if let Some(pending) = status.ready.clone()
+        && pending.is_usable()
+        && is_update_available(&pending.version, current_version())
+    {
+        launch_pending(pending, cx);
+        return;
+    }
+    let Some(update) = status.available.clone() else {
+        return;
+    };
+    if !update.installable {
+        open_releases_page();
+        return;
+    }
+    INSTALL_WHEN_READY.store(true, Ordering::Relaxed);
+    // Asking to install now overrides an earlier "at next launch": whatever
+    // lands is being handed straight to the updater.
+    APPLY_ON_LAUNCH.store(false, Ordering::Relaxed);
+    // A check with auto-download on has usually started one already; joining it
+    // beats running a second copy of the same transfer.
+    if !matches!(
+        status.phase,
+        UpdatePhase::Downloading { .. } | UpdatePhase::Verifying
+    ) {
+        spawn_download(update, cx);
+    }
+}
+
+/// Have the package waiting, and let the next launch apply it unattended. This
+/// is the option that costs the user nothing: no interrupted work now, and no
+/// decision to make later either.
+pub fn stage_for_next_launch(update: AvailableUpdate, cx: &mut App) {
+    APPLY_ON_LAUNCH.store(true, Ordering::Relaxed);
+    // Overrides a pending "install as soon as it lands": choosing next launch
+    // is choosing not to be restarted now.
+    INSTALL_WHEN_READY.store(false, Ordering::Relaxed);
+    let status = cx.try_global::<UpdateStatus>().cloned().unwrap_or_default();
+    if let Some(pending) = status
+        .ready
+        .clone()
+        .filter(|pending| pending.version == update.version && pending.is_usable())
+    {
+        arm_pending(pending, cx);
+        return;
+    }
+    if !matches!(
+        status.phase,
+        UpdatePhase::Downloading { .. } | UpdatePhase::Verifying
+    ) {
+        spawn_download(update, cx);
+    }
+}
+
+/// Marks an already-staged package for unattended install at next launch.
+fn arm_pending(mut pending: PendingUpdate, cx: &mut App) {
+    pending.apply_on_launch = true;
+    let mut state = UpdateState::load();
+    state.pending = Some(pending.clone());
+    state.save();
+    update_status(cx, |status| status.ready = Some(pending));
+}
+
+/// Throws away a staged package and its staging directory.
+pub fn discard_pending(cx: &mut App) {
+    let mut state = UpdateState::load();
+    if let Some(pending) = state.pending.take() {
+        let _ = std::fs::remove_dir_all(&pending.stage);
+    }
+    state.save();
+    update_status(cx, |status| status.ready = None);
+}
+
+/// Clears the recorded failure once the user has seen it.
+pub fn dismiss_failure(cx: &mut App) {
+    let mut state = UpdateState::load();
+    state.last_failure = None;
+    state.save();
+    update_status(cx, |status| {
+        status.failure = None;
+        if matches!(status.phase, UpdatePhase::Failed(_)) {
+            status.phase = UpdatePhase::Idle;
+        }
+    });
+}
+
+fn spawn_download(update: AvailableUpdate, cx: &mut App) {
+    if matches!(
+        cx.try_global::<UpdateStatus>().map(|status| &status.phase),
+        Some(UpdatePhase::Downloading { .. } | UpdatePhase::Verifying | UpdatePhase::Installing)
+    ) {
+        return;
+    }
+    let Some(asset) = update.asset.clone() else {
+        open_releases_page();
+        return;
+    };
+
+    DOWNLOAD_CANCELLED.store(false, Ordering::Relaxed);
+    DOWNLOAD_VERIFYING.store(false, Ordering::Relaxed);
+    DOWNLOAD_RECEIVED.store(0, Ordering::Relaxed);
+    DOWNLOAD_TOTAL.store(0, Ordering::Relaxed);
+    update_status(cx, |status| {
+        status.available = Some(update.clone());
+        status.failure = None;
+        status.phase = UpdatePhase::Downloading {
+            received: 0,
+            total: None,
+        };
+    });
+    spawn_progress_pump(cx);
+
+    let generation = CHANNEL_GENERATION.load(Ordering::Relaxed);
+    let version = update.version.clone();
+    let task = cx.background_executor().spawn(smol::unblock(move || {
+        prepare_update(&version, &asset, &|received, total| {
+            DOWNLOAD_RECEIVED.store(received, Ordering::Relaxed);
+            DOWNLOAD_TOTAL.store(total.unwrap_or(0), Ordering::Relaxed);
+            if DOWNLOAD_CANCELLED.load(Ordering::Relaxed) {
+                ControlFlow::Break(())
+            } else {
+                ControlFlow::Continue(())
+            }
+        })
+    }));
+
+    cx.spawn(async move |cx| {
+        let prepared = match task.await {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                // Both flags are consent to *this* attempt. Leaving either set
+                // would hand the next background download — one the user never
+                // asked for — a licence to restart the app under them.
+                INSTALL_WHEN_READY.store(false, Ordering::Relaxed);
+                APPLY_ON_LAUNCH.store(false, Ordering::Relaxed);
+                if DOWNLOAD_CANCELLED.load(Ordering::Relaxed) {
+                    log::info!("update download cancelled");
+                    // Only if nothing has claimed the phase since. A channel
+                    // switch cancels this download and starts a check in the
+                    // same breath, and the check is already the live work by
+                    // the time the transfer notices it was called off.
+                    cx.update(|cx| {
+                        update_status(cx, |status| {
+                            if matches!(
+                                status.phase,
+                                UpdatePhase::Downloading { .. } | UpdatePhase::Verifying
+                            ) {
+                                status.phase = UpdatePhase::Idle;
+                            }
+                        })
+                    });
+                    return;
+                }
+                let detail = format!("{error:#}");
+                log::error!("update failed: {detail}");
+                cx.update(|cx| {
+                    record_failure(&update.version, &detail, cx);
+                    update_status(cx, |status| {
+                        status.phase = UpdatePhase::Failed(UpdateFailure::Prepare(detail));
+                    });
+                });
+                return;
+            }
+        };
+
+        let pending = prepared.into_pending(
+            update.version.clone(),
+            APPLY_ON_LAUNCH.load(Ordering::Relaxed),
+        );
+        // The feed moved under this download. Staging it anyway would hand a
+        // Nightly user the Stable package they were mid-way through fetching
+        // when they left — and if they had pressed install, relaunch them into
+        // it. Both flags were consent to a version from the old channel.
+        if CHANNEL_GENERATION.load(Ordering::Relaxed) != generation {
+            log::info!(
+                "discarding {}: the update channel changed while it was being prepared",
+                update.version
+            );
+            INSTALL_WHEN_READY.store(false, Ordering::Relaxed);
+            APPLY_ON_LAUNCH.store(false, Ordering::Relaxed);
+            let _ = std::fs::remove_dir_all(&pending.stage);
+            return;
+        }
+        let mut state = UpdateState::load();
+        state.pending = Some(pending.clone());
+        state.last_failure = None;
+        state.save();
+        cx.update(|cx| {
+            update_status(cx, |status| {
+                status.ready = Some(pending.clone());
+                status.failure = None;
+                status.phase = UpdatePhase::Idle;
+            });
+            if INSTALL_WHEN_READY.swap(false, Ordering::Relaxed) {
+                launch_pending(pending, cx);
+            }
+        });
+    })
+    .detach();
+}
+
+/// Samples the download counters into the global the UI renders from. Stops as
+/// soon as the phase leaves the transfer, so a finished, cancelled or failed
+/// download does not leave a timer running.
+fn spawn_progress_pump(cx: &mut App) {
+    cx.spawn(async move |cx| {
+        loop {
+            cx.background_executor().timer(PROGRESS_TICK).await;
+            let live = cx.update(|cx| {
+                let received = DOWNLOAD_RECEIVED.load(Ordering::Relaxed);
+                let total = DOWNLOAD_TOTAL.load(Ordering::Relaxed);
+                let verifying = DOWNLOAD_VERIFYING.load(Ordering::Relaxed);
+                let mut live = false;
+                update_status(cx, |status| {
+                    if matches!(
+                        status.phase,
+                        UpdatePhase::Downloading { .. } | UpdatePhase::Verifying
+                    ) {
+                        status.phase = if verifying {
+                            UpdatePhase::Verifying
+                        } else {
+                            UpdatePhase::Downloading {
+                                received,
+                                total: (total > 0).then_some(total),
+                            }
+                        };
+                        live = true;
+                    }
+                });
+                live
+            });
+            if !live {
+                return;
+            }
+        }
+    })
+    .detach();
+}
+
+fn launch_pending(pending: PendingUpdate, cx: &mut App) {
+    update_status(cx, |status| status.phase = UpdatePhase::Installing);
+    match pending.launch() {
+        Ok(()) => {
+            // The updater owns the staging directory from here. Forgetting it
+            // now is what stops a relaunch from trying to install it twice.
+            let mut state = UpdateState::load();
+            state.pending = None;
+            state.last_prompted = None;
+            state.save();
+            cx.quit();
+        }
+        Err(error) => {
+            let detail = format!("{error:#}");
+            log::error!("could not start the installer: {detail}");
+            record_failure(&pending.version, &detail, cx);
+            update_status(cx, |status| {
+                status.phase = UpdatePhase::Failed(UpdateFailure::Launch(detail));
+            });
+        }
+    }
+}
+
+/// Records a failure where the user can still find it tomorrow, and lets the
+/// version prompt again.
+///
+/// The old code wrote `last_prompted` the moment a dialog appeared and never
+/// looked back, so an install that failed a second later took the version with
+/// it: never prompted again, and the only trace was a phase that died with the
+/// process.
+fn record_failure(version: &str, detail: &str, cx: &mut App) {
+    let record = FailureRecord {
+        version: version.to_string(),
+        detail: detail.to_string(),
+    };
+    let mut state = UpdateState::load();
+    state.last_failure = Some(record.clone());
+    if state.last_prompted.as_deref() == Some(version) {
+        state.last_prompted = None;
+        state.remind_after = None;
+    }
+    state.save();
+    update_status(cx, |status| status.failure = Some(record));
+}
+
+/// Opens the page for whichever channel this installation follows. A Nightly
+/// user sent to the Stable release page would be handed the wrong package —
+/// and, since Linux and unsupported installs update by hand, that page is the
+/// entire update path for some of them.
+///
+/// Reads the config from disk rather than the global: several callers reach
+/// here from a background thread where the `App` is out of reach.
+pub fn open_releases_page() {
+    open_url(match Config::load().update_channel {
+        UpdateChannel::Stable => RELEASES_URL,
+        UpdateChannel::Nightly => NIGHTLY_RELEASE_URL,
+    });
+}
+
+pub fn open_url(url: &str) {
+    let opener = "open";
+    if let Err(e) = std::process::Command::new(opener).arg(url).spawn() {
+        log::warn!("failed to open {url}: {e}");
+    }
+}
+
+/// Installs a package the user asked to have applied at the next launch, and
+/// reports whether this process should now get out of the way.
+///
+/// This is what makes "Install on Next Launch" worth offering: the user never
+/// waits for a download and never answers a second question — they quit tty7
+/// one evening and start a new version the next morning.
+///
+/// Must run before the daemon is contacted and before any window exists.
+/// Spawning a daemon this process is about to abandon costs a restart, and a
+/// window that appears and vanishes reads as a crash.
+///
+/// Every failure path clears the plan and returns `false`. An update that
+/// cannot be applied must never become an app that will not start.
+pub fn apply_pending_at_launch() -> bool {
+    let mut state = UpdateState::load();
+    let Some(pending) = state.pending.clone() else {
+        return false;
+    };
+    if !pending.apply_on_launch {
+        return false;
+    }
+    if !pending.is_usable() || !is_update_available(&pending.version, current_version()) {
+        log::info!(
+            "discarding the staged {} update: no longer applicable to {}",
+            pending.version,
+            current_version()
+        );
+        state.pending = None;
+        state.save();
+        let _ = std::fs::remove_dir_all(&pending.stage);
+        return false;
+    }
+
+    log::info!(
+        "applying the staged {} update before startup",
+        pending.version
+    );
+    // Cleared before the handover rather than after: the updater takes the
+    // staging directory with it, so a plan left on disk would be retried at the
+    // next launch against a directory that no longer exists.
+    state.pending = None;
+    state.last_prompted = None;
+    state.remind_after = None;
+    state.save();
+
+    match pending.launch() {
+        Ok(()) => true,
+        Err(error) => {
+            let detail = format!("{error:#}");
+            log::error!("could not apply the staged update: {detail}");
+            let mut state = UpdateState::load();
+            state.last_failure = Some(FailureRecord {
+                version: pending.version.clone(),
+                detail,
+            });
+            state.save();
+            false
+        }
+    }
+}
+
+/// Folds the outcome the updater recorded for the install attempt that
+/// produced this launch into the on-disk update state, then removes the file.
+///
+/// This is what a failed install used to lack (#540): the GUI quits as soon
+/// as the helper is spawned, so without the outcome file a failure lived only
+/// in `update.log` — and because launching the helper had already cleared the
+/// prompt state, the next check simply offered the same version again. Runs
+/// before any window exists; `spawn_check`'s hydration carries the result
+/// into Settings.
+pub fn absorb_update_outcome_at_launch() {
+    use tty7_core::daemon::install::outcome::{UpdateOutcome, read_outcome};
+
+    let Some(path) = update_outcome_path() else {
+        return;
+    };
+    let outcome = match read_outcome(&path) {
+        Ok(Some(outcome)) => outcome,
+        Ok(None) => return,
+        // A result that exists but cannot be read is itself a result: an
+        // updater ran, and what it left is unusable.
+        Err(error) => UpdateOutcome {
+            version: current_version().to_string(),
+            ok: false,
+            detail: Some(format!(
+                "the update result at {} could not be read: {error}",
+                path.display()
+            )),
+        },
+    };
+    // Consumed either way: an outcome describes the attempt that already ran,
+    // never the next one.
+    let _ = std::fs::remove_file(&path);
+
+    let mut state = UpdateState::load();
+    if outcome.ok {
+        if outcome.version == current_version() {
+            log::info!("the update to {} completed", outcome.version);
+            // A failure recorded by an earlier attempt at this same version
+            // is finished business now.
+            if state
+                .last_failure
+                .as_ref()
+                .is_some_and(|failure| failure.version == outcome.version)
+            {
+                state.last_failure = None;
+                state.save();
+            }
+        } else {
+            // The helper said the install went in, yet this process is a
+            // different version — someone reinstalled by hand in between.
+            // Nothing to show, but the log should have it.
+            log::warn!(
+                "the updater reported installing {} but this is {}; ignoring the stale outcome",
+                outcome.version,
+                current_version()
+            );
+        }
+        return;
+    }
+
+    let detail = outcome
+        .detail
+        .unwrap_or_else(|| "the update failed without recording a reason".to_string());
+    log::error!("the update to {} failed: {detail}", outcome.version);
+    state.last_failure = Some(FailureRecord {
+        version: outcome.version.clone(),
+        detail,
+    });
+    // A failure must not retire the version — `last_prompted` set with no
+    // `remind_after` is "one failed install retires it for good", the
+    // invariant `a_failure_lets_the_version_prompt_again` pins. But this
+    // attempt already restarted the app once, and `spawn_check` runs at every
+    // launch: asking again seconds later is the nag loop #540 is about. The
+    // middle course is the one "Later" already uses — keep the version marked
+    // as asked, and push the next ask out by `REMIND_LATER`. The failure sits
+    // in Settings the whole while.
+    state.last_prompted = Some(outcome.version);
+    state.remind_after = Some(now_secs() + REMIND_LATER.as_secs());
+    state.save();
+}
+
+/// Removes staging directories belonging to a run that died before its updater
+/// could clean up — quitting mid-download is the usual cause.
+///
+/// Worth doing: on macOS staging is created beside the app bundle, which is
+/// normally /Applications, and a hidden 30 MB directory there is one nobody
+/// finds on purpose. The live plan's own directory is kept however old it is.
+fn sweep_orphaned_stages(keep: Option<PathBuf>) {
+    for root in stage_roots() {
+        let Ok(entries) = std::fs::read_dir(&root) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if keep.as_deref() == Some(path.as_path()) {
+                continue;
+            }
+            if !path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(is_stage_name)
+            {
+                continue;
+            }
+            let expired = entry
+                .metadata()
+                .and_then(|meta| meta.modified())
+                .ok()
+                .and_then(|modified| modified.elapsed().ok())
+                .is_some_and(|age| age > STAGE_TTL);
+            if expired {
+                log::info!("removing orphaned update staging at {}", path.display());
+                let _ = std::fs::remove_dir_all(&path);
+            }
+        }
+    }
+}
+
+/// Where each platform's staging directories are created — beside the bundle
+/// on macOS and beside the image on Linux (both have to be on the installed
+/// file's own volume to rename into place), and the per-user temp directory
+/// on Windows.
+// The `return`s are what let one cfg block win per platform; clippy sees only
+// the surviving one and reads it as redundant.
+#[allow(clippy::needless_return)]
+fn stage_roots() -> Vec<PathBuf> {
+    {
+        return current_macos_app_bundle()
+            .and_then(|app| app.parent().map(Path::to_path_buf))
+            .into_iter()
+            .collect();
+    }
+}
+
+/// The prefixes `update_staging_dir` and `system_update_staging_dir` hand to
+/// `tempfile`.
+fn is_stage_name(name: &str) -> bool {
+    name.starts_with(".tty7-update-") || name.starts_with("tty7-update-")
+}
+
+pub(crate) fn localized_update_phase(phase: &UpdatePhase) -> Option<String> {
+    match phase {
+        UpdatePhase::Idle => None,
+        UpdatePhase::Checking => Some(t(L10nKey::SettingsUpdateChecking).to_string()),
+        UpdatePhase::UpToDate => Some(t(L10nKey::SettingsUpdateUpToDate).to_string()),
+        UpdatePhase::Downloading { received, total } => Some(match total {
+            // A percentage needs both ends; GitHub occasionally serves the
+            // asset without a usable content-length, and "42%" of an unknown
+            // whole is worse than an honest byte count.
+            Some(total) if *total > 0 => t_fmt(
+                L10nKey::SettingsUpdateDownloadingPercent,
+                &[
+                    (
+                        "percent",
+                        &(received.saturating_mul(100) / total).min(100).to_string(),
+                    ),
+                    ("size", &human_bytes(*total)),
+                ],
+            ),
+            _ => t_fmt(
+                L10nKey::SettingsUpdateDownloadingBytes,
+                &[("received", &human_bytes(*received))],
+            ),
+        }),
+        UpdatePhase::Verifying => Some(t(L10nKey::SettingsUpdateVerifying).to_string()),
+        UpdatePhase::Installing => Some(t(L10nKey::SettingsUpdateInstalling).to_string()),
+        UpdatePhase::Failed(failure) => {
+            let (key, error) = match failure {
+                UpdateFailure::Check(error) => (L10nKey::SettingsUpdateCheckFailed, error),
+                UpdateFailure::Prepare(error) => (L10nKey::SettingsUpdatePrepareFailed, error),
+                UpdateFailure::Launch(error) => (L10nKey::SettingsUpdateLaunchFailed, error),
+            };
+            Some(t_fmt(key, &[("error", error)]))
+        }
+    }
+}
+
+pub(crate) fn localized_update_install_hint(hint: &UpdateInstallHint) -> String {
+    match hint {
+        UpdateInstallHint::UnsupportedMacos => {
+            t(L10nKey::SettingsUpdateUnsupportedMacos).to_string()
+        }
+        UpdateInstallHint::MissingPackage(name) => {
+            t_fmt(L10nKey::SettingsUpdateMissingPackage, &[("name", name)])
+        }
+        UpdateInstallHint::MissingChecksums => {
+            t(L10nKey::SettingsUpdateMissingChecksums).to_string()
+        }
+    }
+}
+
+fn human_bytes(bytes: u64) -> String {
+    const MB: f64 = 1024.0 * 1024.0;
+    format!("{:.1} MB", bytes as f64 / MB)
+}
+
+/// The shape of a persisted [`PendingUpdate`]. A plan written by a build
+/// whose updater invocation differs from this one's is discarded rather than
+/// launched: its staged helper is the *old* build's updater and would not
+/// understand this build's arguments. Absent from pre-parameterization
+/// plans, which deserialize as 0 and never match.
+const PLAN_VERSION: u32 = 2;
+
+/// A downloaded, verified package waiting to be installed.
+///
+/// Splitting "fetch" from "install" is the point of the whole design: it turns
+/// the question put to the user from "will you spend five minutes on this now"
+/// into "may I restart", which is the difference between an update that gets
+/// applied and one that gets postponed indefinitely.
+///
+/// The parent pid is *not* stored. It is the one argument that cannot survive a
+/// restart, so `launch` supplies it fresh — see `PreparedUpdate::args`.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PendingUpdate {
+    pub version: String,
+    /// Whether the next launch installs this without asking. False for a
+    /// package that was merely fetched ahead of time: it waits in Settings.
+    #[serde(default)]
+    pub apply_on_launch: bool,
+    /// See [`PLAN_VERSION`].
+    #[serde(default)]
+    plan_version: u32,
+    updater: PathBuf,
+    command: String,
+    rest: Vec<PathBuf>,
+    config_dir: Option<PathBuf>,
+    stage: PathBuf,
+    /// The staged package's digest as the release server published it. The
+    /// elevated chain's trust anchor: the checksums file beside the package
+    /// cannot serve there, because a medium-integrity process can rewrite
+    /// both together.
+    #[serde(default)]
+    expected_sha256: Option<String>,
+}
+
+impl PendingUpdate {
+    /// Whether the package is still on disk and still speaks this build's
+    /// updater protocol. Staging lives in a temporary directory that a
+    /// cleaner, an antivirus, or a reboot may have taken; the plan version
+    /// is the other half — see [`PLAN_VERSION`].
+    pub fn is_usable(&self) -> bool {
+        self.plan_version == PLAN_VERSION && self.updater.is_file() && self.stage.is_dir()
+    }
+
+    fn launch(&self) -> Result<()> {
+        PreparedUpdate {
+            updater: self.updater.clone(),
+            command: self.command.clone(),
+            rest: self.rest.clone(),
+            config_dir: self.config_dir.clone(),
+            stage: self.stage.clone(),
+            expected_sha256: self.expected_sha256.clone(),
+        }
+        .launch()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct FailureRecord {
+    pub version: String,
+    pub detail: String,
+}
+
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
+struct UpdateState {
+    /// The version a dialog has already been shown for. Paired with
+    /// `remind_after`, which decides when that stops counting.
+    #[serde(default)]
+    last_prompted: Option<String>,
+    /// Unix seconds after which `last_prompted` may prompt again.
+    #[serde(default)]
+    remind_after: Option<u64>,
+    #[serde(default)]
+    last_failure: Option<FailureRecord>,
+    #[serde(default)]
+    pending: Option<PendingUpdate>,
+}
+
+impl UpdateState {
+    fn path() -> Option<std::path::PathBuf> {
+        crate::core::config::config_path("update.json")
+    }
+
+    fn load() -> Self {
+        let Some(path) = Self::path() else {
+            return Self::default();
+        };
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            return Self::default();
+        };
+        serde_json::from_str(&text).unwrap_or_else(|e| {
+            log::warn!("failed to parse {}: {e}; ignoring", path.display());
+            Self::default()
+        })
+    }
+
+    fn save(&self) {
+        let Some(path) = Self::path() else {
+            return;
+        };
+        let json = match serde_json::to_string_pretty(self) {
+            Ok(j) => j,
+            Err(e) => {
+                log::warn!("failed to serialize update state: {e}");
+                return;
+            }
+        };
+        if let Err(e) = crate::core::config::write_atomic(&path, json.as_bytes()) {
+            log::warn!("failed to write {}: {e}", path.display());
+        }
+    }
+}
+
+#[derive(Clone, Debug, serde::Deserialize)]
+struct LatestRelease {
+    tag_name: String,
+    assets: Vec<GitHubAsset>,
+}
+
+#[derive(Clone, Debug, serde::Deserialize)]
+struct GitHubAsset {
+    name: String,
+    browser_download_url: String,
+}
+
+#[derive(serde::Deserialize)]
+struct GitHubError {
+    message: String,
+}
+
+/// `nightly.json`, written by the nightly workflow. Only `version` is read
+/// today; the rest is there so a build can be traced back to its commit
+/// without cross-referencing the release notes.
+#[derive(Clone, Debug, serde::Deserialize)]
+struct NightlyManifest {
+    version: String,
+    #[serde(default)]
+    #[allow(dead_code)]
+    commit: String,
+    #[serde(default)]
+    #[allow(dead_code)]
+    published_at: String,
+}
+
+/// The GitHub endpoint each channel reads.
+///
+/// Keeping the two feeds apart is the whole point of the channel: neither can
+/// hand the other an update, so an installation only changes channel when the
+/// user changes it in Settings.
+fn release_endpoint(channel: UpdateChannel) -> String {
+    match channel {
+        // Excludes prereleases by definition, so Stable can never be offered a
+        // nightly even though both live in the same repository.
+        UpdateChannel::Stable => format!("https://api.github.com/repos/{REPO}/releases/latest"),
+        UpdateChannel::Nightly => {
+            format!("https://api.github.com/repos/{REPO}/releases/tags/{NIGHTLY_TAG}")
+        }
+    }
+}
+
+/// Recovers the version from a package name such as
+/// `tty7-26.8.2-nightly.202608071800-macos-arm64.zip`.
+///
+/// The platform segment is a closed set, which is what makes the split
+/// unambiguous — the version is everything between the `tty7-` prefix and the
+/// platform marker. `tty7-server-linux-x86_64-musl` matches that shape too but
+/// yields `server`, which `parse_version` rejects, so the remote-server assets
+/// sitting in the same release are skipped without special-casing them.
+///
+/// The highest version wins rather than the first one found. Two nights can be
+/// on the release at once: the workflow uploads tonight's packages before
+/// pruning yesterday's, and a prune that never ran leaves them there for good.
+/// GitHub lists assets oldest first, so taking the first match is taking the
+/// older build — which reads as "no update" and stalls the channel silently.
+fn version_from_assets(assets: &[GitHubAsset]) -> Option<String> {
+    assets
+        .iter()
+        .filter_map(|asset| {
+            let rest = asset.name.strip_prefix("tty7-")?;
+            let cut = ["-macos-", "-linux-", "-windows-"]
+                .iter()
+                .find_map(|marker| rest.find(marker))?;
+            let version = &rest[..cut];
+            Some((parse_version(version)?, version.to_string()))
+        })
+        .max()
+        .map(|(_, version)| version)
+}
+
+fn build_http_client(manual_proxy: Option<&str>) -> Result<ReqwestClient> {
+    let user_agent = concat!("tty7/", env!("CARGO_PKG_VERSION"));
+    // Normalise through the same helper the downloader uses, so a bare
+    // `127.0.0.1:7890` proxies the check as well as the download.
+    if let Some(proxy) = manual_proxy
+        .and_then(tty7_core::daemon::install::proxy::normalize_manual)
+        .and_then(|url| http_client::Url::parse(&url).ok())
+    {
+        ReqwestClient::proxy_and_user_agent(Some(proxy), user_agent).context("building HTTP client")
+    } else {
+        ReqwestClient::user_agent(user_agent).context("building HTTP client")
+    }
+}
+
+async fn fetch_json<T: serde::de::DeserializeOwned>(
+    client: &ReqwestClient,
+    url: &str,
+) -> Result<T> {
+    let request = http_client::Request::get(url)
+        .header("Accept", "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", "2022-11-28")
+        .follow_redirects(RedirectPolicy::FollowAll)
+        .body(AsyncBody::default())
+        .context("building request")?;
+
+    let mut response = client.send(request).await.context("sending the request")?;
+
+    if !response.status().is_success() {
+        let status = response.status().as_u16();
+        let rate_remaining = response
+            .headers()
+            .get("x-ratelimit-remaining")
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
+        let rate_reset = response
+            .headers()
+            .get("x-ratelimit-reset")
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
+        let mut body = Vec::new();
+        let _ = response
+            .body_mut()
+            .take(8 * 1024)
+            .read_to_end(&mut body)
+            .await;
+        anyhow::bail!(github_http_error(
+            status,
+            rate_remaining.as_deref(),
+            rate_reset.as_deref(),
+            &body,
+            now_secs(),
+        ));
+    }
+
+    let mut body = Vec::new();
+    response
+        .body_mut()
+        .read_to_end(&mut body)
+        .await
+        .context("reading response body")?;
+
+    serde_json::from_slice(&body).context("parsing JSON")
+}
+
+fn github_http_error(
+    status: u16,
+    rate_remaining: Option<&str>,
+    rate_reset: Option<&str>,
+    body: &[u8],
+    now: u64,
+) -> String {
+    let message = serde_json::from_slice::<GitHubError>(body)
+        .ok()
+        .map(|error| sanitize_github_message(&error.message));
+    // 403 is what the REST API has always answered a spent quota with; 429 is
+    // what it increasingly answers instead, and both carry the same headers.
+    let rate_limited = matches!(status, 403 | 429)
+        && (rate_remaining == Some("0")
+            || message.as_deref().is_some_and(|message| {
+                message.to_ascii_lowercase().contains("rate limit exceeded")
+            }));
+
+    if rate_limited {
+        let retry = rate_reset
+            .and_then(|reset| reset.parse::<u64>().ok())
+            .filter(|reset| *reset > now)
+            .map(|reset| {
+                let minutes = (reset - now).div_ceil(60);
+                let suffix = if minutes == 1 { "" } else { "s" };
+                format!("try again in about {minutes} minute{suffix}")
+            })
+            .unwrap_or_else(|| "try again shortly".to_string());
+        return format!("GitHub API rate limit exceeded; {retry} (HTTP {status})");
+    }
+
+    match message.filter(|message| !message.is_empty()) {
+        Some(message) => format!("GitHub returned HTTP {status}: {message}"),
+        None => format!("GitHub returned HTTP {status}"),
+    }
+}
+
+fn sanitize_github_message(message: &str) -> String {
+    let single_line = message.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut chars = single_line.chars();
+    let shortened: String = chars.by_ref().take(200).collect();
+    if chars.next().is_some() {
+        format!("{shortened}…")
+    } else {
+        shortened
+    }
+}
+
+/// Returns the release together with the version it advertises, which is not
+/// always something the release object states outright — see `resolve_version`.
+async fn fetch_latest_release(
+    channel: UpdateChannel,
+    manual_proxy: Option<String>,
+) -> Result<(LatestRelease, String)> {
+    let client = build_http_client(manual_proxy.as_deref())?;
+    let release: LatestRelease = fetch_json(&client, &release_endpoint(channel))
+        .await
+        .context("requesting the release")?;
+    let version = resolve_version(&client, &release)
+        .await
+        .with_context(|| format!("release {} advertises no usable version", release.tag_name))?;
+    Ok((release, version))
+}
+
+/// The version a release stands for.
+///
+/// Stable states it in the tag (`v26.8.1`) and needs nothing else. Nightly
+/// cannot: its tag is force-moved to a new commit every night and so is the
+/// literal string `nightly`, which carries no version at all. It publishes
+/// `nightly.json` beside the packages instead.
+///
+/// The fall back to asset names covers the two cases where the manifest is
+/// absent — a nightly published before it existed, and a night where writing it
+/// failed — because neither is a reason to strand the whole channel.
+async fn resolve_version(client: &ReqwestClient, release: &LatestRelease) -> Option<String> {
+    if parse_version(&release.tag_name).is_some() {
+        return Some(release.tag_name.trim_start_matches('v').to_string());
+    }
+    if let Some(asset) = release
+        .assets
+        .iter()
+        .find(|asset| asset.name == NIGHTLY_MANIFEST)
+    {
+        match fetch_json::<NightlyManifest>(client, &asset.browser_download_url).await {
+            Ok(manifest) if parse_version(&manifest.version).is_some() => {
+                return Some(manifest.version);
+            }
+            Ok(manifest) => log::warn!(
+                "{NIGHTLY_MANIFEST} declares an unusable version {:?}; falling back to asset names",
+                manifest.version
+            ),
+            Err(e) => log::warn!("could not read {NIGHTLY_MANIFEST}: {e:#}"),
+        }
+    }
+    version_from_assets(&release.assets)
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ReleaseAsset {
+    name: String,
+    url: String,
+    checksums_url: String,
+}
+
+struct AssetSelection {
+    asset: Option<ReleaseAsset>,
+    reason: Option<UpdateInstallHint>,
+}
+
+fn select_release_asset(version: &str, assets: &[GitHubAsset]) -> AssetSelection {
+    select_release_asset_for(package_for_current_install(version), assets)
+}
+
+fn select_release_asset_for(
+    package: Result<PackageOffer, UpdateInstallHint>,
+    assets: &[GitHubAsset],
+) -> AssetSelection {
+    let offer = match package {
+        Ok(offer) => offer,
+        Err(reason) => {
+            return AssetSelection {
+                asset: None,
+                reason: Some(reason),
+            };
+        }
+    };
+    let name = offer.name;
+    let Some(asset) = assets.iter().find(|asset| asset.name == name) else {
+        return AssetSelection {
+            asset: None,
+            reason: Some(UpdateInstallHint::MissingPackage(name)),
+        };
+    };
+    let Some(checksums) = assets.iter().find(|asset| asset.name == "checksums.txt") else {
+        return AssetSelection {
+            asset: None,
+            reason: Some(UpdateInstallHint::MissingChecksums),
+        };
+    };
+    AssetSelection {
+        asset: Some(ReleaseAsset {
+            name,
+            url: asset.browser_download_url.clone(),
+            checksums_url: checksums.browser_download_url.clone(),
+        }),
+        reason: None,
+    }
+}
+
+/// The release package this installation can replace itself with. Split from
+/// the bare filename so the Windows Inno layout can carry "yes, but the
+/// install needs a UAC prompt" alongside it (#504).
+#[derive(Debug)]
+struct PackageOffer {
+    name: String,
+}
+
+impl PackageOffer {
+    fn plain(name: String) -> Self {
+        Self { name }
+    }
+}
+
+/// The release package this installation can replace itself with, or the
+/// reason it cannot.
+fn package_for_current_install(version: &str) -> Result<PackageOffer, UpdateInstallHint> {
+    let Some(app) = current_macos_app_bundle() else {
+        return Err(UpdateInstallHint::UnsupportedMacos);
+    };
+    if !is_macos_update_writable(&app) || bundled_updater().is_none() {
+        return Err(UpdateInstallHint::UnsupportedMacos);
+    }
+    let arch = if cfg!(target_arch = "aarch64") {
+        "arm64"
+    } else if cfg!(target_arch = "x86_64") {
+        "x86_64"
+    } else {
+        return Err(UpdateInstallHint::UnsupportedMacos);
+    };
+    Ok(PackageOffer::plain(format!(
+        "tty7-{version}-macos-{arch}.zip"
+    )))
+}
+
+fn prepare_update(
+    version: &str,
+    asset: &ReleaseAsset,
+    on_progress: &dyn Fn(u64, Option<u64>) -> ControlFlow<()>,
+) -> Result<PreparedUpdate> {
+    // Runs off the main thread, so the `Config` global is out of reach.
+    let cfg = Config::load();
+    let fetcher =
+        tty7_core::daemon::install::download::HttpsFetcher::new(cfg.http_proxy.as_deref());
+    // Fetched without progress: a few hundred bytes next to a 30 MB package.
+    let checksums = fetcher
+        .get(&asset.checksums_url)
+        .map_err(anyhow::Error::msg)
+        .context("downloading checksums.txt")?;
+    let archive = fetcher
+        .get_cancellable(&asset.url, on_progress)
+        .map_err(anyhow::Error::msg)
+        .with_context(|| format!("downloading {}", asset.name))?;
+    DOWNLOAD_VERIFYING.store(true, Ordering::Relaxed);
+    prepare_macos_update(version, &asset.name, &archive, &checksums)
+}
+
+#[derive(Debug)]
+struct PreparedUpdate {
+    updater: PathBuf,
+    /// The updater subcommand: `install`, or `install-portable` on Windows.
+    command: String,
+    /// Every argument after the parent pid.
+    rest: Vec<PathBuf>,
+    config_dir: Option<PathBuf>,
+    stage: PathBuf,
+    /// See [`PendingUpdate::expected_sha256`].
+    expected_sha256: Option<String>,
+}
+
+impl PreparedUpdate {
+    /// The pid is filled in here rather than baked into `rest`, so a plan
+    /// written to disk today still names the right process when a launch
+    /// tomorrow runs it.
+    fn args(&self) -> Vec<PathBuf> {
+        let mut args = Vec::with_capacity(self.rest.len() + 2);
+        args.push(PathBuf::from(&self.command));
+        args.push(std::process::id().to_string().into());
+        args.extend(self.rest.iter().cloned());
+        args
+    }
+
+    fn into_pending(self, version: String, apply_on_launch: bool) -> PendingUpdate {
+        PendingUpdate {
+            version,
+            apply_on_launch,
+            plan_version: PLAN_VERSION,
+            updater: self.updater,
+            command: self.command,
+            rest: self.rest,
+            config_dir: self.config_dir,
+            stage: self.stage,
+            expected_sha256: self.expected_sha256,
+        }
+    }
+
+    fn launch(&self) -> Result<()> {
+        let mut command = Command::new(&self.updater);
+        command.args(self.args());
+        let outcome = update_outcome_path();
+        for arg in updater_tail_args(self.config_dir.as_deref(), outcome.as_deref()) {
+            command.arg(arg);
+        }
+        if let Some(outcome) = &outcome {
+            // A result from an earlier attempt has to be gone before this one
+            // starts: a helper that dies before writing its own would
+            // otherwise be read as having written *that* one.
+            let _ = std::fs::remove_file(outcome);
+        }
+        tty7_core::core::proc::hide_console(&mut command)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .inspect_err(|_| {
+                let _ = std::fs::remove_dir_all(&self.stage);
+            })
+            .context("launching tty7-updater")?;
+        Ok(())
+    }
+}
+
+/// Where the updater records how the install ended; the next launch merges it
+/// into the update state (`absorb_update_outcome_at_launch`).
+fn update_outcome_path() -> Option<PathBuf> {
+    crate::core::config::config_path(tty7_core::daemon::install::outcome::OUTCOME_FILE_NAME)
+}
+
+/// The named options after the positional arguments. Everything the updater
+/// must know about this process's configuration crosses as arguments, never
+/// the environment: on Windows an elevated (UAC) child does not inherit the
+/// spawning process's environment, so a `TTY7_CONFIG_DIR` set there would
+/// fall back to the administrator's config directory exactly in the case
+/// that needs the caller's (#504). The updater re-exports the variable for
+/// the children it spawns itself.
+fn updater_tail_args(config_dir: Option<&Path>, outcome: Option<&Path>) -> Vec<std::ffi::OsString> {
+    let mut args = Vec::new();
+    if let Some(dir) = config_dir {
+        args.push(std::ffi::OsString::from("--config-dir"));
+        args.push(dir.as_os_str().to_os_string());
+    }
+    if let Some(outcome) = outcome {
+        args.push(std::ffi::OsString::from("--result-file"));
+        args.push(outcome.as_os_str().to_os_string());
+    }
+    args
+}
+
+fn update_staging_dir(parent: &Path) -> Result<tempfile::TempDir> {
+    tempfile::Builder::new()
+        .prefix(".tty7-update-")
+        .tempdir_in(parent)
+        .context("creating update staging directory")
+}
+
+fn write_staged_asset(dir: &Path, name: &str, bytes: &[u8]) -> Result<PathBuf> {
+    let path = dir.join(name);
+    std::fs::write(&path, bytes).with_context(|| format!("writing {}", path.display()))?;
+    Ok(path)
+}
+
+fn prepare_macos_update(
+    version: &str,
+    asset_name: &str,
+    archive: &[u8],
+    checksums: &[u8],
+) -> Result<PreparedUpdate> {
+    let current =
+        current_macos_app_bundle().context("tty7 is not running from an application bundle")?;
+    let parent = current
+        .parent()
+        .context("tty7.app has no parent directory")?;
+    let updater = bundled_updater().context("tty7-updater is not bundled with this app")?;
+    let staging = update_staging_dir(parent)?;
+    let dir = staging.path().to_path_buf();
+    let archive = write_staged_asset(&dir, asset_name, archive)?;
+    let checksums = write_staged_asset(&dir, "checksums.txt", checksums)?;
+    run_updater(
+        &updater,
+        [
+            PathBuf::from("verify"),
+            current.clone(),
+            archive.clone(),
+            checksums.clone(),
+            PathBuf::from(asset_name),
+            dir.clone(),
+            PathBuf::from(version),
+        ],
+    )?;
+    let log =
+        crate::core::config::config_path("update.log").unwrap_or_else(|| dir.join("update.log"));
+    if let Some(parent) = log.parent() {
+        std::fs::create_dir_all(parent).context("creating the update log directory")?;
+    }
+    let dir = staging.keep();
+    Ok(PreparedUpdate {
+        updater,
+        command: "install".to_string(),
+        rest: vec![
+            current,
+            archive,
+            checksums,
+            PathBuf::from(asset_name),
+            dir.clone(),
+            PathBuf::from(version),
+            log,
+        ],
+        config_dir: crate::core::config::config_dir_path(),
+        stage: dir,
+        expected_sha256: None,
+    })
+}
+
+fn current_macos_app_bundle() -> Option<PathBuf> {
+    std::env::current_exe().ok()?.ancestors().find_map(|path| {
+        (path.extension().and_then(|ext| ext.to_str()) == Some("app")).then(|| path.to_path_buf())
+    })
+}
+
+fn is_macos_update_writable(app: &Path) -> bool {
+    app.parent().is_some_and(can_stage_replacement_in)
+}
+
+fn bundled_updater() -> Option<PathBuf> {
+    let updater = current_macos_app_bundle()?.join("Contents/MacOS/tty7-updater");
+    updater.is_file().then_some(updater)
+}
+
+fn can_stage_replacement_in(dir: &Path) -> bool {
+    tempfile::Builder::new()
+        .prefix(".tty7-update-write-test-")
+        .tempfile_in(dir)
+        .is_ok()
+}
+
+fn run_updater(updater: &Path, args: impl IntoIterator<Item = PathBuf>) -> Result<()> {
+    let mut command = Command::new(updater);
+    command.args(args);
+    let output = tty7_core::core::proc::hide_console(&mut command)
+        .output()
+        .context("running tty7-updater verification")?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "tty7-updater verification failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )
+    }
+    Ok(())
+}
+
+/// `(major, minor, patch, is_release, build)`.
+///
+/// Ordering the release flag *before* the build number is what lets a stable
+/// release supersede the prerelease that carries the same core version: a
+/// Nightly stamped `26.7.1-nightly.202607161800` is offered `v26.7.1` and
+/// graduates out of the prerelease no matter how recent its build is.
+///
+/// `build` then orders two prereleases sharing a core version against each
+/// other, by the timestamp the nightly workflow stamps. That comparison is the
+/// whole reason the Nightly channel can roll forward at all — without it every
+/// nightly compares equal to the next one. It is unreachable on Stable, which
+/// reads `/releases/latest` and so never sees a prerelease.
+///
+/// Every numeric identifier in the prerelease is collected, not just the last
+/// one, and they are compared left to right the way semver compares them. The
+/// nightly stamp is a single number today, but reading only the last segment
+/// meant that appending one — a counter for a second build in the same day, a
+/// finer clock — would silently *reverse* the ordering (`…20260807.2` scoring
+/// 2) instead of failing where someone would notice. Non-numeric identifiers
+/// are skipped rather than ranked: `-beta` and `-rc` are not versions this
+/// project ships, and guessing an order between them buys nothing. A
+/// prerelease with no number at all yields an empty list, which sorts below
+/// every stamped build.
+fn parse_version(s: &str) -> Option<(u64, u64, u64, bool, Vec<u64>)> {
+    let trimmed = s.trim();
+    let core = trimmed.strip_prefix('v').unwrap_or(trimmed);
+    let without_meta = core.split('+').next().unwrap_or(core);
+    let is_release = !without_meta.contains('-');
+    let build = without_meta
+        .split_once('-')
+        .map(|(_, pre)| pre.split('.').filter_map(|id| id.parse().ok()).collect())
+        .unwrap_or_default();
+    let core = core.split(['-', '+']).next().unwrap_or(core);
+    let mut parts = core.split('.');
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next().unwrap_or("0").parse().ok()?;
+    let patch = parts.next().unwrap_or("0").parse().ok()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    Some((major, minor, patch, is_release, build))
+}
+
+fn is_update_available(latest: &str, current: &str) -> bool {
+    match (parse_version(latest), parse_version(current)) {
+        (Some(latest), Some(current)) => latest > current,
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn github_rate_limit_error_says_when_to_retry() {
+        let error = github_http_error(
+            403,
+            Some("0"),
+            Some("4600"),
+            br#"{"message":"API rate limit exceeded for 203.0.113.1."}"#,
+            1000,
+        );
+
+        assert_eq!(
+            error,
+            "GitHub API rate limit exceeded; try again in about 60 minutes (HTTP 403)"
+        );
+    }
+
+    /// GitHub answers a spent quota with 403 or 429 depending on the endpoint
+    /// and the era. Only the 403 spelling used to reach the retry advice, so a
+    /// 429 told the reader the quota was gone without saying when it returns.
+    #[test]
+    fn a_429_is_a_rate_limit_too() {
+        let error = github_http_error(
+            429,
+            Some("0"),
+            Some("1600"),
+            br#"{"message":"API rate limit exceeded for 203.0.113.1."}"#,
+            1000,
+        );
+
+        assert_eq!(
+            error,
+            "GitHub API rate limit exceeded; try again in about 10 minutes (HTTP 429)"
+        );
+    }
+
+    #[test]
+    fn expired_github_rate_limit_says_to_retry_shortly() {
+        let error = github_http_error(
+            403,
+            Some("0"),
+            Some("999"),
+            br#"{"message":"API rate limit exceeded."}"#,
+            1000,
+        );
+
+        assert_eq!(
+            error,
+            "GitHub API rate limit exceeded; try again shortly (HTTP 403)"
+        );
+    }
+
+    #[test]
+    fn github_json_error_keeps_a_short_actionable_message() {
+        let error = github_http_error(
+            404,
+            None,
+            None,
+            br#"{"message":"Not Found\nPlease check the repository"}"#,
+            1000,
+        );
+
+        assert_eq!(
+            error,
+            "GitHub returned HTTP 404: Not Found Please check the repository"
+        );
+    }
+
+    fn github_asset(name: &str) -> GitHubAsset {
+        GitHubAsset {
+            name: name.to_string(),
+            browser_download_url: format!("https://example.test/{name}"),
+        }
+    }
+
+    #[test]
+    fn release_asset_requires_the_platform_package_and_checksums() {
+        let name = "tty7-27.1.0-macos-arm64.zip";
+        let assets = [github_asset(name), github_asset("checksums.txt")];
+        let selected = select_release_asset_for(Ok(PackageOffer::plain(name.to_string())), &assets);
+        assert_eq!(
+            selected.asset,
+            Some(ReleaseAsset {
+                name: name.to_string(),
+                url: format!("https://example.test/{name}"),
+                checksums_url: "https://example.test/checksums.txt".to_string(),
+            })
+        );
+        assert_eq!(selected.reason, None);
+    }
+
+    #[test]
+    fn release_without_checksums_is_never_installable() {
+        let name = "tty7-27.1.0-macos-arm64.zip";
+        let selected = select_release_asset_for(
+            Ok(PackageOffer::plain(name.to_string())),
+            &[github_asset(name)],
+        );
+        assert!(selected.asset.is_none());
+        assert_eq!(selected.reason, Some(UpdateInstallHint::MissingChecksums));
+    }
+
+    #[test]
+    fn release_without_the_exact_platform_package_is_never_guessed() {
+        let selected = select_release_asset_for(
+            Ok(PackageOffer::plain(
+                "tty7-27.1.0-macos-arm64.zip".to_string(),
+            )),
+            &[
+                github_asset("tty7-27.1.0-macos-x86_64.zip"),
+                github_asset("checksums.txt"),
+            ],
+        );
+        assert!(selected.asset.is_none());
+        assert_eq!(
+            selected.reason,
+            Some(UpdateInstallHint::MissingPackage(
+                "tty7-27.1.0-macos-arm64.zip".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn parses_versions_with_and_without_prefix() {
+        let release = |major, minor, patch| Some((major, minor, patch, true, vec![]));
+        assert_eq!(parse_version("v0.3.1"), release(0, 3, 1));
+        assert_eq!(parse_version("0.3.1"), release(0, 3, 1));
+        assert_eq!(parse_version(" 1.2.0 "), release(1, 2, 0));
+        assert_eq!(parse_version("v2"), release(2, 0, 0));
+        assert_eq!(parse_version("v2.5"), release(2, 5, 0));
+        assert_eq!(
+            parse_version("v0.4.0-rc.1"),
+            Some((0, 4, 0, false, vec![1]))
+        );
+        assert_eq!(
+            parse_version("26.7.1-nightly.202607161800"),
+            Some((26, 7, 1, false, vec![202607161800]))
+        );
+        // A prerelease with nothing numeric to order by still parses; it just
+        // sorts below every stamped build of the same core version.
+        assert_eq!(parse_version("1.0.0-beta"), Some((1, 0, 0, false, vec![])));
+        assert_eq!(parse_version("0.4.0+ci.7"), release(0, 4, 0));
+        assert_eq!(parse_version("nightly"), None);
+        assert_eq!(parse_version(""), None);
+        assert_eq!(parse_version("v0.3.1.1"), None);
+        assert_eq!(parse_version("0.3.1.0"), None);
+        assert_eq!(parse_version("vv0.3.1"), None);
+    }
+
+    /// Every numeric identifier is collected, so appending one to the nightly
+    /// stamp extends the ordering instead of replacing it. Reading only the
+    /// last segment made `…20260807.2` score 2 and lose to the build before it.
+    #[test]
+    fn prerelease_identifiers_order_left_to_right() {
+        assert_eq!(
+            parse_version("26.8.2-nightly.20260807.2"),
+            Some((26, 8, 2, false, vec![20260807, 2]))
+        );
+        assert!(is_update_available(
+            "26.8.2-nightly.20260807.2",
+            "26.8.2-nightly.20260807"
+        ));
+        assert!(!is_update_available(
+            "26.8.2-nightly.20260807",
+            "26.8.2-nightly.20260807.2"
+        ));
+        // The day still dominates whatever trails it.
+        assert!(is_update_available(
+            "26.8.2-nightly.20260808",
+            "26.8.2-nightly.20260807.9"
+        ));
+        // And the move from date to minute stamps carries the installs that
+        // are already out there: 202608071800 > 20260807.
+        assert!(is_update_available(
+            "26.8.2-nightly.202608071800",
+            "26.8.2-nightly.20260807"
+        ));
+    }
+
+    /// Two builds in one day used to collide on the date and read as "up to
+    /// date" — the reason the stamp goes to the minute.
+    #[test]
+    fn two_builds_on_one_day_are_distinguishable() {
+        assert!(is_update_available(
+            "26.8.2-nightly.202608071800",
+            "26.8.2-nightly.202608070200"
+        ));
+    }
+
+    #[test]
+    fn detects_newer_versions() {
+        assert!(is_update_available("v0.3.1", "0.3.0"));
+        assert!(is_update_available("v1.0.0", "0.9.9"));
+        assert!(is_update_available("0.4.0", "0.3.99"));
+        assert!(is_update_available("v26.7.0", "0.17.0"));
+    }
+
+    #[test]
+    fn ignores_same_or_older_versions() {
+        assert!(!is_update_available("v0.3.0", "0.3.0"));
+        assert!(!is_update_available("v0.2.9", "0.3.0"));
+        assert!(!is_update_available("0.3.0", "0.3.1"));
+    }
+
+    #[test]
+    fn nightly_binaries_prompt_when_their_stable_ships() {
+        assert!(is_update_available("v26.7.1", "26.7.1-nightly.20260716"));
+        assert!(!is_update_available("v26.7.0", "26.7.1-nightly.20260716"));
+        assert!(!is_update_available("v26.7.1-rc.1", "26.7.1"));
+    }
+
+    /// The Nightly channel's whole reason to exist: last night's build has to
+    /// be able to supersede the one before it. This is what the old ordering
+    /// deliberately refused to do, back when the only feed was
+    /// `/releases/latest` and no nightly could ever be offered.
+    #[test]
+    fn a_newer_nightly_supersedes_an_older_one() {
+        assert!(is_update_available(
+            "26.7.1-nightly.20260717",
+            "26.7.1-nightly.20260716"
+        ));
+        assert!(!is_update_available(
+            "26.7.1-nightly.20260716",
+            "26.7.1-nightly.20260717"
+        ));
+        assert!(!is_update_available(
+            "26.7.1-nightly.20260716",
+            "26.7.1-nightly.20260716"
+        ));
+        // Across core versions the date is irrelevant — a nightly for the next
+        // patch wins however old its build is.
+        assert!(is_update_available(
+            "26.7.2-nightly.20260101",
+            "26.7.1-nightly.20260716"
+        ));
+    }
+
+    /// Ordering the release flag ahead of the build number is what keeps this
+    /// true: a stable release outranks every dated build sharing its core
+    /// version, so a user who switches back to Stable still graduates.
+    #[test]
+    fn a_stable_release_still_outranks_every_nightly_of_its_core_version() {
+        for date in ["20260101", "20991231"] {
+            assert!(is_update_available(
+                "v26.7.1",
+                &format!("26.7.1-nightly.{date}")
+            ));
+        }
+    }
+
+    /// Each channel reads its own release, which is the mechanism that keeps a
+    /// Nightly from being walked back onto Stable by an update it never asked
+    /// for. `/releases/latest` excludes prereleases by definition, so the two
+    /// feeds cannot see each other's builds.
+    #[test]
+    fn each_channel_reads_its_own_feed() {
+        assert!(release_endpoint(UpdateChannel::Stable).ends_with("/releases/latest"));
+        assert!(
+            release_endpoint(UpdateChannel::Nightly)
+                .ends_with(&format!("/releases/tags/{NIGHTLY_TAG}"))
+        );
+        // The page a Nightly user is sent to has to be the release that feed
+        // reads. `concat!` cannot build the URL from the constant, so this is
+        // where the two are held together.
+        assert!(NIGHTLY_RELEASE_URL.ends_with(&format!("/releases/tag/{NIGHTLY_TAG}")));
+    }
+
+    /// The fallback for a nightly published without `nightly.json`. The tag is
+    /// the literal "nightly", so the asset names are the only place left that
+    /// states which build this is.
+    #[test]
+    fn version_is_recovered_from_nightly_asset_names() {
+        let assets = [
+            github_asset("checksums.txt"),
+            github_asset("tty7-26.8.2-nightly.20260807-macos-arm64.zip"),
+            github_asset("tty7-26.8.2-nightly.20260807-windows-x86_64-setup.exe"),
+        ];
+        assert_eq!(
+            version_from_assets(&assets).as_deref(),
+            Some("26.8.2-nightly.20260807")
+        );
+    }
+
+    /// The remote-server binaries ride along in the same release and match the
+    /// `tty7-…-linux-…` shape, but have no version in front of the platform.
+    /// `parse_version` rejecting "server" is what skips them, so no name-based
+    /// special case is needed.
+    #[test]
+    fn remote_server_assets_are_not_mistaken_for_a_version() {
+        let assets = [
+            github_asset("checksums.txt"),
+            github_asset("tty7-server-linux-x86_64-musl"),
+            github_asset("tty7-server-linux-aarch64-musl"),
+        ];
+        assert_eq!(version_from_assets(&assets), None);
+
+        // And they must not win when a real package is also present, whatever
+        // order GitHub returns them in.
+        let mixed = [
+            github_asset("tty7-server-linux-x86_64-musl"),
+            github_asset("tty7-26.8.2-nightly.202608071800-linux-x86_64.tar.gz"),
+        ];
+        assert_eq!(
+            version_from_assets(&mixed).as_deref(),
+            Some("26.8.2-nightly.202608071800")
+        );
+    }
+
+    /// Tonight's packages are uploaded before last night's are pruned, so both
+    /// nights are briefly on the release at once — and stay that way for good
+    /// if the prune step ever fails. GitHub lists assets oldest first, so
+    /// taking the first match would take yesterday's build and read as "no
+    /// update", stalling the channel with no error anywhere.
+    #[test]
+    fn the_newest_asset_version_wins_when_two_nights_overlap() {
+        let assets = [
+            github_asset("tty7-26.8.2-nightly.202608062200-macos-arm64.zip"),
+            github_asset("tty7-26.8.2-nightly.202608062200-linux-x86_64.tar.gz"),
+            github_asset("checksums.txt"),
+            github_asset("tty7-26.8.2-nightly.202608071800-macos-arm64.zip"),
+            github_asset("tty7-26.8.2-nightly.202608071800-linux-x86_64.tar.gz"),
+        ];
+        assert_eq!(
+            version_from_assets(&assets).as_deref(),
+            Some("26.8.2-nightly.202608071800")
+        );
+    }
+
+    /// Pins the contract between `nightly.yml`'s manifest step and this side of
+    /// it. Renaming a field in the workflow silently drops Nightly back to
+    /// guessing versions out of filenames; this fails instead.
+    #[test]
+    fn nightly_manifest_matches_what_the_workflow_writes() {
+        let manifest: NightlyManifest = serde_json::from_str(
+            r#"{
+                "version": "26.8.2-nightly.20260807",
+                "commit": "0123456789abcdef0123456789abcdef01234567",
+                "published_at": "2026-08-07T02:11:00Z"
+            }"#,
+        )
+        .expect("the workflow's shape must deserialize");
+        assert_eq!(manifest.version, "26.8.2-nightly.20260807");
+        assert!(parse_version(&manifest.version).is_some());
+
+        // Older manifests, or a workflow that stops writing the extras, must
+        // still yield a usable version rather than failing the whole check.
+        let minimal: NightlyManifest =
+            serde_json::from_str(r#"{"version": "26.8.2-nightly.20260807"}"#)
+                .expect("version alone is enough");
+        assert_eq!(minimal.commit, "");
+    }
+
+    #[test]
+    fn unparseable_tag_never_prompts() {
+        assert!(!is_update_available("garbage", "0.3.0"));
+        assert!(!is_update_available("v0.3.1", "garbage"));
+        assert!(!is_update_available("v0.4.0.1", "0.3.0"));
+        assert!(!is_update_available("vv0.4.0", "0.3.0"));
+    }
+
+    #[test]
+    fn update_state_round_trips_and_defaults() {
+        let _lock = UPDATE_STATE_LOCK.lock().unwrap();
+        crate::core::config::pin_test_config_dir();
+        let path = UpdateState::path().expect("config dir pinned");
+
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(UpdateState::load().last_prompted, None);
+
+        UpdateState {
+            last_prompted: Some("0.4.0".into()),
+            ..Default::default()
+        }
+        .save();
+        assert_eq!(UpdateState::load().last_prompted.as_deref(), Some("0.4.0"));
+
+        // A staged package has to survive the restart it exists for. Its
+        // whole point is being applied by a *later* process than the one that
+        // downloaded it.
+        UpdateState {
+            pending: Some(PendingUpdate {
+                version: "27.0.0".into(),
+                apply_on_launch: true,
+                plan_version: PLAN_VERSION,
+                updater: PathBuf::from("/tmp/tty7-updater"),
+                command: "install".into(),
+                rest: vec![PathBuf::from("/tmp/stage/tty7.zip")],
+                config_dir: None,
+                stage: PathBuf::from("/tmp/stage"),
+                expected_sha256: None,
+            }),
+            ..Default::default()
+        }
+        .save();
+        let pending = UpdateState::load().pending.expect("pending round-trips");
+        assert_eq!(pending.version, "27.0.0");
+        assert!(pending.apply_on_launch);
+        assert_eq!(pending.command, "install");
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// The rule that replaced "prompted once, then silent forever".
+    #[test]
+    fn later_defers_a_version_instead_of_retiring_it() {
+        let asked = UpdateState {
+            last_prompted: Some("27.0.0".into()),
+            ..Default::default()
+        };
+        // Already asked, no expiry set: stay quiet.
+        assert!(!should_prompt(&asked, "27.0.0"));
+        // A different version is a new question however recently we asked.
+        assert!(should_prompt(&asked, "27.1.0"));
+
+        let deferred = UpdateState {
+            last_prompted: Some("27.0.0".into()),
+            remind_after: Some(now_secs() + 3600),
+            ..Default::default()
+        };
+        assert!(!should_prompt(&deferred, "27.0.0"));
+
+        let due = UpdateState {
+            last_prompted: Some("27.0.0".into()),
+            remind_after: Some(now_secs().saturating_sub(1)),
+            ..Default::default()
+        };
+        assert!(should_prompt(&due, "27.0.0"));
+    }
+
+    /// A failure must not leave the version marked as "already asked about",
+    /// or one failed install retires it for good.
+    #[test]
+    fn a_failure_lets_the_version_prompt_again() {
+        let mut state = UpdateState {
+            last_prompted: Some("27.0.0".into()),
+            remind_after: Some(now_secs() + 3600),
+            ..Default::default()
+        };
+        assert!(!should_prompt(&state, "27.0.0"));
+
+        // The bookkeeping half of `record_failure`, which needs an App to run.
+        state.last_failure = Some(FailureRecord {
+            version: "27.0.0".into(),
+            detail: "downloading tty7-27.0.0-macos-arm64.zip: timed out".into(),
+        });
+        if state.last_prompted.as_deref() == Some("27.0.0") {
+            state.last_prompted = None;
+            state.remind_after = None;
+        }
+        assert!(should_prompt(&state, "27.0.0"));
+    }
+
+    /// Serializes the tests that touch the real `update.json` under the
+    /// pinned per-process config dir (the pattern `update_guard`'s tests
+    /// document: one shared state file, parallel tests, one lock).
+    static UPDATE_STATE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn updater_tail_args_carry_config_and_outcome_as_arguments() {
+        assert_eq!(
+            updater_tail_args(
+                Some(Path::new(r"C:\cfg")),
+                Some(Path::new(r"C:\cfg\update-outcome.json")),
+            ),
+            [
+                std::ffi::OsString::from("--config-dir"),
+                std::ffi::OsString::from(r"C:\cfg"),
+                std::ffi::OsString::from("--result-file"),
+                std::ffi::OsString::from(r"C:\cfg\update-outcome.json"),
+            ]
+        );
+        // Each flag stands alone; a machine with no resolvable config dir
+        // simply passes neither, which is the updater's pre-existing default.
+        assert!(updater_tail_args(None, None).is_empty());
+        assert_eq!(
+            updater_tail_args(None, Some(Path::new("/tmp/outcome.json"))),
+            [
+                std::ffi::OsString::from("--result-file"),
+                std::ffi::OsString::from("/tmp/outcome.json"),
+            ]
+        );
+    }
+
+    /// The whole outcome-file lifecycle in one test: the file and
+    /// `update.json` are per-process global state, and parallel tests
+    /// writing both would race each other.
+    #[test]
+    fn an_updater_outcome_is_absorbed_exactly_once() {
+        use tty7_core::daemon::install::outcome::{UpdateOutcome, write_outcome};
+
+        let _lock = UPDATE_STATE_LOCK.lock().unwrap();
+        crate::core::config::pin_test_config_dir();
+        let state_path = UpdateState::path().expect("config dir pinned");
+        let outcome_path = update_outcome_path().expect("config dir pinned");
+        let _ = std::fs::remove_file(&state_path);
+        let _ = std::fs::remove_file(&outcome_path);
+
+        // No outcome: nothing changes, nothing is invented.
+        absorb_update_outcome_at_launch();
+        let state = UpdateState::load();
+        assert!(state.last_failure.is_none() && state.last_prompted.is_none());
+
+        // A failure lands in the state and — the #540 half — does not set the
+        // version up to prompt again on its own right away: the throttle is
+        // `remind_after`, never a retirement.
+        write_outcome(
+            &outcome_path,
+            &UpdateOutcome {
+                version: "27.0.0".into(),
+                ok: false,
+                detail: Some("the installer exited with code 5".into()),
+            },
+        )
+        .unwrap();
+        absorb_update_outcome_at_launch();
+        let mut state = UpdateState::load();
+        assert_eq!(
+            state.last_failure,
+            Some(FailureRecord {
+                version: "27.0.0".into(),
+                detail: "the installer exited with code 5".into(),
+            })
+        );
+        assert!(!should_prompt(&state, "27.0.0"));
+        // The version is throttled, not retired: once the reminder expires the
+        // question comes back — the same invariant
+        // `a_failure_lets_the_version_prompt_again` pins for the in-process
+        // path.
+        let due = state
+            .remind_after
+            .expect("a failed install defers the next prompt rather than retiring it");
+        assert!(due > now_secs());
+        state.remind_after = Some(now_secs().saturating_sub(1));
+        assert!(should_prompt(&state, "27.0.0"));
+        assert!(!outcome_path.exists(), "the outcome is consumed once");
+
+        // A later launch finds no file and changes nothing.
+        absorb_update_outcome_at_launch();
+        assert_eq!(
+            UpdateState::load()
+                .last_failure
+                .as_ref()
+                .map(|f| &f.version),
+            Some(&"27.0.0".to_string())
+        );
+
+        // A success retires the failure recorded for that same version. The
+        // two name the running version here because the crate version is the
+        // only "current" a test can have.
+        write_outcome(
+            &outcome_path,
+            &UpdateOutcome {
+                version: current_version().to_string(),
+                ok: false,
+                detail: Some("first attempt failed".into()),
+            },
+        )
+        .unwrap();
+        absorb_update_outcome_at_launch();
+        assert_eq!(
+            UpdateState::load()
+                .last_failure
+                .as_ref()
+                .map(|f| &f.version),
+            Some(&current_version().to_string())
+        );
+        write_outcome(
+            &outcome_path,
+            &UpdateOutcome {
+                version: current_version().to_string(),
+                ok: true,
+                detail: None,
+            },
+        )
+        .unwrap();
+        absorb_update_outcome_at_launch();
+        assert_eq!(UpdateState::load().last_failure, None);
+        assert!(!outcome_path.exists());
+
+        // A success naming some other version is stale (a hand-installed
+        // rollback in between): dropped, never shown.
+        write_outcome(
+            &outcome_path,
+            &UpdateOutcome {
+                version: "99.0.0".into(),
+                ok: true,
+                detail: None,
+            },
+        )
+        .unwrap();
+        absorb_update_outcome_at_launch();
+        assert_eq!(UpdateState::load().last_failure, None);
+
+        // Garbage is an outcome too: a failure with an odd detail beats
+        // silence about an attempt that definitely ran.
+        std::fs::write(&outcome_path, b"not json").unwrap();
+        absorb_update_outcome_at_launch();
+        let state = UpdateState::load();
+        assert!(
+            state
+                .last_failure
+                .as_ref()
+                .is_some_and(|failure| failure.detail.contains("could not be read")),
+            "{:?}",
+            state.last_failure
+        );
+        assert!(!outcome_path.exists());
+
+        let _ = std::fs::remove_file(&state_path);
+    }
+
+    #[test]
+    fn only_our_own_staging_directories_are_swept() {
+        assert!(is_stage_name(".tty7-update-abc123"));
+        assert!(is_stage_name("tty7-update-abc123"));
+        assert!(!is_stage_name("tty7.app"));
+        assert!(!is_stage_name(".Trash"));
+        assert!(!is_stage_name("tty7-update"));
+    }
+
+    #[test]
+    fn a_staged_plan_supplies_a_fresh_parent_pid() {
+        let prepared = PreparedUpdate {
+            updater: PathBuf::from("/tmp/tty7-updater"),
+            command: "install".into(),
+            rest: vec![PathBuf::from("/tmp/stage/tty7.zip")],
+            config_dir: None,
+            stage: PathBuf::from("/tmp/stage"),
+            expected_sha256: None,
+        };
+        let args = prepared.args();
+        assert_eq!(args[0], PathBuf::from("install"));
+        // The pid is the one argument that cannot be persisted: a plan written
+        // today names a process that is gone by the time it runs.
+        assert_eq!(args[1], PathBuf::from(std::process::id().to_string()));
+        assert_eq!(args[2], PathBuf::from("/tmp/stage/tty7.zip"));
+    }
+
+    /// A plan persisted by a build from before the tail-argument protocol
+    /// cannot be carried out by its own staged helper: it relied on the
+    /// environment, which an elevated child never inherits (#504). The plan
+    /// version is what quietly drops those plans at the next launch instead
+    /// of failing weirdly against a helper that does not understand its
+    /// arguments.
+    #[test]
+    fn a_plan_from_another_protocol_version_is_not_usable() {
+        let root = tempfile::tempdir().unwrap();
+        let updater = root.path().join("tty7-updater");
+        std::fs::write(&updater, b"test updater").unwrap();
+        let stage = root.path().join("stage");
+        std::fs::create_dir(&stage).unwrap();
+
+        let plan = |plan_version| PendingUpdate {
+            version: "27.0.0".into(),
+            apply_on_launch: true,
+            plan_version,
+            updater: updater.clone(),
+            command: "install".into(),
+            rest: vec![stage.join("tty7.zip")],
+            config_dir: None,
+            stage: stage.clone(),
+            expected_sha256: None,
+        };
+        assert!(plan(PLAN_VERSION).is_usable());
+        // Plans written before the field existed deserialize it as 0.
+        assert!(!plan(0).is_usable());
+        assert!(!plan(PLAN_VERSION + 1).is_usable());
+    }
+}
