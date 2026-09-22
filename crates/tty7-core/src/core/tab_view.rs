@@ -266,7 +266,10 @@ mod tests {
             identity_from_title("deploy@10.0.0.5:2222"),
             Some("deploy@10.0.0.5".into())
         );
-        assert_eq!(identity_from_title("ann@BOX:C:/src"), Some("ann@BOX".into()));
+        assert_eq!(
+            identity_from_title("ann@BOX:C:/src"),
+            Some("ann@BOX".into())
+        );
         assert_eq!(identity_from_title("fix user@example.com: today"), None);
         assert_eq!(identity_from_title("vim — main.rs"), None);
     }
