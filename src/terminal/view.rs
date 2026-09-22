@@ -338,8 +338,10 @@ pub struct TerminalView {
     gesture_until: Option<std::time::Instant>,
     pub title: String,
     /// Last shell identity reported through OSC 0/2. Kept separately so
-    /// agents and full-screen programs cannot replace the tab identity.
+    /// ordinary full-screen programs cannot replace the tab identity; a
+    /// detected coding agent is allowed to name the tab while it is active.
     terminal_identity: Option<String>,
+    password_trigger: super::password_trigger::PasswordTriggerMatcher,
     /// A title the pane has been told about but has not adopted yet — see
     /// `set_title_when_settled`. `None` means the tab is showing the newest
     /// title there is.
@@ -1584,6 +1586,7 @@ impl TerminalView {
             gesture_until: None,
             title: DEFAULT_TITLE.to_string(),
             terminal_identity: None,
+            password_trigger: Default::default(),
             pending_title: None,
             default_title: DEFAULT_TITLE.to_string(),
             relink_abandoned: false,
@@ -1724,9 +1727,15 @@ impl TerminalView {
     /// which is what lets the tab strip and the switcher name a tab the same
     /// way.
     pub(crate) fn stated_title(&self) -> Option<&str> {
-        self.terminal_identity
-            .as_deref()
-            .or_else(|| stated_title(&self.title))
+        let agent_active = self.terminal.foreground_agent().is_some()
+            || self.terminal.agent_session().is_some();
+        if agent_active {
+            stated_title(&self.title).or(self.terminal_identity.as_deref())
+        } else {
+            self.terminal_identity
+                .as_deref()
+                .or_else(|| stated_title(&self.title))
+        }
     }
 
     /// Sets how opaque the pane wants this terminal painted; the pane leaf
@@ -2167,6 +2176,7 @@ impl TerminalView {
         }
         match ev {
             AlacEvent::Wakeup => {
+                self.poll_password_triggers(cx);
                 // The grid moved under whatever the search bar last measured.
                 self.note_output_under_search(cx);
                 // Only a pane that is on screen repaints on output. The
@@ -2251,6 +2261,38 @@ impl TerminalView {
                 self.terminal.write(reply.into_bytes());
             }
             _ => {}
+        }
+    }
+
+    fn poll_password_triggers(&mut self, cx: &mut Context<Self>) {
+        use crate::core::keychain::{
+            CredentialStore as _, OsCredentialStore, SERVICE_PASSWORD_TRIGGER,
+        };
+
+        let output = self.terminal.take_trigger_output();
+        if output.is_empty() {
+            return;
+        }
+        let rules = &cx.global::<Config>().password_triggers;
+        let Some(hit) = self.password_trigger.feed(&output, rules) else {
+            return;
+        };
+        match OsCredentialStore.get(SERVICE_PASSWORD_TRIGGER, &hit.credential) {
+            Ok(Some(secret)) => {
+                let mut bytes = secret.into_bytes();
+                if hit.send_enter {
+                    bytes.push(b'\r');
+                }
+                self.terminal.write(bytes);
+            }
+            Ok(None) => log::warn!(
+                "password trigger '{}' matched but has no keychain entry",
+                hit.credential
+            ),
+            Err(error) => log::warn!(
+                "password trigger '{}' could not read the keychain: {error}",
+                hit.credential
+            ),
         }
     }
 
