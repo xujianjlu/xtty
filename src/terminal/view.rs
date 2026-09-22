@@ -2178,9 +2178,7 @@ impl TerminalView {
                 }
             }
             AlacEvent::Title(title) => {
-                if let Some(identity) =
-                    tty7_core::core::tab_view::identity_from_title(&title)
-                {
+                if let Some(identity) = tty7_core::core::tab_view::identity_from_title(&title) {
                     self.terminal_identity = Some(identity);
                     cx.notify();
                 }
