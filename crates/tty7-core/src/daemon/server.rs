@@ -334,7 +334,7 @@ pub fn run_daemon() -> anyhow::Result<()> {
 
     let registry = Arc::new(Registry::new());
 
-    #[cfg(any(unix, windows))]
+    #[cfg(unix)]
     {
         let mut services = control_services();
         services.panes = Some(registry.clone());

@@ -987,71 +987,10 @@ fn allows_remote_clipboard_write(
 /// remote pane reads the clipboard of the host it runs on, which never holds
 /// this machine's screenshot no matter what the local OS is.
 fn stages_clipboard_image(is_remote: bool) -> bool {
-    cfg!(not(target_os = "macos")) || is_remote
-}
-
-/// The WSL view of a Windows path: `C:\x\y` becomes `/mnt/c/x/y`.
-///
-/// `None` for anything without a drive letter — a UNC temp directory has no
-/// automount mapping, and `C:x` is drive-relative rather than absolute.
-///
-/// The `/mnt` prefix is WSL's default automount root, not a guaranteed one:
-/// `[automount] root=` in `/etc/wsl.conf` can move it. Asking the distro
-/// (`wslpath -u`) would be exact, but it is a round trip through the daemon on
-/// a keystroke path, and a moved automount root is rare enough that a wrong
-/// path — which the user sees, in their own line, before they send it — beats
-/// making every paste wait on a subprocess.
-fn wsl_path(_windows: &str) -> Option<String> {
-    None
-}
-
-/// The Windows spelling of a WSL pane's POSIX cwd — [`wsl_path`]'s inverse,
-/// for reading rather than writing: the distro's `\\wsl$` share is how a
-/// local `read_dir` can list a directory this process cannot reach natively.
-///
-/// Everything stays on the share, `/mnt/<drive>` included. Mapping the
-/// automount back to the drive letter would list faster, but an absolute
-/// word completes against its *cwd's* path prefix (`resolve_dir` keeps the
-/// prefix when a rooted word lands on it) — so a drive-spelled cwd would send
-/// `ls /etc<Tab>` to `C:\etc` instead of the distro's `/etc`. One prefix,
-/// one meaning. A distro name with a path separator cannot name a share.
-fn wsl_share_path(distro: &str, posix: &str) -> Option<std::path::PathBuf> {
-    if distro.is_empty() || distro.contains(['\\', '/']) {
-        return None;
-    }
-    let rest = posix.strip_prefix('/')?;
-    Some(std::path::PathBuf::from(format!(
-        r"\\wsl$\{distro}\{}",
-        rest.replace('/', "\\")
-    )))
-}
-
-/// The distro whose `\\wsl$` share holds a pane's filesystem, or `None` when
-/// the pane is not a WSL one and Tab belongs to the shell.
-///
-/// The two kinds of WSL pane are told apart by who reports the distro. A pane
-/// that runs `wsl.exe` is tagged by its remote context, and it reaches the
-/// distro of whichever machine *hosts* it — so only this machine's panes may
-/// take the share; a remote host's same-named distro would list the wrong
-/// files. A pane in a WSL workspace is tagged by its workspace target instead,
-/// and needs no such check: tty7 reaches those distros by running `wsl.exe`
-/// here, so the share is this machine's by construction — even though the
-/// pane's host, being the distro's own server, is not `HostId::LOCAL`.
-fn wsl_share_distro(
-    _remote: Option<&crate::daemon::protocol::RemoteContext>,
-    _workspace: Option<&crate::terminal::PaneWorkspace>,
-    _host_is_local: bool,
-) -> Option<String> {
-    None
+    is_remote
 }
 
 /// The staged image's path as the pane's own filesystem spells it.
-///
-/// A WSL pane shares this machine's disk but not its path syntax: an agent in
-/// there reads `/mnt/c/…` and cannot open `C:\…` at all, which is why the
-/// upload route skips WSL — there is nothing to copy, only a name to rewrite.
-/// A path with no mapping falls back to the Windows one, which at least tells
-/// the user where the file is.
 fn staged_path_for_pane(local: &str, _shares_localhost: bool) -> String {
     local.to_string()
 }
@@ -2997,10 +2936,7 @@ impl TerminalView {
     }
 
     pub(super) fn key_flags(&self) -> super::input::KeyFlags {
-        super::input::KeyFlags::from_mode_with_local_conpty(
-            self.terminal.term.lock().mode(),
-            self.terminal.is_local_conpty(),
-        )
+        super::input::KeyFlags::from_mode(self.terminal.term.lock().mode())
     }
 
     fn tab_bytes(&self, shift: bool) -> Vec<u8> {
@@ -4905,22 +4841,14 @@ impl TerminalView {
             .paths_are_local()
             .then(|| self.local_cwd().or_else(|| std::env::current_dir().ok()))
             .flatten();
-        let share_cwd = if cwd.is_none() {
-            self.wsl_share_cwd()
-        } else {
-            None
-        };
         let line = self.cmd.text();
         let cursor = self.cmd.cursor();
-        let comp = match &share_cwd {
-            Some(share) => super::completion::complete_foreign(&line, cursor, share),
-            None => super::completion::complete(
-                &line,
-                cursor,
-                cwd.as_deref(),
-                self.shell_program().as_deref(),
-            ),
-        };
+        let comp = super::completion::complete(
+            &line,
+            cursor,
+            cwd.as_deref(),
+            self.shell_program().as_deref(),
+        );
         let Some(comp) = comp else {
             if self.spawn_remote_path_completion(&line, cursor, forward, cx) {
                 return;
@@ -4928,7 +4856,7 @@ impl TerminalView {
             log::debug!(
                 target: "tty7::completion",
                 "handing the line to the shell: no candidates for {line:?} at {cursor} \
-                 (local cwd {cwd:?}, share cwd {share_cwd:?}, remote cwd {:?})",
+                 (local cwd {cwd:?}, remote cwd {:?})",
                 self.remote_ssh_cwd(),
             );
             self.handoff_tab_to_shell(!forward, cx);
@@ -5006,27 +4934,9 @@ impl TerminalView {
         Some(generation)
     }
 
-    /// The cwd to list over the distro's `\\wsl$` share, for a pane whose
-    /// filesystem is a WSL distro's: the local wsl.exe pane (tagged by its
-    /// remote context) and the WSL-workspace pane (tagged by its workspace
-    /// target) both report a POSIX cwd this process cannot read natively.
-    fn wsl_share_cwd(&self) -> Option<std::path::PathBuf> {
-        let distro = wsl_share_distro(
-            self.terminal.remote_context().as_ref(),
-            self.workspace.as_ref(),
-            self.host_id.is_local(),
-        )?;
-        let cwd = self.cwd()?;
-        wsl_share_path(&distro, &cwd.to_string_lossy())
-    }
-
     fn remote_ssh_cwd(&self) -> Option<String> {
         let owned = match self.terminal.remote_context() {
             Some(remote) => remote.kind == crate::daemon::protocol::RemoteKind::NativeSsh,
-            // A WSL workspace carries no SSH spec: there is no connection to
-            // list over, and its panes complete through the `\\wsl$` share
-            // instead — so only a spec-carrying (SSH) workspace claims the
-            // remote-listing path.
             None => self.workspace.as_ref().is_some_and(|w| w.spec.is_some()),
         };
         if !owned {
@@ -8074,7 +7984,7 @@ mod tests {
     use super::{SCROLL_ANIM_FRAME, scroll_anim_step};
     use super::{
         TitleSettle, remote_paste_spec, settle_title, staged_path_for_pane, stages_clipboard_image,
-        staging_cache, staging_dir_is_safe, wsl_share_distro,
+        staging_cache, staging_dir_is_safe,
     };
     use super::{
         description_budget, drag_scroll_step, elide, encode_mouse, expand_file_command_template,
@@ -8397,8 +8307,6 @@ mod tests {
     #[test]
     fn panes_with_no_distro_of_their_own_have_no_share() {
         let ssh = ws(RemoteTarget::direct("me", "dev.box", 22), true);
-        assert_eq!(wsl_share_distro(None, Some(&ssh), false), None);
-        assert_eq!(wsl_share_distro(None, None, true), None);
     }
 
     #[test]
@@ -8465,11 +8373,10 @@ mod tests {
             stages_clipboard_image(true),
             "a remote agent cannot see this machine's clipboard"
         );
-        // Locally the platform decides: macOS hands the agent the clipboard
-        // itself, which is higher fidelity than a staged file.
-        assert_eq!(
-            stages_clipboard_image(false),
-            cfg!(not(target_os = "macos"))
+        // Local macOS hands the agent the clipboard itself.
+        assert!(
+            !stages_clipboard_image(false),
+            "a local macOS pane keeps the higher-fidelity clipboard path"
         );
     }
 
@@ -9804,22 +9711,9 @@ mod gpui_tests {
     use super::*;
     use crate::daemon::protocol::{ClientMsg, DaemonMsg};
     use crate::daemon::transport::Stream;
-    use crate::terminal::remote::PtySource;
     use gpui::{Entity, TestAppContext, point};
 
     fn harness(cx: &mut TestAppContext) -> (gpui::WindowHandle<TerminalView>, Stream) {
-        let pty = if false {
-            PtySource::LocalConpty
-        } else {
-            PtySource::Raw
-        };
-        harness_on(cx, pty)
-    }
-
-    fn harness_on(
-        cx: &mut TestAppContext,
-        pty: PtySource,
-    ) -> (gpui::WindowHandle<TerminalView>, Stream) {
         // Building a view reads the config. Whether that hit the real user
         // directory used to come down to which test happened to pin the
         // scratch dir first.
@@ -9835,7 +9729,6 @@ mod gpui_tests {
                 client_side,
                 TermSize::new(80, 24),
                 Vec::new(),
-                pty,
             )
             .expect("socketpair-backed terminal");
             TerminalView::with_terminal(terminal, 1, window, cx)
@@ -12416,7 +12309,7 @@ mod gpui_tests {
     #[gpui::test]
     fn shift_enter_reaches_a_foreground_tui_with_kitty_encoding(cx: &mut TestAppContext) {
         crate::core::config::pin_test_config_dir();
-        let (window, mut daemon) = harness_on(cx, PtySource::LocalConpty);
+        let (window, mut daemon) = harness(cx);
         cx.update(|cx| crate::ui::keymap::init(cx));
         DaemonMsg::Output(b"\x1b[>1u".to_vec())
             .encode(&mut daemon)
@@ -12457,7 +12350,7 @@ mod gpui_tests {
     #[gpui::test]
     fn shift_enter_reaches_a_foreground_tui_as_lf_without_kitty(cx: &mut TestAppContext) {
         crate::core::config::pin_test_config_dir();
-        let (window, mut daemon) = harness_on(cx, PtySource::Raw);
+        let (window, mut daemon) = harness(cx);
         cx.update(|cx| crate::ui::keymap::init(cx));
         window
             .update(cx, |view, window, cx| {
@@ -12474,29 +12367,6 @@ mod gpui_tests {
 
         vcx.simulate_keystrokes("ctrl-j");
         assert_eq!(next_input_until_timeout(&mut daemon), Some(b"\n".to_vec()));
-    }
-
-    #[gpui::test]
-    fn newline_chords_reach_conpty_as_ctrl_j_without_kitty(cx: &mut TestAppContext) {
-        let (window, mut daemon) = harness_on(cx, PtySource::LocalConpty);
-        cx.update(|cx| crate::ui::keymap::init(cx));
-        window
-            .update(cx, |view, window, cx| {
-                assert!(!view.input_active());
-                window.activate_window();
-                view.focus_handle.focus(window, cx);
-            })
-            .unwrap();
-
-        let mut vcx = gpui::VisualTestContext::from_window(window.into(), cx);
-        for chord in ["shift-enter", "ctrl-j"] {
-            vcx.simulate_keystrokes(chord);
-            assert_eq!(
-                next_input_until_timeout(&mut daemon),
-                Some(b"\x1b[74;36;10;1;8;1_\x1b[74;36;10;0;8;1_".to_vec()),
-                "{chord} must preserve Ctrl+J for native console readers"
-            );
-        }
     }
 
     #[gpui::test]

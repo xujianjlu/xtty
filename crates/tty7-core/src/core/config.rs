@@ -924,7 +924,7 @@ pub fn machine_config_dir() -> Option<PathBuf> {
     default_config_dir()
 }
 
-#[cfg(not(windows))]
+#[cfg(unix)]
 pub fn default_config_dir() -> Option<PathBuf> {
     let home = std::env::var_os("HOME").filter(|h| !h.is_empty())?;
     Some(PathBuf::from(home).join(".config/tty7"))

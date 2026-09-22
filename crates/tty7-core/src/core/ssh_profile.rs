@@ -293,11 +293,9 @@ pub fn expand_identity_placeholders(path: &str, host: &str, user: &str) -> Strin
     expand_tilde(&out)
 }
 
-/// The platform home directory: `%USERPROFILE%` on Windows, `$HOME` elsewhere.
+/// The home directory (`$HOME`).
 fn home_dir() -> Option<String> {
-    #[cfg(not(windows))]
-    let var = "HOME";
-    std::env::var(var).ok().filter(|h| !h.is_empty())
+    std::env::var("HOME").ok().filter(|h| !h.is_empty())
 }
 
 fn expand_tilde_with(path: &str, home: Option<&str>) -> String {

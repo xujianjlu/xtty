@@ -12,8 +12,6 @@ use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::{Config, Term, TermMode};
 use alacritty_terminal::vte::ansi::{self, CursorShape, CursorStyle};
 
-use crate::terminal::parked_cursor::{CursorCut, ParkedCursorRepair, ParkedCursorScanner};
-
 use std::collections::VecDeque;
 
 use crate::core::cli_agent::{AgentSessionState, AgentStatus, CLIAgent};
@@ -109,44 +107,6 @@ struct ReaderSignals {
     images: crate::terminal::images::ImageStore,
     clipboard_writes: Arc<Mutex<VecDeque<tty7_core::core::clipboard::ClipboardWrite>>>,
     clipboard_write_busy: Arc<AtomicBool>,
-    /// Whether this pane's pty is one a conhost renders into, and so whether
-    /// the reader puts back the cursor a repaint parked. Decided per pane from
-    /// its [`PtySource`], and shared rather than copied because the reader can
-    /// learn better mid-stream — see the `RemoteContext` arm.
-    local_conpty: Arc<AtomicBool>,
-}
-
-/// What kind of pty is at the far end of a pane's link, which is what decides
-/// whether a conhost stands between the application and us.
-///
-/// The distinction is not the platform this client was built for. A Windows
-/// client's panes are a mix: a local shell — or `wsl.exe`, or an `ssh` client,
-/// which are ordinary programs inside the same ConPTY — is rendered by conhost,
-/// while a pane on a remote `tty7-server` (Linux or macOS only, see
-/// [`tty7_core::daemon::install::asset::asset_for_uname`]) or on a native-SSH
-/// channel is a raw unix pty whose bytes reach us untouched.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PtySource {
-    /// A pty this machine's Windows daemon opened: a ConPTY, with conhost
-    /// painting frames into it.
-    LocalConpty,
-    /// A pty nothing repaints on our behalf — every pty on unix, and every pty
-    /// reached over a link.
-    Raw,
-}
-
-impl PtySource {
-    /// The source a pane spawned or attached on `route` reads from. The
-    /// platform enters here and nowhere else: a local route means a pty this
-    /// machine opened, and only on Windows is that a ConPTY.
-    ///
-    /// `Unroutable` is a route that could not be resolved, so it never gets a
-    /// pty at all; answering as if it were local costs nothing and keeps the
-    /// match total.
-    fn for_route(route: &PaneRoute) -> PtySource {
-        let _ = route;
-        PtySource::Raw
-    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -603,12 +563,6 @@ pub struct RemoteTerminal {
     /// flag under the term lock before every grid mutation, so once it is set
     /// the abandoned thread can only exit, never write.
     reader_quit: Arc<AtomicBool>,
-    /// Whether this pane's pty is a ConPTY, for input encoding and repairing
-    /// the cursor a repaint parks. Held here so a relink hands the same answer
-    /// to the reader it starts: a pane's pty does not change kind when the link
-    /// to it is rebuilt, and the route a relink carries cannot tell a
-    /// native-SSH pane from a local shell.
-    local_conpty: Arc<AtomicBool>,
 }
 
 /// The workspace id a spawn carries, so the pane's shell gets `$TTY7_WS` and a
@@ -770,7 +724,7 @@ impl RemoteTerminal {
         };
 
         let mut term =
-            Self::from_stream_with(stream, size, Vec::new(), PtySource::for_route(route))?;
+            Self::from_stream_with(stream, size, Vec::new())?;
         term.route = route.clone();
         term.seed_cwd(spawned_in);
         Ok((term, pane_id))
@@ -841,7 +795,7 @@ impl RemoteTerminal {
             Err(e) => return Err(e),
         };
         let mut term =
-            Self::from_stream_parts(stream, size, buffered, PtySource::for_route(route), true)?;
+            Self::from_stream_parts(stream, size, buffered, true)?;
         term.route = route.clone();
         Ok(term)
     }
@@ -939,11 +893,6 @@ impl RemoteTerminal {
                 images: self.images.clone(),
                 clipboard_writes: self.clipboard_writes.clone(),
                 clipboard_write_busy: self.clipboard_write_busy.clone(),
-                // Deliberately the pane's existing answer rather than one
-                // rebuilt from `route`: the pty on the far side is the same pty
-                // it was before the link dropped, and only this value still
-                // remembers what a `RemoteContext` taught the old reader.
-                local_conpty: self.local_conpty.clone(),
             },
         );
         self.reader_thread = Some(reader);
@@ -963,33 +912,21 @@ impl RemoteTerminal {
     /// daemon replaying state the pane already had.
     #[cfg(test)]
     pub(super) fn from_stream_reattached(stream: Stream, size: TermSize) -> anyhow::Result<Self> {
-        Self::from_stream_parts(
-            stream,
-            size,
-            Vec::new(),
-            PtySource::for_route(&PaneRoute::Local),
-            true,
-        )
+        Self::from_stream_parts(stream, size, Vec::new(), true)
     }
 
     /// A pane on a pty of this machine's own — what the tests build, and what
     /// `spawn_on` narrows with the route it dialled.
     pub(super) fn from_stream(stream: Stream, size: TermSize) -> anyhow::Result<Self> {
-        Self::from_stream_with(
-            stream,
-            size,
-            Vec::new(),
-            PtySource::for_route(&PaneRoute::Local),
-        )
+        Self::from_stream_with(stream, size, Vec::new())
     }
 
     pub(super) fn from_stream_with(
         stream: Stream,
         size: TermSize,
         buffered: Vec<u8>,
-        pty: PtySource,
     ) -> anyhow::Result<Self> {
-        Self::from_stream_parts(stream, size, buffered, pty, false)
+        Self::from_stream_parts(stream, size, buffered, false)
     }
 
     /// `awaiting_replay` says this link is an attach rather than a spawn, and
@@ -1002,7 +939,6 @@ impl RemoteTerminal {
         stream: Stream,
         size: TermSize,
         buffered: Vec<u8>,
-        pty: PtySource,
         awaiting_replay: bool,
     ) -> anyhow::Result<Self> {
         let read_half = stream.try_clone()?;
@@ -1038,7 +974,6 @@ impl RemoteTerminal {
         let clipboard_write_busy = Arc::new(AtomicBool::new(false));
 
         let reader_quit = Arc::new(AtomicBool::new(false));
-        let local_conpty = Arc::new(AtomicBool::new(pty == PtySource::LocalConpty));
         let reader_thread = Self::spawn_reader(
             term.clone(),
             proxy.clone(),
@@ -1063,7 +998,6 @@ impl RemoteTerminal {
                 images: images.clone(),
                 clipboard_writes: clipboard_writes.clone(),
                 clipboard_write_busy: clipboard_write_busy.clone(),
-                local_conpty: local_conpty.clone(),
             },
         );
 
@@ -1104,7 +1038,6 @@ impl RemoteTerminal {
             proxy,
             reader_thread: Some(reader_thread),
             reader_quit,
-            local_conpty,
         })
     }
 
@@ -1176,8 +1109,7 @@ impl RemoteTerminal {
                     images,
                     clipboard_writes,
                     clipboard_write_busy,
-                    local_conpty,
-                } = signals;
+                        } = signals;
                 let mut awaiting_replay = awaiting_replay;
                 crate::core::threads::promote_to_user_interactive();
                 let mut stream = read_half;
@@ -1185,8 +1117,6 @@ impl RemoteTerminal {
                 let mut osc = OscNotifyScanner::default();
                 let mut mode_tok = OscTokenizer::new(&[b"133"]);
                 let mut zle_tok = OscTokenizer::new(&[b"133"]);
-                let mut cursor_scan = ParkedCursorScanner::new();
-                let mut parked_cursor = ParkedCursorRepair::default();
                 let mut pending: Vec<u8> = buffered;
                 // Kitty-graphics decode runs on its own thread with newest-frame
                 // coalescing (issue #213): inflating a full-window browser frame
@@ -1237,15 +1167,6 @@ impl RemoteTerminal {
                     macro_rules! flush_batch {
                         () => {
                             if !out_batch.is_empty() {
-                                // The scanner reports an offset one past each
-                                // sequence it matched, in ascending order, so
-                                // the batch splits at each of them: advance the
-                                // emulator to the cut, act on the state that
-                                // sequence left behind, carry on.
-                                let mut cuts: Vec<(usize, CursorCut)> = Vec::new();
-                                if local_conpty.load(Ordering::Relaxed) {
-                                    cursor_scan.feed(&out_batch, |off, c| cuts.push((off, c)));
-                                }
                                 {
                                     let t0 = trace.then(std::time::Instant::now);
                                     let mut term = term.lock();
@@ -1253,17 +1174,7 @@ impl RemoteTerminal {
                                         return;
                                     }
                                     let t1 = trace.then(std::time::Instant::now);
-                                    if cuts.is_empty() {
-                                        processor.advance(&mut *term, &out_batch);
-                                    } else {
-                                        let mut at = 0usize;
-                                        for (off, cut) in cuts {
-                                            processor.advance(&mut *term, &out_batch[at..off]);
-                                            at = off;
-                                            parked_cursor.apply(&mut term, cut);
-                                        }
-                                        processor.advance(&mut *term, &out_batch[at..]);
-                                    }
+                                    processor.advance(&mut *term, &out_batch);
                                     if let (Some(t0), Some(t1)) = (t0, t1) {
                                         tr_lock_t += t1 - t0;
                                         tr_adv_t += t1.elapsed();
@@ -1377,8 +1288,6 @@ impl RemoteTerminal {
                             }
                             DaemonMsg::Snapshot(bytes) => {
                                 flush_batch!();
-                                cursor_scan.reset();
-                                parked_cursor.reset();
                                 proxy.replaying.store(true, Ordering::Relaxed);
                                 {
                                     let mut term = term.lock();
@@ -1568,24 +1477,6 @@ impl RemoteTerminal {
                                 if let Ok(mut guard) = cwd.lock() {
                                     *guard = None;
                                 }
-                                // A native-SSH pane's pty is the far host's,
-                                // however local the daemon that dialled it: the
-                                // daemon bridges an ssh channel straight through
-                                // and opens no ConPTY of its own. The route
-                                // cannot say so — such a pane is spawned and
-                                // attached through the local daemon like any
-                                // other — so this frame is where a client that
-                                // reopened onto an existing one finds out. A
-                                // one-way latch: the far end of an ssh channel
-                                // never becomes a local pty later, while an
-                                // `ssh` *command* (RemoteKind::Ssh) is a program
-                                // inside a ConPTY and keeps the repair.
-                                if ctx
-                                    .as_ref()
-                                    .is_some_and(|c| c.kind == RemoteKind::NativeSsh)
-                                {
-                                    local_conpty.store(false, Ordering::Relaxed);
-                                }
                                 if let Ok(mut guard) = remote.lock() {
                                     *guard = ctx;
                                 }
@@ -1713,10 +1604,6 @@ impl RemoteTerminal {
 
     pub fn child_exited(&self) -> bool {
         self.child_exited.load(Ordering::SeqCst)
-    }
-
-    pub(super) fn is_local_conpty(&self) -> bool {
-        self.local_conpty.load(Ordering::Relaxed)
     }
 
     /// Queues a keystroke — or a paste, or a mouse report — for the link.
@@ -1997,7 +1884,7 @@ impl RemoteTerminal {
         // The local daemon dialled this one, but it opened no pty for it: the
         // pane is an ssh channel bridged straight through, so the bytes are the
         // far host's raw pty and no conhost ever sees them.
-        let mut term = Self::from_stream_with(stream, size, Vec::new(), PtySource::Raw)?;
+        let mut term = Self::from_stream_with(stream, size, Vec::new())?;
         term.ssh_endpoint = Some(endpoint);
         term.ssh_user = Some(user);
         term.auto_supplied_password = auto_supplied_password;
@@ -2788,253 +2675,6 @@ mod route_header_tests {
     }
 }
 
-/// Issue #430, and #774 for the half of it that was still open.
-///
-/// Whether the reader puts back a parked cursor is a property of the pty this
-/// pane is attached to, not of the platform the client was compiled for — so
-/// these drive both answers on every platform, over a real socket pair. Before
-/// #774 the decision was `false`, which meant a Windows client talking
-/// to a Linux host repaired a cursor no conhost had parked, and the `wq` typed
-/// after vim's `:` landed on the row being edited.
-#[cfg(test)]
-mod parked_cursor_tests {
-    use super::replay_tests::socket_pair;
-    use super::*;
-    use std::io::Write as _;
-
-    fn terminal_on(pty: PtySource, size: TermSize) -> (RemoteTerminal, Stream) {
-        crate::core::config::pin_test_config_dir();
-        let (client_side, daemon_side) = socket_pair();
-        let term = RemoteTerminal::from_stream_with(client_side, size, Vec::new(), pty)
-            .expect("a terminal over a socket pair");
-        assert_eq!(term.is_local_conpty(), pty == PtySource::LocalConpty);
-        (term, daemon_side)
-    }
-
-    /// Feeds one conhost-shaped repaint and reports the cell the cursor ends on,
-    /// waiting for the `X` the frame paints so the reader is known to be done.
-    fn cursor_after_conpty_frame(pty: PtySource, frame: &[u8]) -> (i32, usize) {
-        let (term, mut daemon_side) = terminal_on(pty, TermSize::new(80, 24));
-
-        // Where the TUI put the cursor before conhost repainted over it.
-        DaemonMsg::Output(b"\x1b[6;4H".to_vec())
-            .encode(&mut daemon_side)
-            .unwrap();
-        DaemonMsg::Output(frame.to_vec())
-            .encode(&mut daemon_side)
-            .unwrap();
-        daemon_side.flush().unwrap();
-
-        for _ in 0..600 {
-            {
-                let t = term.term.lock();
-                let painted = t.grid()[alacritty_terminal::index::Line(19)]
-                    [alacritty_terminal::index::Column(1)]
-                .c;
-                if painted == 'X' {
-                    let point = t.grid().cursor.point;
-                    return (point.line.0, point.column.0);
-                }
-            }
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-        panic!("the reader never applied the frame");
-    }
-
-    #[test]
-    fn a_local_route_is_a_conpty_only_where_conhost_exists() {
-        assert_eq!(
-            PtySource::for_route(&PaneRoute::Local),
-            if false {
-                PtySource::LocalConpty
-            } else {
-                PtySource::Raw
-            },
-        );
-    }
-
-    #[test]
-    fn a_routed_pane_reads_a_raw_pty_whatever_the_client_was_built_for() {
-        let spec: NativeSshSpec = serde_json::from_str(
-            r#"{"host":"linux-box","port":22,"user":"dev","auth_mode":"auto"}"#,
-        )
-        .unwrap();
-        // A remote workspace only ever installs a `tty7-server` on Linux or
-        // macOS (`install::asset::asset_for_uname`), and a WSL workspace is a
-        // Linux server too, so a routed pane's pty is a raw one — the far end
-        // is never a conhost, whoever is dialling it.
-        for header in [
-            crate::daemon::router::RouteHeader::ssh(spec),
-            crate::daemon::router::RouteHeader::local_stdio("tty7-server", &[]),
-        ] {
-            let route = PaneRoute::Remote {
-                header: Box::new(header),
-                resize_echo: false,
-            };
-            assert_eq!(PtySource::for_route(&route), PtySource::Raw);
-        }
-    }
-
-    #[test]
-    fn a_conpty_frame_that_shows_the_cursor_over_an_erase_keeps_the_cell_it_hid_on() {
-        assert_eq!(
-            cursor_after_conpty_frame(
-                PtySource::LocalConpty,
-                b"\x1b[?25l\x1b[20;2HX\x1b[K\x1b[m\x1b[22;42H\x1b[K\x1b[?25h",
-            ),
-            (5, 3),
-            "conhost parked the cursor on the cell it erased last; the cursor \
-             belongs where it was when the repaint hid it"
-        );
-    }
-
-    #[test]
-    fn the_same_frame_off_a_raw_pty_leaves_the_cursor_where_the_frame_left_it() {
-        assert_eq!(
-            cursor_after_conpty_frame(
-                PtySource::Raw,
-                b"\x1b[?25l\x1b[20;2HX\x1b[K\x1b[m\x1b[22;42H\x1b[K\x1b[?25h",
-            ),
-            (21, 41),
-            "with no conhost in between the stream is the application's own, \
-             and the cell it left the cursor on is the cell it meant"
-        );
-    }
-
-    #[test]
-    fn a_conpty_frame_that_moves_the_cursor_before_showing_it_is_obeyed() {
-        assert_eq!(
-            cursor_after_conpty_frame(
-                PtySource::LocalConpty,
-                b"\x1b[?25l\x1b[20;2HX\x1b[K\x1b[m\x1b[22;42H\x1b[K\x1b[9;9H\x1b[?25h"
-            ),
-            (8, 8),
-            "the frame painted the cursor somewhere on purpose"
-        );
-    }
-
-    /// Vim opens its command line with exactly the shape the parked-cursor
-    /// scanner calls parked — hide, move around to paint, end on the `:` it
-    /// wrote — and then echoes every following keystroke as a bare byte at
-    /// wherever that left the cursor. Putting the cursor back on a raw pty
-    /// therefore does not straighten out a stray caret, it drops `wq!` onto the
-    /// row vim was editing. Bytes below are a capture of vim 9 on a 20x11 pty.
-    #[test]
-    fn a_raw_pty_repaint_keeps_the_cursor_the_frame_left_so_the_echo_lands_on_it() {
-        let (term, mut daemon_side) = terminal_on(PtySource::Raw, TermSize::new(20, 11));
-
-        let mut stream: Vec<u8> = Vec::new();
-        // `vim test.md`: the alternate screen, the file, cursor home.
-        stream.extend_from_slice(b"\x1b[?1049h\x1b[H\x1b[2J\x1b[1;1H123456789\x1b[1;1H");
-        // Esc, then `:` — two bracketed repaints, the second ending on the `:`
-        // vim wrote at the head of the command line.
-        stream.extend_from_slice(b"\x1b[?25l\x1b[m\x1b[11;10H^[\x1b[1;1H\x1b[?25h");
-        stream.extend_from_slice(b"\x1b[?25l\x1b[11;10H  \x1b[1;1H\x07\x1b[?25h");
-        stream.extend_from_slice(
-            b"\x1b[?25l\x1b[11;10H:\x1b[1;1H\x1b[11;1H\x1b[K\x1b[11;1H:\x1b[?25h",
-        );
-        // `w`, `q`, `!`: vim echoes them with no positioning of their own.
-        stream.extend_from_slice(b"wq!");
-        DaemonMsg::Output(stream).encode(&mut daemon_side).unwrap();
-        daemon_side.flush().unwrap();
-
-        let row = |t: &Term<EventProxy>, line: i32| -> String {
-            (0..20)
-                .map(|col| {
-                    t.grid()[alacritty_terminal::index::Line(line)]
-                        [alacritty_terminal::index::Column(col)]
-                    .c
-                })
-                .collect::<String>()
-                .trim_end()
-                .to_string()
-        };
-
-        // The whole batch is applied under one lock, so the `:` landing on the
-        // command line means every byte after it landed too.
-        let mut command_line = String::new();
-        let mut edited = String::new();
-        for _ in 0..600 {
-            {
-                let t = term.term.lock();
-                command_line = row(&t, 10);
-                edited = row(&t, 0);
-            }
-            if command_line.starts_with(':') {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-        assert_eq!(
-            command_line, ":wq!",
-            "the keystrokes belong after the `:` the repaint ended on"
-        );
-        assert_eq!(
-            edited, "123456789",
-            "and nothing of them belongs on the row vim was editing"
-        );
-    }
-
-    /// The route cannot tell a native-SSH pane from a local shell: both are
-    /// spawned through this machine's daemon. What tells them apart is the
-    /// `RemoteContext` the daemon sends — and it has to, because a window
-    /// reopening onto an existing native-SSH pane attaches by id and has
-    /// nothing else to go on.
-    #[test]
-    fn a_native_ssh_context_turns_the_repair_off_mid_stream() {
-        let (term, mut daemon_side) = terminal_on(PtySource::LocalConpty, TermSize::new(80, 24));
-
-        DaemonMsg::RemoteContext(Some(RemoteContext {
-            kind: RemoteKind::NativeSsh,
-            argv: Vec::new(),
-            target: "dev@linux-box".into(),
-        }))
-        .encode(&mut daemon_side)
-        .unwrap();
-        daemon_side.flush().unwrap();
-        for _ in 0..600 {
-            if term.remote_context().is_some() {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-        assert!(
-            term.remote_context().is_some(),
-            "the reader never applied the context"
-        );
-        assert!(!term.is_local_conpty());
-
-        DaemonMsg::Output(b"\x1b[6;4H".to_vec())
-            .encode(&mut daemon_side)
-            .unwrap();
-        DaemonMsg::Output(b"\x1b[?25l\x1b[20;2HX\x1b[K\x1b[m\x1b[22;42H\x1b[K\x1b[?25h".to_vec())
-            .encode(&mut daemon_side)
-            .unwrap();
-        daemon_side.flush().unwrap();
-
-        let mut cursor = (0, 0);
-        for _ in 0..600 {
-            {
-                let t = term.term.lock();
-                let painted = t.grid()[alacritty_terminal::index::Line(19)]
-                    [alacritty_terminal::index::Column(1)]
-                .c;
-                if painted == 'X' {
-                    let point = t.grid().cursor.point;
-                    cursor = (point.line.0, point.column.0);
-                    break;
-                }
-            }
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-        assert_eq!(
-            cursor,
-            (21, 41),
-            "an ssh channel's bytes are the far host's own; nothing parked that cursor"
-        );
-    }
-}
-
 /// Issue #774, from the client's end. A full-screen tool sets its modes once
 /// and the replay ring drops them, so the daemon re-sends them from what it
 /// folded out of the stream ([`tty7_core::core::term_modes`]). This is the
@@ -3146,6 +2786,7 @@ mod tests {
     }
 
     #[test]
+<<<<<<< HEAD
     fn a_wsl_workspace_routes_by_distro() {
         let ws = PaneWorkspace {
             workspace: crate::core::session::WorkspaceId::new(),
@@ -3164,6 +2805,8 @@ mod tests {
     }
 
     #[test]
+=======
+>>>>>>> a8e5cf4 (Strip dead ConPTY/WSL client paths for macOS-only GUI)
     fn a_local_stdio_workspace_routes_to_a_child_process_on_the_pane_dialect() {
         let ws = PaneWorkspace {
             workspace: crate::core::session::WorkspaceId::new(),
@@ -3521,7 +3164,6 @@ mod tests {
             client_side,
             TermSize::new(80, 24),
             buffered,
-            PtySource::Raw,
         )
         .unwrap();
 

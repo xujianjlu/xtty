@@ -17,7 +17,6 @@ mod link_probe;
 mod loopback;
 pub mod palette;
 pub(crate) mod pane_liveness;
-pub(crate) mod parked_cursor;
 mod password_trigger;
 mod remote;
 mod reverse_search;

@@ -897,14 +897,14 @@ mod tests {
         }
     }
 
-    #[cfg(not(windows))]
+    #[cfg(unix)]
     fn echo_command() -> std::process::Command {
         let mut c = std::process::Command::new("echo");
         c.arg("tty7");
         c
     }
 
-    #[cfg(not(windows))]
+    #[cfg(unix)]
     fn sleeper_command() -> std::process::Command {
         let mut c = std::process::Command::new("sleep");
         c.arg("60");

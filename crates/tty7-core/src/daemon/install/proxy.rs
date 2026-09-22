@@ -66,7 +66,7 @@ fn system_proxy(target_url: &str) -> Option<Proxy> {
     macos::system_proxy(target_url)
 }
 
-#[cfg(not(any(windows, target_os = "macos")))]
+#[cfg(not(target_os = "macos"))]
 fn system_proxy(_target_url: &str) -> Option<Proxy> {
     None
 }

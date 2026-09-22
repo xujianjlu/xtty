@@ -305,7 +305,7 @@ mod tests {
 
     #[test]
     fn every_variant_has_a_distinct_label() {
-        let labels = ["streamlocal", "session-exec", "wsl-stdio", "local-stdio"];
+        let labels = ["streamlocal", "session-exec", "local-stdio"];
         let mut sorted = labels.to_vec();
         sorted.sort_unstable();
         sorted.dedup();

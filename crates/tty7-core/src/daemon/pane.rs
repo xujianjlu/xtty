@@ -22,12 +22,12 @@ use crate::daemon::protocol::{
 };
 use crate::daemon::shell_integration;
 
-#[cfg(not(windows))]
+#[cfg(unix)]
 fn default_prog() -> CommandBuilder {
     default_prog_with_override(detected_shell_override())
 }
 
-#[cfg(not(windows))]
+#[cfg(unix)]
 fn default_prog_with_override(shell_override: Option<String>) -> CommandBuilder {
     let cmd = CommandBuilder::new_default_prog();
     let portable_shell = cmd.get_shell();
@@ -37,13 +37,13 @@ fn default_prog_with_override(shell_override: Option<String>) -> CommandBuilder 
     cmd
 }
 
-#[cfg(not(windows))]
+#[cfg(unix)]
 fn detected_shell_override() -> Option<String> {
     let path = std::env::var_os(crate::daemon::DETECTED_SHELL_ENV)?;
     usable_shell_path(path)
 }
 
-#[cfg(not(windows))]
+#[cfg(unix)]
 fn usable_shell_path(path: std::ffi::OsString) -> Option<String> {
     let path = PathBuf::from(path);
     if path.as_os_str().is_empty() || !path.is_file() {
@@ -52,7 +52,7 @@ fn usable_shell_path(path: std::ffi::OsString) -> Option<String> {
     path.into_os_string().into_string().ok()
 }
 
-#[cfg(not(windows))]
+#[cfg(unix)]
 fn default_shell_name(cmd: &CommandBuilder) -> String {
     cmd.get_shell()
 }
@@ -3519,7 +3519,7 @@ mod tests {
         );
     }
 
-    #[cfg(not(windows))]
+    #[cfg(unix)]
     #[test]
     fn detected_shell_override_uses_explicit_command_builder() {
         let portable_shell = CommandBuilder::new_default_prog().get_shell();
@@ -3535,7 +3535,7 @@ mod tests {
         assert_eq!(argv, vec![detected_shell]);
     }
 
-    #[cfg(not(windows))]
+    #[cfg(unix)]
     #[test]
     fn no_detected_shell_keeps_portable_login_default() {
         let cmd = default_prog_with_override(None);

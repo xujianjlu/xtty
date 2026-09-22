@@ -1473,7 +1473,7 @@ fn legacy_data_dir() -> Option<PathBuf> {
     if let Some(explicit) = std::env::var_os(DATA_DIR_ENV).filter(|v| !v.is_empty()) {
         return Some(PathBuf::from(explicit));
     }
-    #[cfg(not(windows))]
+    #[cfg(unix)]
     let base = env_dir("XDG_DATA_HOME")
         .or_else(|| env_dir("HOME").map(|h| h.join(".local").join("share")));
     base.map(|b| b.join("tty7"))
