@@ -53,9 +53,9 @@ Mirrors the serde model in `src/terminal/signature.rs` one-to-one:
 ## Scope & rollout
 
 Signatures are **read from disk**, not embedded: `signature::spec_source` resolves
-a `completions/` directory (inside the macOS `.app` bundle's `Resources`, beside
-the executable on Linux/Windows, or the in-tree `assets/completions` for
-`cargo run`/tests) and lazily loads `<cmd>.json` by command name. So adding a
+a `completions/` directory (inside the macOS `.app` bundle's `Resources`, or
+the in-tree `assets/completions` for `cargo run`/tests) and lazily loads
+`<cmd>.json` by command name. So adding a
 command is just dropping its JSON into `assets/completions/` — the packaging
 scripts copy the whole directory into each bundle, and no recompile or binary
 bloat is involved. A big spec is ~300–500 KiB; the full corpus is ~700 commands,

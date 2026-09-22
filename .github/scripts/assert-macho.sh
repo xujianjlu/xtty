@@ -4,14 +4,14 @@
 # on nothing but the libraries every macOS already has, and carries a code
 # signature.
 #
-# The macOS counterpart of assert-static.sh, and the same decision (D10) behind
-# it: one `tty7-server` binary is pushed to an arbitrary remote Mac and has to
-# run there with nothing installed alongside it. Static linking is not the
-# instrument on macOS — Apple does not ship a static libSystem and linking one
-# is unsupported — so the equivalent guarantee is "links only what the OS
-# guarantees is present". A stray Homebrew dependency picked up from the runner
-# would still compile, still pass a build-only job, and then fail on the first
-# Mac that does not have /opt/homebrew — far from the change that caused it.
+# Decision D10 for remote Macs: one `tty7-server` binary is pushed to an
+# arbitrary remote Mac and has to run there with nothing installed alongside it.
+# Static linking is not the instrument on macOS — Apple does not ship a static
+# libSystem and linking one is unsupported — so the equivalent guarantee is
+# "links only what the OS guarantees is present". A stray Homebrew dependency
+# picked up from the runner would still compile, still pass a build-only job,
+# and then fail on the first Mac that does not have /opt/homebrew — far from
+# the change that caused it.
 set -euo pipefail
 
 BIN="$1"

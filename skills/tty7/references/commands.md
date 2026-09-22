@@ -45,7 +45,7 @@ Outside a tty7 shell the address-taking verbs fail with
 | 1 | the command failed; the reason is one line on stderr, prefixed `tty7:` |
 | 2 | usage error (clap) — unknown verb, missing argument, bad type |
 | 124 | `tty7 wait` gave up — the `timeout(1)` convention, so "not yet" is distinguishable from "broken" |
-| 141 | Unix only: the reader hung up (`| head -1`) and SIGPIPE ended it, exactly as it ends `cat`. Not a failure. Windows reports 0 for the same thing, having no signal to imitate. |
+| 141 | The reader hung up (`| head -1`) and SIGPIPE ended it, exactly as it ends `cat`. Not a failure. |
 | *other* | only from `tty7 run`, which passes the child's exit code through |
 
 If `run` cannot learn the child's code it prints a note to stderr and exits 1
@@ -174,12 +174,11 @@ screen, though: what scrolled past the top is gone, and an exit code was never
 on screen — redirect to a file when you want the answer rather than the view.
 
 `--tail N` keeps the last N lines of the answer and drops the rest — "how did
-the last command end?" without a pipe through `tail(1)`, a program Windows does
-not have. It trims last, after `--plain` has decided what a line is, so a line
-the shell wrapped counts once: `--plain --tail 1` hands back the whole of the
-last line rather than its final row. `N` must be at least 1 — a tail of nothing
-would read as a blank pane. The server still replays the whole ring, so the
-saving is the pipe and not the wire.
+the last command end?" without a pipe through `tail(1)`. It trims last, after
+`--plain` has decided what a line is, so a line the shell wrapped counts once:
+`--plain --tail 1` hands back the whole of the last line rather than its final
+row. `N` must be at least 1 — a tail of nothing would read as a blank pane. The
+server still replays the whole ring, so the saving is the pipe and not the wire.
 
 Either way it is a snapshot, not a stream: it collects the replay the server
 sends, settles for ~300 ms, and returns. Call it again for a newer one.
