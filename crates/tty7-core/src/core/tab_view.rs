@@ -57,6 +57,34 @@ pub enum TabLabel<'a> {
     Unknown,
 }
 
+/// Extracts the stable `user@host` identity from a conventional terminal title.
+pub fn identity_from_title(raw: &str) -> Option<String> {
+    let raw = strip_status_mark(raw.trim());
+    let (head, tail) = raw.split_once(':').unwrap_or((raw, ""));
+    let (user, host) = head.split_once('@')?;
+    if user.is_empty() || host.is_empty() || user.chars().any(char::is_whitespace) {
+        return None;
+    }
+    if host
+        .chars()
+        .any(|c| c.is_whitespace() || matches!(c, '/' | '\\'))
+    {
+        return None;
+    }
+    if !tail.is_empty()
+        && !tail.bytes().all(|b| b.is_ascii_digit())
+        && !(tail.starts_with('/')
+            || tail.starts_with('~')
+            || tail.starts_with(' ')
+            || (tail.len() >= 3
+                && tail.as_bytes()[0].is_ascii_alphabetic()
+                && tail.as_bytes()[1] == b':'))
+    {
+        return None;
+    }
+    Some(format!("{user}@{host}"))
+}
+
 /// Cuts the `user@host:` head that a shell integration writes into its title,
 /// leaving the path (or command) it actually names. A title with no such head —
 /// an agent's, which is prose — comes back untouched, and so does a bare
@@ -227,6 +255,21 @@ pub fn tab_views_of(ws: &Workspace, panes: &[PaneRecord]) -> Vec<TabView> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn identity_is_kept_while_paths_and_ports_are_dropped() {
+        assert_eq!(
+            identity_from_title("search@prod-01:~/retr"),
+            Some("search@prod-01".into())
+        );
+        assert_eq!(
+            identity_from_title("deploy@10.0.0.5:2222"),
+            Some("deploy@10.0.0.5".into())
+        );
+        assert_eq!(identity_from_title("ann@BOX:C:/src"), Some("ann@BOX".into()));
+        assert_eq!(identity_from_title("fix user@example.com: today"), None);
+        assert_eq!(identity_from_title("vim — main.rs"), None);
+    }
 
     /// The marks come off, whichever alphabet the agent picked.
     #[test]
