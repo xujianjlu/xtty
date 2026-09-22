@@ -337,6 +337,11 @@ pub struct TerminalView {
     scroll_anim_epoch: u64,
     gesture_until: Option<std::time::Instant>,
     pub title: String,
+    /// Last shell identity reported through OSC 0/2. Kept separately so
+    /// ordinary full-screen programs cannot replace the tab identity; a
+    /// detected coding agent is allowed to name the tab while it is active.
+    terminal_identity: Option<String>,
+    password_trigger: super::password_trigger::PasswordTriggerMatcher,
     /// A title the pane has been told about but has not adopted yet — see
     /// `set_title_when_settled`. `None` means the tab is showing the newest
     /// title there is.
@@ -1580,6 +1585,8 @@ impl TerminalView {
             scroll_anim_epoch: 0,
             gesture_until: None,
             title: DEFAULT_TITLE.to_string(),
+            terminal_identity: None,
+            password_trigger: Default::default(),
             pending_title: None,
             default_title: DEFAULT_TITLE.to_string(),
             relink_abandoned: false,
@@ -1720,7 +1727,15 @@ impl TerminalView {
     /// which is what lets the tab strip and the switcher name a tab the same
     /// way.
     pub(crate) fn stated_title(&self) -> Option<&str> {
-        stated_title(&self.title)
+        let agent_active =
+            self.terminal.foreground_agent().is_some() || self.terminal.agent_session().is_some();
+        if agent_active {
+            stated_title(&self.title).or(self.terminal_identity.as_deref())
+        } else {
+            self.terminal_identity
+                .as_deref()
+                .or_else(|| stated_title(&self.title))
+        }
     }
 
     /// Sets how opaque the pane wants this terminal painted; the pane leaf
@@ -2161,6 +2176,7 @@ impl TerminalView {
         }
         match ev {
             AlacEvent::Wakeup => {
+                self.poll_password_triggers(cx);
                 // The grid moved under whatever the search bar last measured.
                 self.note_output_under_search(cx);
                 // Only a pane that is on screen repaints on output. The
@@ -2171,7 +2187,13 @@ impl TerminalView {
                     cx.notify();
                 }
             }
-            AlacEvent::Title(title) => self.set_title_when_settled(title, cx),
+            AlacEvent::Title(title) => {
+                if let Some(identity) = tty7_core::core::tab_view::identity_from_title(&title) {
+                    self.terminal_identity = Some(identity);
+                    cx.notify();
+                }
+                self.set_title_when_settled(title, cx);
+            }
             AlacEvent::ResetTitle => self.set_title_when_settled(self.default_title.clone(), cx),
             AlacEvent::PtyWrite(text) => self.terminal.write(text.into_bytes()),
             AlacEvent::ChildExit(_) | AlacEvent::Exit => {
@@ -2242,6 +2264,38 @@ impl TerminalView {
         }
     }
 
+    fn poll_password_triggers(&mut self, cx: &mut Context<Self>) {
+        use crate::core::keychain::{
+            CredentialStore as _, OsCredentialStore, SERVICE_PASSWORD_TRIGGER,
+        };
+
+        let output = self.terminal.take_trigger_output();
+        if output.is_empty() {
+            return;
+        }
+        let rules = &cx.global::<Config>().password_triggers;
+        let Some(hit) = self.password_trigger.feed(&output, rules) else {
+            return;
+        };
+        match OsCredentialStore.get(SERVICE_PASSWORD_TRIGGER, &hit.credential) {
+            Ok(Some(secret)) => {
+                let mut bytes = secret.into_bytes();
+                if hit.send_enter {
+                    bytes.push(b'\r');
+                }
+                self.terminal.write(bytes);
+            }
+            Ok(None) => log::warn!(
+                "password trigger '{}' matched but has no keychain entry",
+                hit.credential
+            ),
+            Err(error) => log::warn!(
+                "password trigger '{}' could not read the keychain: {error}",
+                hit.credential
+            ),
+        }
+    }
+
     fn report_focus_change(&self, focused: bool) {
         let mode = *self.terminal.term.lock().mode();
         if let Some(bytes) = focus_report_bytes(mode, focused) {
@@ -2279,6 +2333,24 @@ impl TerminalView {
                 self.close_search(window, cx);
                 cx.stop_propagation();
             }
+            return;
+        }
+
+        // History search is a window feature, not a privilege granted by the
+        // shell integration. A second ssh/su entered inside a pane cannot emit
+        // tty7's OSC prompt marks, but Cmd/Ctrl+R must still open the same
+        // history UI there. Full-screen applications keep the shortcut.
+        let history_shortcut =
+            ks.key == "r" && !m.alt && ((m.control && !m.platform) || (m.platform && !m.control));
+        if history_shortcut
+            && cx.global::<Config>().history_search
+            && self.prompt_editor
+            && self.accepts_input(cx)
+            && !self.on_alt_screen()
+        {
+            self.start_reverse_search();
+            cx.stop_propagation();
+            cx.notify();
             return;
         }
 
@@ -12406,56 +12478,29 @@ mod gpui_tests {
     }
 
     #[gpui::test]
-    fn ctrl_r_without_integration_raises_the_notice_once(cx: &mut TestAppContext) {
+    fn history_shortcuts_open_without_shell_integration(cx: &mut TestAppContext) {
         crate::core::config::pin_test_config_dir();
 
         let (window, _daemon) = harness(cx);
         window
             .update(cx, |view, window, cx| {
-                let ctrl_r = KeyDownEvent {
-                    keystroke: key("ctrl-r"),
-                    is_held: false,
-                    prefer_character_input: false,
-                };
-                view.on_key_down(&ctrl_r, window, cx);
-                assert!(
-                    view.integration_notice.is_none(),
-                    "the grace window stays silent"
-                );
-
-                view.created_at = std::time::Instant::now() - INTEGRATION_GRACE * 2;
-                view.on_key_down(&ctrl_r, window, cx);
-                assert!(
-                    view.integration_notice.is_some(),
-                    "Ctrl+R raises the notice"
-                );
-                cx.notify();
-            })
-            .unwrap();
-
-        cx.run_until_parked();
-        window
-            .update(cx, |view, window, cx| {
-                assert!(
-                    view.integration_notice.is_some(),
-                    "the notice survives a real render pass"
-                );
-
-                let ctrl_r = KeyDownEvent {
-                    keystroke: key("ctrl-r"),
-                    is_held: false,
-                    prefer_character_input: false,
-                };
-                view.on_key_down(&ctrl_r, window, cx);
-                assert!(
-                    view.integration_notice.is_none(),
-                    "a keystroke dismisses the notice"
-                );
-                view.on_key_down(&ctrl_r, window, cx);
-                assert!(
-                    view.integration_notice.is_none(),
-                    "the notice is one-shot per pane"
-                );
+                assert!(!view.input_active(), "the nested shell has no OSC marks");
+                for shortcut in ["ctrl-r", "cmd-r"] {
+                    view.reverse_search = None;
+                    view.on_key_down(
+                        &KeyDownEvent {
+                            keystroke: key(shortcut),
+                            is_held: false,
+                            prefer_character_input: false,
+                        },
+                        window,
+                        cx,
+                    );
+                    assert!(
+                        view.reverse_search.is_some(),
+                        "{shortcut} opens tty7 history even without integration"
+                    );
+                }
             })
             .unwrap();
     }

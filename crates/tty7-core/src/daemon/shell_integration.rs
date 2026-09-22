@@ -62,6 +62,7 @@ if [[ -o interactive ]] && [[ -z "$TTY7_SHELL_INTEGRATION" ]]; then
   # payload (OSC 7 carries a file: URI), so a literal `%` in the path must be
   # escaped as %25 or a dir like `/tmp/a%20b` would decode to `/tmp/a b`.
   __tty7_report_cwd() { builtin printf '\e]7;file://%s%s\a' "${HOST:-localhost}" "${PWD//\%/%25}"; }
+  __tty7_report_identity() { __tty7_osc "0;${USER:-unknown}@${HOST%%.*}"; }
 
   # D (command finished + its exit code) gets its own hook, *prepended* to
   # precmd_functions rather than bundled into __tty7_precmd below: the app only
@@ -82,6 +83,7 @@ if [[ -o interactive ]] && [[ -z "$TTY7_SHELL_INTEGRATION" ]]; then
   # *after* the user's hooks: report cwd, then open a fresh prompt (A).
   __tty7_precmd() {
     __tty7_report_cwd
+    __tty7_report_identity
     __tty7_report_edit_mode
     __tty7_osc "133;A"
     # Prompt-end marker (B): emitted at the very end of the prompt — exactly where
@@ -168,6 +170,10 @@ if status is-interactive; and test -z "$TTY7_SHELL_INTEGRATION"
     printf '\e]7;file://%s%s\a' (hostname) (string replace --all '%' '%25' -- $PWD)
   end
 
+  function __tty7_report_identity
+    __tty7_osc "0;"(whoami)"@"(hostname -s)
+  end
+
   # The C mark carries the submitted line, truncated and with the bytes that
   # would break OSC framing or the daemon's percent-decode escaped (% ESC BEL
   # CR NL) — the Windows agent-detection input (see core::cli_agent). fish
@@ -190,6 +196,7 @@ if status is-interactive; and test -z "$TTY7_SHELL_INTEGRATION"
       set -e __tty7_cmd_active
     end
     __tty7_report_cwd
+    __tty7_report_identity
     __tty7_report_edit_mode
     __tty7_osc "133;A"
   end
@@ -285,6 +292,10 @@ if [[ $- == *i* ]] && [[ -z "$TTY7_SHELL_INTEGRATION" ]]; then
   else
     __tty7_report_cwd() { builtin printf '\e]7;file://%s%s\a' "${HOSTNAME:-localhost}" "${PWD//\%/%25}"; }
   fi
+  __tty7_report_identity() {
+    local host=${HOSTNAME:-localhost}
+    __tty7_osc "0;${USER:-unknown}@${host%%.*}"
+  }
 
   # Own hook for D, prepended to precmd_functions (same rationale as the zsh
   # path): the app flips back to prompt-editing on D, so it must fire the
@@ -301,6 +312,7 @@ if [[ $- == *i* ]] && [[ -z "$TTY7_SHELL_INTEGRATION" ]]; then
   __tty7_precmd() {
     local ret=$?
     __tty7_report_cwd
+    __tty7_report_identity
     __tty7_report_edit_mode
     __tty7_osc "133;A"
     # Prompt-end marker (B), wrapped in \[...\] so readline excludes it from the

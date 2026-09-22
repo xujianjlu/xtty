@@ -3,6 +3,8 @@ use sha2::{Digest, Sha512};
 
 pub const SERVICE_PASSWORD: &str = "tty7-ssh";
 pub const SERVICE_KEY_PASSPHRASE: &str = "tty7-ssh-key";
+/// Secrets sent by output-driven terminal triggers.
+pub const SERVICE_PASSWORD_TRIGGER: &str = "tty7-password-trigger";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
