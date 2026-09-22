@@ -2344,6 +2344,7 @@ impl TerminalView {
             ks.key == "r" && !m.alt && ((m.control && !m.platform) || (m.platform && !m.control));
         if history_shortcut
             && cx.global::<Config>().history_search
+            && self.prompt_editor
             && self.accepts_input(cx)
             && !self.on_alt_screen()
         {
