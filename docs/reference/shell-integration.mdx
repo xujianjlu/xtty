@@ -20,7 +20,6 @@ removes itself from the equation if you run the same shell elsewhere.
 | **fish** | A `-C` init command. |
 | **PowerShell** | An encoded init command that wraps your existing `prompt` function and PSReadLine's line reader. |
 | **nushell** | A `--config` wrapper whose `config.nu` sources yours first, then adds tty7's hooks. Local panes only. |
-| **WSL** *(Windows)* | The distro's shell is bootstrapped with the same scripts. |
 | **Remote panes** | The same three POSIX shells, bootstrapped over the SSH connection. Toggle per profile with **Settings → SSH →** a profile **→ Advanced → Session → Shell integration**. |
 
 `TTY7_SHELL_INTEGRATION` is set once it is active, and guards against a second
@@ -31,8 +30,7 @@ shell — [shells you start yourself](#shells-you-start-yourself) have none.
   A shell launched with arguments *you* wrote — `shell.args`, or a
   `custom_shells` entry — is left alone, because tty7's injection would
   conflict with the flags you chose. Arguments tty7's own detection supplied
-  (Git Bash's `-i -l`, a WSL row's `--distribution`) do not count, so those
-  rows are still integrated.
+  do not count, so those rows are still integrated.
 </Note>
 
 ## What it reports
@@ -40,7 +38,7 @@ shell — [shells you start yourself](#shells-you-start-yourself) have none.
 | Signal | Sequence | Used for |
 |---|---|---|
 | Prompt begins / input begins | `OSC 133;A`, `133;B` | The [prompt layer](/terminal/prompt): suggestions, completion, multi-line editing |
-| Command submitted | `OSC 133;C` | Knowing a command is running; agent detection on Windows, where ConPTY exposes no foreground process group |
+| Command submitted | `OSC 133;C` | Knowing a command is running; agent detection |
 | Command finished, with exit code | `OSC 133;D` | The "finished after 42s" notification, failure marks in [history](/terminal/history) |
 | Working directory | `OSC 7` | New tabs and splits opening in the right place, the sidebar's repo grouping, the git branch readout |
 | Editing mode (vi / emacs) | `OSC 133;V` | Matching tty7's key handling to your shell's mode |
@@ -59,14 +57,14 @@ Panes, splits, scrollback, search, SSH, and the CLI are unaffected.
 
 The working-directory fallback is worth knowing in detail, because it is not
 available everywhere. Where tty7 can see the pane's processes it reads the
-foreground one's own working directory instead — a local pane on macOS or
-Linux, or a pane in a remote workspace, where the `tty7-server` on that host
-does the reading. It is a poll, not a report: it is sampled while the pane is
-producing output, at most twice a second, so it can trail a `cd` until the
-pane writes something again. A local pane on **Windows** and a pane connected
-to an **SSH host** have no fallback at all — on the far end of an `ssh` there
-is no process table to read, so a shell that does not report its directory
-leaves the pane showing the last directory that did.
+foreground one's own working directory instead — a local pane on macOS, or a
+pane in a remote workspace, where the `tty7-server` on that host does the
+reading. It is a poll, not a report: it is sampled while the pane is producing
+output, at most twice a second, so it can trail a `cd` until the pane writes
+something again. A pane connected to an **SSH host** has no fallback at all —
+on the far end of an `ssh` there is no process table to read, so a shell that
+does not report its directory leaves the pane showing the last directory that
+did.
 
 ## Shells you start yourself
 

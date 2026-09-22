@@ -10,9 +10,9 @@
 
 <br />
 
-[![CI](https://github.com/l0ng-ai/tty7/actions/workflows/ci.yml/badge.svg)](https://github.com/l0ng-ai/tty7/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/github/v/release/l0ng-ai/tty7?label=version&color=3FDD8C)](https://github.com/l0ng-ai/tty7/releases)
-[![Platforms](https://img.shields.io/badge/platforms-macOS%20%C2%B7%20Windows%20%C2%B7%20Linux-blue)](https://github.com/l0ng-ai/tty7/releases)
+[![CI](https://github.com/xujianjlu/tty7/actions/workflows/ci.yml/badge.svg)](https://github.com/xujianjlu/tty7/actions/workflows/ci.yml)
+[![Version](https://img.shields.io/github/v/release/xujianjlu/tty7?label=version&color=3FDD8C)](https://github.com/xujianjlu/tty7/releases)
+[![Platforms](https://img.shields.io/badge/platforms-macOS-blue)](https://github.com/xujianjlu/tty7/releases)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 [![Discord](https://img.shields.io/badge/Discord-%E5%8A%A0%E5%85%A5%E8%AE%A8%E8%AE%BA-5865F2?logo=discord&logoColor=white)](https://discord.gg/s3dethqz2V)
 
@@ -38,13 +38,11 @@
 
 ## 安装
 
-macOS、Windows、Linux 的原生构建都在 [**Releases**](https://github.com/l0ng-ai/tty7/releases)：
+macOS 的原生构建在 [**Releases**](https://github.com/xujianjlu/tty7/releases)：
 
 | | | |
 |---|---|---|
 | **macOS** | `…-macos-arm64.dmg` · `…-x86_64.dmg` | 拖进「应用程序」 |
-| **Windows** | `…-setup.exe` · 免安装 `….zip` | |
-| **Linux** | `…-x86_64.AppImage` | `chmod +x` 后直接运行，X11/Wayland 的库已打包在内 |
 
 ## 有什么
 
@@ -54,7 +52,7 @@ macOS、Windows、Linux 的原生构建都在 [**Releases**](https://github.com/
 | **CLI + Skills** | 安装包自带 `tty7` CLI · [agent skill](skills/tty7/SKILL.md) · `run` 转发命令输出并原样返回退出码 · `split` · `send` · `wait --until free` · `capture` |
 | **编辑器级输入** | 从历史推出影子建议 · Tab 补全附带说明 · 语法高亮 · 多行编辑 · 点击定位光标 · <kbd>⌃ R</kbd> 模糊搜索历史 |
 | **窗口** | 标签页与分屏 · <kbd>⌘ P</kbd> 命令面板 · <kbd>⌘ F</kbd> 回滚搜索 · <kbd>⌘ J</kbd> 侧栏列出进程树和监听端口 · 13 套主题，也能写自己的 YAML 或导入 iTerm2 配色 · 输入法 |
-| **Shell 集成** | pane 启动时自动注入，不用你装什么 · 提示符边界 · 工作目录 · 退出码 · 命令跑完发通知 · 覆盖 zsh、bash、fish、PowerShell、WSL 和远程 pane |
+| **Shell 集成** | pane 启动时自动注入，不用你装什么 · 提示符边界 · 工作目录 · 退出码 · 命令跑完发通知 · 覆盖 zsh、bash、fish、PowerShell 和远程 pane |
 | **远程工作区** | 远端的文件、仓库、改动、diff、worktree、标签页和 pane · 从任意客户端重连，接着离开时的位置继续 |
 | **SSH** | 自带 russh 实现，不依赖外部 ssh：profile 凭据存入 keychain · SFTP 面板 · 端口转发 · 跳板机 · `tty7-server` 只需安装一次，无需 root |
 | **Git** | 源代码管理面板跟着焦点 pane 走 · 暂存、提交、amend、切分支、push、stash · 双栏或统一 diff · 提交图谱支持 cherry-pick、revert、reset · 新建 worktree 连同它的标签页 |
@@ -107,8 +105,8 @@ agent 如何调用这套 CLI，另见 [skills/tty7/SKILL.md](skills/tty7/SKILL.m
 安装 skill：
 
 ```sh
-npx skills add l0ng-ai/tty7    # 安装
-npx skills update tty7         # 后续更新
+npx skills add xujianjlu/tty7    # 安装
+npx skills update tty7           # 后续更新
 ```
 
 ## 基准测试

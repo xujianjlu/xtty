@@ -1,10 +1,9 @@
 name: CI
 
-# Compile + test on every push/PR. The Windows and Linux jobs are the
-# compile-feedback loop for the platform-specific code a macOS dev machine
-# never builds (`cfg(windows)` transport / process detach / config dir,
-# the Linux `/proc` queries, the x11/wayland gpui backends). The macOS job
-# guards against regressing the original target.
+# Compile + test the macOS GUI client on every push/PR. Linux and Windows are
+# not shipping GUI targets; remote Linux hosts are covered by the separate
+# `server-musl` job (static tty7-server for install onto far machines), and
+# remote Macs by `server-macos`.
 on:
   push:
     branches: [main]
@@ -21,9 +20,8 @@ permissions:
 
 # A superseded PR run is dead weight the moment the next push lands, and a run
 # left going is not free: the account's concurrent-job budget is shared, and
-# macOS slots are the scarce ones. A zombie Windows job (see the `Test` step's
-# timeout below) once held a slot for the full six-hour job limit while an
-# unrelated PR's macOS job queued behind it for two and a half hours.
+# macOS slots are the scarce ones. Cancel in-progress PR runs so a hung Test
+# step cannot hold a macOS slot while the next push queues behind it.
 #
 # Pushes to main are exempt: each commit's own run is the record of whether that
 # commit was green, and cancelling one to start the next would erase it.
@@ -49,7 +47,7 @@ jobs:
   # script, next to the reason each one is exempt.
   #
   # A standalone job on purpose, and one that must stay *non-required*: main's
-  # required checks are `rustfmt` and the three `build & test (<target>)` names,
+  # required checks are `rustfmt` and `build & test (aarch64-apple-darwin)`,
   # and folding this into either would make it required the moment it lands —
   # wedging every open PR on a check they have never seen. Same reasoning as
   # `server-musl` below. Cheap enough (a checkout and a grep) that it does not
@@ -70,10 +68,6 @@ jobs:
         include:
           - runner: macos-14
             target: aarch64-apple-darwin
-          - runner: windows-latest
-            target: x86_64-pc-windows-msvc
-          - runner: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
     runs-on: ${{ matrix.runner }}
     # Backstop under the per-step timeouts below. Without any timeout at all a
     # hung test runs to GitHub's six-hour job limit, which is how a 90-second
@@ -84,21 +78,7 @@ jobs:
         uses: actions/checkout@v4
 
       # gpui-component is a git dependency (see Cargo.toml), so no sibling
-      # checkout is needed. The Windows backend (gpui_windows + DirectWrite/D3D)
-      # ships with the windows-latest runner's SDK — no extra system deps.
-
-      # gpui's Linux backends need the x11/wayland/xkb/font dev packages at
-      # build time (build scripts resolve them via pkg-config). Same set the
-      # README documents for building from source on Linux.
-      - name: Install Linux system dependencies
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y pkg-config cmake clang libxkbcommon-dev \
-            libxkbcommon-x11-dev libfontconfig1-dev libfreetype6-dev \
-            libwayland-dev libx11-dev libxcb1-dev libzstd-dev libssl-dev \
-            libkrb5-dev
-          echo "LIBGSSAPI_IMPL=mit" >> "$GITHUB_ENV"
+      # checkout is needed.
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -124,13 +104,12 @@ jobs:
       # any branch, while the same commit passes on a re-run — and every time it
       # did, the job held a runner slot for hours and reported nothing.
       #
-      # Seen on Windows three times and on Linux once, so it is not a
-      # platform-specific test: `Build` succeeds, `Test` starts, and nothing
-      # further is ever written.
+      # Pattern: `Build` succeeds, `Test` starts, and nothing further is ever
+      # written.
       #
       # The step's honest budget is small: ~75s warm and ~3.5 min when this step
-      # also has to compile the test targets, on every platform. 20 minutes is
-      # pure headroom, so a trip means a hang, not a slow runner.
+      # also has to compile the test targets. 20 minutes is pure headroom, so a
+      # trip means a hang, not a slow runner.
       - name: Test
         timeout-minutes: 20
         run: cargo test --locked --target ${{ matrix.target }}
@@ -163,10 +142,11 @@ jobs:
   # distro. Compile-only — this job publishes nothing; release.yml and
   # nightly.yml carry the same job with an upload step.
   #
-  # Deliberately a *separate* job rather than two more rows in the `build` matrix
-  # above: those three `build & test (<target>)` names are main's required
-  # checks, and reshaping that matrix would wedge branch protection on every open
-  # PR. Keep this job non-required until it has a few weeks of green.
+  # Deliberately a *separate* job rather than more rows in the `build` matrix
+  # above: the GUI `build & test (<target>)` name is main's required check, and
+  # reshaping that matrix would wedge branch protection on every open PR. Keep
+  # this job non-required until it has a few weeks of green. Ubuntu runners
+  # here are fine — this is not a Linux GUI ship target.
   server-musl:
     name: tty7-server musl (${{ matrix.target }})
     runs-on: ubuntu-latest

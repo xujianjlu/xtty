@@ -9,15 +9,11 @@ permissions:
   contents: write
 
 jobs:
+  # macOS GUI packages only. Linux and Windows GUI ship targets are gone;
+  # remote Linux hosts still get `tty7-server` from `server-musl` below, and
+  # remote Macs from `server-macos`. The GUI build does not embed a musl
+  # server (that was a Windows/WSL path), so it does not need `server-musl`.
   build:
-    # The Windows installer embeds the Linux musl `tty7-server` so a WSL distro
-    # can be served the binary the client already shipped with, instead of
-    # downloading one (WSL installs nothing over the network). That
-    # binary comes from `server-musl`, so the two jobs can no longer run in
-    # parallel. Serialising all four platforms behind it costs a few minutes on
-    # a release — cheap next to splitting the Windows entry into its own job and
-    # duplicating the whole toolchain/caching preamble.
-    needs: server-musl
     strategy:
       fail-fast: false
       matrix:
@@ -31,14 +27,6 @@ jobs:
             os: macos
             arch: x86_64
             target: x86_64-apple-darwin
-          - runner: windows-latest
-            os: windows
-            arch: x86_64
-            target: x86_64-pc-windows-msvc
-          - runner: ubuntu-latest
-            os: linux
-            arch: x86_64
-            target: x86_64-unknown-linux-gnu
     runs-on: ${{ matrix.runner }}
     steps:
       - name: Checkout tty7
@@ -48,19 +36,6 @@ jobs:
 
       # gpui-component is pulled as a git dependency (see Cargo.toml's patch
       # section), so no sibling checkout is needed.
-
-      # gpui's Linux backends resolve the x11/wayland/xkb/font dev packages via
-      # pkg-config at build time — the same set the README documents for
-      # building from source on Linux.
-      - name: Install Linux system dependencies
-        if: matrix.os == 'linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y pkg-config cmake clang libxkbcommon-dev \
-            libxkbcommon-x11-dev libfontconfig1-dev libfreetype6-dev \
-            libwayland-dev libx11-dev libxcb1-dev libzstd-dev libssl-dev \
-            libkrb5-dev libfuse2 file imagemagick
-          echo "LIBGSSAPI_IMPL=mit" >> "$GITHUB_ENV"
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -74,8 +49,7 @@ jobs:
       # recorded, not whatever cargo would re-resolve at build time. Safe here
       # (unlike nightly) precisely because nothing rewrites Cargo.toml: this is
       # a plain checkout of the tagged commit.
-      # The updater ships on every GUI platform now: inside the macOS bundle,
-      # beside the Windows app, and inside the Linux AppImage.
+      # The updater ships inside the macOS bundle.
       - name: Build
         working-directory: tty7
         shell: bash
@@ -84,11 +58,9 @@ jobs:
           cargo build --release --locked --features updater \
             --bin tty7-updater --target "${{ matrix.target }}"
 
-      # ---- Packaging: one step per OS ----------------------------------------
-      # macOS gets a signed + notarized drag-to-Applications DMG. Windows gets
-      # an Inno Setup installer plus a portable zip; Linux a tarball — both
-      # unsigned, of the self-contained binary (fonts are embedded via
-      # include_bytes!; the Windows icon is compiled in via build.rs).
+      # ---- Packaging ------------------------------------------------------------
+      # macOS gets a signed + notarized drag-to-Applications DMG. Fonts are
+      # embedded via include_bytes!.
       - name: Bundle macOS DMG
         if: matrix.os == 'macos'
         working-directory: tty7
@@ -104,84 +76,19 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: bash .github/scripts/bundle-macos.sh "${{ matrix.target }}" "${{ matrix.arch }}"
 
-      - name: Package Linux tarball
-        if: matrix.os == 'linux'
-        working-directory: tty7
-        run: bash .github/scripts/bundle-linux.sh "${{ matrix.target }}" "${{ matrix.arch }}"
-
-      # AppImage bundles the x11/wayland/xkb/font libs so it runs on Fedora/Arch/
-      # etc., not just Ubuntu. Kept separate from the tarball step so the tarball
-      # still ships even if AppImage tooling changes upstream.
-      - name: Package Linux AppImage
-        if: matrix.os == 'linux'
-        working-directory: tty7
-        run: bash .github/scripts/bundle-appimage.sh "${{ matrix.target }}" "${{ matrix.arch }}"
-
-      # The in-app updater refuses an image whose bundled helper or stamped
-      # version is wrong — on the user's machine, after the download. Check the
-      # same facts here so a packaging mistake fails the release instead.
-      - name: Verify Linux AppImage update package
-        if: matrix.os == 'linux'
-        working-directory: tty7
-        shell: bash
-        run: |
-          set -euo pipefail
-          VERSION="$(grep -m1 '^version = "' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')"
-          IMAGE="$PWD/dist/tty7-${VERSION}-linux-${{ matrix.arch }}.AppImage"
-          VERIFY_ROOT="$RUNNER_TEMP/tty7-appimage-update-verify"
-          rm -rf "$VERIFY_ROOT"
-          mkdir -p "$VERIFY_ROOT"
-          (cd "$VERIFY_ROOT" && "$IMAGE" --appimage-extract >/dev/null)
-          test -x "$VERIFY_ROOT/squashfs-root/usr/bin/tty7-app"
-          test -x "$VERIFY_ROOT/squashfs-root/usr/bin/tty7-updater"
-          grep -Fxq "X-AppImage-Version=${VERSION}" \
-            "$VERIFY_ROOT/squashfs-root/usr/share/applications/tty7.desktop"
-
-      # The bundled server for WSL. `continue-on-error` mirrors `server-musl`'s
-      # own probe step: if there is no server asset, the release still ships and
-      # `bundle-windows.ps1` warns. It is not silent at runtime either — a WSL
-      # connect then fails with `MissingBundled`, naming every directory it
-      # searched, rather than quietly falling back to a download.
-      - name: Fetch the bundled Linux server
-        if: matrix.os == 'windows'
-        continue-on-error: true
-        uses: actions/download-artifact@v8
-        with:
-          name: release-tty7-server-linux-x86_64-musl
-          path: tty7/bundled-server
-
-      - name: Package Windows installer + zip
-        if: matrix.os == 'windows'
-        working-directory: tty7
-        shell: pwsh
-        run: '& ./.github/scripts/bundle-windows.ps1 "${{ matrix.target }}" "${{ matrix.arch }}"'
-
-      # The in-app updater refuses a package whose marker, helper or stamped
-      # version is wrong — on the user's machine, after the download. Check the
-      # same facts here so a packaging mistake fails the release instead.
-      - name: Verify Windows update package
-        if: matrix.os == 'windows'
-        working-directory: tty7
-        shell: pwsh
-        run: '& ./.github/scripts/verify-windows-package.ps1 "${{ matrix.arch }}"'
-
       # Hand the artifacts to the assemble job rather than uploading them to the
-      # release here. Four parallel jobs each publishing their own slice would
-      # make the release "latest" the moment the *first* platform finished — the
-      # in-app update check (src/core/update.rs) reads /releases/latest, so users
-      # would be prompted to download a release that was still missing most of
-      # its assets. Same glob list as before: the bundle scripts leave
-      # intermediates in dist/ (tty7.app, entitlements.plist, the Windows staging
-      # dir) that must not reach the release assets.
+      # release here. Parallel jobs each publishing their own slice would make
+      # the release "latest" the moment the *first* arch finished — the in-app
+      # update check (src/core/update.rs) reads /releases/latest, so users would
+      # be prompted to download a release that was still missing assets. Same
+      # glob list as before: the bundle scripts leave intermediates in dist/
+      # (tty7.app, entitlements.plist) that must not reach the release assets.
       - uses: actions/upload-artifact@v7
         with:
           name: release-${{ matrix.os }}-${{ matrix.arch }}
           path: |
             tty7/dist/*.dmg
-            tty7/dist/*.tar.gz
             tty7/dist/*.zip
-            tty7/dist/*-setup.exe
-            tty7/dist/*.AppImage
           if-no-files-found: error
 
   # The headless server binary remote workspaces install on the far machine
@@ -193,6 +100,7 @@ jobs:
   #
   # Separate from the `build` matrix above because it shares nothing with it: no
   # GUI toolchain, no bundling, no code signing, two targets off one runner.
+  # Ubuntu runners are fine — this is a remote-install asset, not a Linux GUI.
   server-musl:
     strategy:
       fail-fast: false
@@ -377,7 +285,7 @@ jobs:
           path: tty7/dist/${{ matrix.asset }}
           if-no-files-found: error
 
-  # Single assembly step, after every GUI platform and every server slice
+  # Single assembly step, after every GUI arch and every server slice
   # succeeds. The release object is
   # created as a **draft** and left that way: a draft is invisible to both
   # /releases/latest and the releases page, so nothing can prompt a user to

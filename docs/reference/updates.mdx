@@ -55,25 +55,9 @@ the deferred prompt, and any transfer still in flight.
 
 ## Platform notes
 
-<AccordionGroup>
-  <Accordion title="macOS">
-    The new GUI reuses a running local server when its wire protocol is
-    compatible, so your shells survive the update. An incompatible server keeps
-    its shells too and raises an explicit keep-or-restart prompt.
-  </Accordion>
-  <Accordion title="Windows">
-    Windows cannot replace a running daemon's image, so the install path stops
-    the service first — and the dialog says so before you agree.
-
-    An all-users `C:\Program Files` install cannot be updated in place and keeps
-    the release-page fallback instead. Running Setup as the signed-in user would
-    either install a second copy beside the real one, or put a bare UAC prompt
-    in front of someone whose GUI just vanished.
-  </Accordion>
-  <Accordion title="Linux">
-    AppImage and tarball installs are replaced by downloading the new file.
-  </Accordion>
-</AccordionGroup>
+The new GUI reuses a running local server when its wire protocol is compatible,
+so your shells survive the update. An incompatible server keeps its shells too
+and raises an explicit keep-or-restart prompt.
 
 ## "The background server is still running &lt;build&gt;"
 
@@ -90,7 +74,7 @@ Update checks and downloads resolve a proxy from, in order:
 
 1. `http_proxy` in `config.json` — `http://127.0.0.1:7890` or
    `socks5://127.0.0.1:1080`
-2. The platform system proxy (Windows registry, macOS `SCDynamicStore`)
+2. The platform system proxy (macOS `SCDynamicStore`)
 3. `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY`
 
 Programs running in a pane are deliberately unaffected — they inherit their

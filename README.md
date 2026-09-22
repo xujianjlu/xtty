@@ -10,9 +10,9 @@
 
 <br />
 
-[![CI](https://github.com/l0ng-ai/tty7/actions/workflows/ci.yml/badge.svg)](https://github.com/l0ng-ai/tty7/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/github/v/release/l0ng-ai/tty7?label=version&color=3FDD8C)](https://github.com/l0ng-ai/tty7/releases)
-[![Platforms](https://img.shields.io/badge/platforms-macOS%20%C2%B7%20Windows%20%C2%B7%20Linux-blue)](https://github.com/l0ng-ai/tty7/releases)
+[![CI](https://github.com/xujianjlu/tty7/actions/workflows/ci.yml/badge.svg)](https://github.com/xujianjlu/tty7/actions/workflows/ci.yml)
+[![Version](https://img.shields.io/github/v/release/xujianjlu/tty7?label=version&color=3FDD8C)](https://github.com/xujianjlu/tty7/releases)
+[![Platforms](https://img.shields.io/badge/platforms-macOS-blue)](https://github.com/xujianjlu/tty7/releases)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 [![Discord](https://img.shields.io/badge/Discord-join%20chat-5865F2?logo=discord&logoColor=white)](https://discord.gg/s3dethqz2V)
 
@@ -39,13 +39,11 @@ below follows from that.
 
 ## Install
 
-Native builds for macOS, Windows, and Linux on [**Releases**](https://github.com/l0ng-ai/tty7/releases):
+Native builds for macOS on [**Releases**](https://github.com/xujianjlu/tty7/releases):
 
 | | | |
 |---|---|---|
 | **macOS** | `…-macos-arm64.dmg` · `…-x86_64.dmg` | drag into Applications |
-| **Windows** | `…-setup.exe` · portable `….zip` | |
-| **Linux** | `…-x86_64.AppImage` | `chmod +x` and run — X11/Wayland libraries bundled |
 
 ## What's inside
 
@@ -55,7 +53,7 @@ Native builds for macOS, Windows, and Linux on [**Releases**](https://github.com
 | **CLI + Skills** | bundled `tty7` CLI · [agent skill](skills/tty7/SKILL.md) · `run` streams a command and exits with its code · `split` · `send` · `wait --until free` · `capture` |
 | **Editor-grade input** | ghost suggestions from history · explained tab completion · syntax highlighting · multi-line editing · click places the caret · <kbd>⌃ R</kbd> fuzzy history |
 | **Window** | tabs & splits · <kbd>⌘ P</kbd> palette · <kbd>⌘ F</kbd> scrollback search · <kbd>⌘ J</kbd> panel with process tree and listening ports · 13 themes, your own YAML, iTerm2 import · IME |
-| **Shell integration** | injected when a pane starts, nothing to install · prompt marks · working directory · exit codes · command-finished notifications · zsh, bash, fish, PowerShell, WSL, remote panes |
+| **Shell integration** | injected when a pane starts, nothing to install · prompt marks · working directory · exit codes · command-finished notifications · zsh, bash, fish, PowerShell, remote panes |
 | **Remote workspaces** | remote files, repos, changes, diffs, worktrees, tabs, and panes · reconnect from any client and continue where you left off |
 | **SSH** | native russh stack: profiles with keychain secrets · SFTP panel · port forwarding · jump hosts · one-time, unprivileged `tty7-server` install |
 | **Git** | panel follows the focused pane · stage, commit, amend, branch, push, stash · side-by-side or unified diffs · commit graph with cherry-pick, revert, and reset · a new worktree opens its own tab |
@@ -113,8 +111,8 @@ documented in [skills/tty7/SKILL.md](skills/tty7/SKILL.md).
 Install the skill with:
 
 ```sh
-npx skills add l0ng-ai/tty7    # install
-npx skills update tty7         # update later
+npx skills add xujianjlu/tty7    # install
+npx skills update tty7           # update later
 ```
 
 ## Benchmarks

@@ -20,8 +20,8 @@ Nothing is synced or copied. The repository stays where it is.
   <Step title="Open the New Workspace form">
     <kbd>⌘ ⇧ N</kbd>, or the button at the bottom of the switcher
     (<kbd>⌘ ⇧ O</kbd>). The form's host dropdown lists *This Computer*, every
-    saved SSH profile, your `~/.ssh/config` aliases and, on Windows, every WSL
-    distribution — type to filter when the list is long.
+    saved SSH profile, and your `~/.ssh/config` aliases — type to filter when
+    the list is long.
   </Step>
   <Step title="Pick a machine">
     tty7 connects over the same SSH stack as everything else, so profiles,
@@ -61,9 +61,6 @@ every Mac already has. Either way nothing is installed beside it.
 
 The binary is named after the wire dialect it speaks, so a client and a server
 that disagree never quietly half-work — tty7 installs the matching one instead.
-
-On Windows, a WSL distribution is handed the Linux server the installer already
-shipped, so a WSL workspace needs no network access at all.
 
 ## Reattaching
 

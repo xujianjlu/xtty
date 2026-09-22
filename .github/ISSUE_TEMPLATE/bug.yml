@@ -58,8 +58,6 @@ body:
       options:
         - macOS (Apple Silicon)
         - macOS (Intel)
-        - Windows
-        - Linux
     validations:
       required: true
 
@@ -77,8 +75,7 @@ body:
     attributes:
       label: Log output
       description: >
-        The tail of `~/.config/tty7/tty7.log`
-        (`%APPDATA%\tty7\tty7.log` on Windows), if it has anything from around
+        The tail of `~/.config/tty7/tty7.log`, if it has anything from around
         the time it broke. This is rendered as code, so no backticks needed.
       render: shell
 

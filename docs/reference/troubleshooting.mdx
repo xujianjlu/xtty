@@ -18,11 +18,9 @@ machine links exist. Most of what follows is a specific answer this gives you.
 The CLI is put on PATH the first time the app launches. If it is missing:
 
 - Check **Settings → Agents → Install the tty7 command on PATH** is on.
-- On Unix it symlinks into whichever of `/opt/homebrew/bin`, `/usr/local/bin`,
+- It symlinks into whichever of `/opt/homebrew/bin`, `/usr/local/bin`,
   `~/.local/bin`, `~/bin`, `~/.cargo/bin` your PATH already covers — if none of
   those are on your PATH, add one.
-- On Windows the install directory is appended to your user PATH, which needs a
-  new shell to take effect.
 - A `tty7` you installed yourself is never replaced, so an old one earlier in
   PATH will win.
 
@@ -153,7 +151,7 @@ foreground process's working directory, which is why an unintegrated shell in
 a **remote workspace** mostly keeps up — that fallback is a poll, though,
 sampled while the pane produces output, so it can lag a `cd` until the pane
 writes again. There is no such fallback for an **SSH pane** (the processes are
-on the far end) or for a local pane on **Windows**.
+on the far end).
 
 ## <kbd>⌥ B</kbd> types `∫` instead of moving a word
 
@@ -202,7 +200,7 @@ piping into `head`. Current builds exit `141` on Unix, which is exactly what
   <Card title="Discord" icon="discord" href="https://discord.gg/s3dethqz2V">
     Ask — someone has probably hit it.
   </Card>
-  <Card title="Report an issue" icon="github" href="https://github.com/l0ng-ai/tty7/issues/new">
+  <Card title="Report an issue" icon="github" href="https://github.com/xujianjlu/tty7/issues/new">
     Include `tty7 doctor` output and your platform.
   </Card>
 </CardGroup>

@@ -63,10 +63,11 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
   # Mirrors release.yml's build matrix; keep the two in sync when editing.
+  # macOS GUI only — no Windows/Linux GUI ship targets. Does not need
+  # server-musl (that coupling was for embedding a WSL server in the Windows
+  # installer).
   build:
-    # Also behind server-musl: the Windows installer embeds its Linux musl
-    # binary for WSL. See the same note in release.yml.
-    needs: [plan, server-musl]
+    needs: [plan]
     if: needs.plan.outputs.build == 'true'
     strategy:
       fail-fast: false
@@ -80,14 +81,6 @@ jobs:
             os: macos
             arch: x86_64
             target: x86_64-apple-darwin
-          - runner: windows-latest
-            os: windows
-            arch: x86_64
-            target: x86_64-pc-windows-msvc
-          - runner: ubuntu-latest
-            os: linux
-            arch: x86_64
-            target: x86_64-unknown-linux-gnu
     runs-on: ${{ matrix.runner }}
     steps:
       - name: Checkout tty7
@@ -96,23 +89,13 @@ jobs:
           path: tty7
 
       # Everything versioned — the binary (CARGO_PKG_VERSION), asset names,
-      # DMG plist, Inno installer — reads Cargo.toml, so stamping it is the only
-      # edit needed. Shared with the server-musl job below, and it fails loudly
-      # if the manifest's shape ever moves the version line out from under it.
+      # DMG plist — reads Cargo.toml, so stamping it is the only edit needed.
+      # Shared with the server-musl job below, and it fails loudly if the
+      # manifest's shape ever moves the version line out from under it.
       - name: Stamp nightly version
         working-directory: tty7
         shell: bash
         run: bash .github/scripts/stamp-version.sh "${{ needs.plan.outputs.version }}"
-
-      - name: Install Linux system dependencies
-        if: matrix.os == 'linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y pkg-config cmake clang libxkbcommon-dev \
-            libxkbcommon-x11-dev libfontconfig1-dev libfreetype6-dev \
-            libwayland-dev libx11-dev libxcb1-dev libzstd-dev libssl-dev \
-            libkrb5-dev libfuse2 file imagemagick
-          echo "LIBGSSAPI_IMPL=mit" >> "$GITHUB_ENV"
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -122,8 +105,7 @@ jobs:
         with:
           workspaces: tty7
 
-      # The updater ships on every GUI platform now: inside the macOS bundle,
-      # beside the Windows app, and inside the Linux AppImage.
+      # The updater ships inside the macOS bundle.
       - name: Build
         working-directory: tty7
         shell: bash
@@ -164,80 +146,21 @@ jobs:
           test "$ACTUAL_VERSION" = "$VERSION"
           /usr/bin/codesign --verify --deep --strict --verbose=2 "$APP"
 
-      - name: Package Linux tarball
-        if: matrix.os == 'linux'
-        working-directory: tty7
-        run: bash .github/scripts/bundle-linux.sh "${{ matrix.target }}" "${{ matrix.arch }}"
-
-      - name: Package Linux AppImage
-        if: matrix.os == 'linux'
-        working-directory: tty7
-        run: bash .github/scripts/bundle-appimage.sh "${{ matrix.target }}" "${{ matrix.arch }}"
-
-      # The same facts the in-app updater checks on the user's machine,
-      # checked here so a packaging mistake fails the nightly instead. See
-      # the twin step in release.yml.
-      - name: Verify Linux AppImage update package
-        if: matrix.os == 'linux'
-        working-directory: tty7
-        shell: bash
-        run: |
-          set -euo pipefail
-          VERSION="${{ needs.plan.outputs.version }}"
-          IMAGE="$PWD/dist/tty7-${VERSION}-linux-${{ matrix.arch }}.AppImage"
-          VERIFY_ROOT="$RUNNER_TEMP/tty7-appimage-update-verify"
-          rm -rf "$VERIFY_ROOT"
-          mkdir -p "$VERIFY_ROOT"
-          (cd "$VERIFY_ROOT" && "$IMAGE" --appimage-extract >/dev/null)
-          test -x "$VERIFY_ROOT/squashfs-root/usr/bin/tty7-app"
-          test -x "$VERIFY_ROOT/squashfs-root/usr/bin/tty7-updater"
-          grep -Fxq "X-AppImage-Version=${VERSION}" \
-            "$VERIFY_ROOT/squashfs-root/usr/share/applications/tty7.desktop"
-
-      # See release.yml for why this is best-effort rather than required.
-      - name: Fetch the bundled Linux server
-        if: matrix.os == 'windows'
-        continue-on-error: true
-        uses: actions/download-artifact@v8
-        with:
-          name: nightly-tty7-server-linux-x86_64-musl
-          path: tty7/bundled-server
-
-      - name: Package Windows installer + zip
-        if: matrix.os == 'windows'
-        working-directory: tty7
-        shell: pwsh
-        run: '& ./.github/scripts/bundle-windows.ps1 "${{ matrix.target }}" "${{ matrix.arch }}"'
-
-      # Nightly builds the same packages as release.yml, so it gets the same
-      # check. Nightly is not an update channel — nobody updates *into* these
-      # artifacts — but a marker or version regression shows up here a night
-      # before it would reach a stable release.
-      - name: Verify Windows update package
-        if: matrix.os == 'windows'
-        working-directory: tty7
-        shell: pwsh
-        run: >-
-          & ./.github/scripts/verify-windows-package.ps1
-          "${{ matrix.arch }}" "${{ needs.plan.outputs.version }}"
-
-      # Same glob list as release.yml's Release step: the bundle scripts leave
-      # intermediates in dist/ (tty7.app, entitlements.plist, the Windows
-      # staging dir) that must not reach the release assets.
+      # Same glob list as release.yml's upload step: the bundle scripts leave
+      # intermediates in dist/ (tty7.app, entitlements.plist) that must not
+      # reach the release assets.
       - uses: actions/upload-artifact@v7
         with:
           name: nightly-${{ matrix.os }}-${{ matrix.arch }}
           path: |
             tty7/dist/*.dmg
-            tty7/dist/*.tar.gz
             tty7/dist/*.zip
-            tty7/dist/*-setup.exe
-            tty7/dist/*.AppImage
           if-no-files-found: error
 
   # Mirrors release.yml's server-musl job; keep the two in sync when editing.
   # Nightly carries the server binaries too so the remote-install path can
   # be exercised against the rolling channel instead of waiting for a tag.
+  # Ubuntu runners are fine — remote Linux host assets, not a Linux GUI.
   server-musl:
     needs: plan
     if: needs.plan.outputs.build == 'true'
