@@ -337,6 +337,9 @@ pub struct TerminalView {
     scroll_anim_epoch: u64,
     gesture_until: Option<std::time::Instant>,
     pub title: String,
+    /// Last shell identity reported through OSC 0/2. Kept separately so
+    /// agents and full-screen programs cannot replace the tab identity.
+    terminal_identity: Option<String>,
     /// A title the pane has been told about but has not adopted yet — see
     /// `set_title_when_settled`. `None` means the tab is showing the newest
     /// title there is.
@@ -1580,6 +1583,7 @@ impl TerminalView {
             scroll_anim_epoch: 0,
             gesture_until: None,
             title: DEFAULT_TITLE.to_string(),
+            terminal_identity: None,
             pending_title: None,
             default_title: DEFAULT_TITLE.to_string(),
             relink_abandoned: false,
@@ -1720,7 +1724,9 @@ impl TerminalView {
     /// which is what lets the tab strip and the switcher name a tab the same
     /// way.
     pub(crate) fn stated_title(&self) -> Option<&str> {
-        stated_title(&self.title)
+        self.terminal_identity
+            .as_deref()
+            .or_else(|| stated_title(&self.title))
     }
 
     /// Sets how opaque the pane wants this terminal painted; the pane leaf
@@ -2171,7 +2177,15 @@ impl TerminalView {
                     cx.notify();
                 }
             }
-            AlacEvent::Title(title) => self.set_title_when_settled(title, cx),
+            AlacEvent::Title(title) => {
+                if let Some(identity) =
+                    tty7_core::core::tab_view::identity_from_title(&title)
+                {
+                    self.terminal_identity = Some(identity);
+                    cx.notify();
+                }
+                self.set_title_when_settled(title, cx);
+            }
             AlacEvent::ResetTitle => self.set_title_when_settled(self.default_title.clone(), cx),
             AlacEvent::PtyWrite(text) => self.terminal.write(text.into_bytes()),
             AlacEvent::ChildExit(_) | AlacEvent::Exit => {
