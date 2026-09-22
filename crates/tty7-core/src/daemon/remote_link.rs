@@ -7,7 +7,6 @@ use russh::Channel;
 use russh::client::Msg;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
-use super::router::RouteChannel;
 use super::ssh::ProcessStream;
 
 pub enum RemoteLink {

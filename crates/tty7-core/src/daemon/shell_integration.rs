@@ -1042,6 +1042,7 @@ fn shell_quote(s: &str) -> String {
 
 
 pub fn setup(program: Option<&str>, args: &[String], has_custom_args: bool) -> Option<Injection> {
+    let _ = args;
     // Every shell defers to user-authored args, so the gate sits ahead of the
     // dispatch rather than once per arm — a shell added below inherits it
     // instead of having to remember it. Argv injection would collide with those

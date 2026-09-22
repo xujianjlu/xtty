@@ -414,8 +414,7 @@ fn names_capability_env(key: &str) -> bool {
 
 fn pane_environment(
     extra_env: &std::collections::HashMap<String, String>,
-    // Only Windows has a use for it — see the `COLORFGBG` block below.
-    dark: bool,
+    _dark: bool,
     pane: u64,
     workspace: Option<&str>,
     shell: &str,
