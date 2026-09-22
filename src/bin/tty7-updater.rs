@@ -88,8 +88,8 @@ mod macos {
     }
 
     /// The named options an install verb takes after its positional
-    /// arguments. See the Windows half of this file for why these are
-    /// arguments and not the environment.
+    /// arguments. Passed as argv (not the environment) so a hand-run
+    /// updater and the in-app spawn share one parser.
     #[derive(Default)]
     struct TailOptions {
         config_dir: Option<PathBuf>,
@@ -413,8 +413,7 @@ mod macos {
         // that app lives it *is* this process's parent, and the kernel
         // reparents us to launchd the moment it exits. Watching getppid() is
         // therefore immune to pid reuse, which `kill(pid, 0)` is not: a
-        // recycled pid keeps answering 0 forever. (Windows solves the same
-        // race by holding a process handle — see the windows module.)
+        // recycled pid keeps answering 0 forever.
         let pid = pid as libc::pid_t;
         if unsafe { libc::getppid() } == pid {
             while unsafe { libc::getppid() } == pid {

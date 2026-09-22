@@ -704,38 +704,17 @@ pub fn translate_ja(key: L10nKey) -> Option<&'static str> {
         L10nKey::UpdateDialogDetail => {
             "tty7 {version} が利用できます（現在 {current}）。インストールするとアプリが再起動します。バックグラウンドサーバーは動いたままなので、ペインの中身は残ります"
         }
-        L10nKey::UpdateDialogDetailWindows => {
-            "tty7 {version} が利用できます（現在 {current}）。インストールするとアプリとバックグラウンドサービスが再起動します。ペインのプロセスは終了し、タブとレイアウトは新しいシェルで復元されます"
-        }
         L10nKey::UpdateDialogDetailManual => {
             "tty7 {version} が利用できます（現在 {current}）。{hint}"
         }
         L10nKey::UpdateDialogCannotSelfUpdate => "このインストールは自動更新できません。",
         L10nKey::UpdateDialogLater => "後で",
         L10nKey::UpdateDialogNextLaunch => "次回起動時にインストール",
-        L10nKey::UpdateDialogNeedsElevation => {
-            "tty7 は全ユーザー向けにインストールされているため、インストール前に Windows の管理者承認が一度求められます。tty7 自体が管理者権限で実行されることはありません"
-        }
         L10nKey::SettingsUpdateCheckFailed => "アップデートを確認できませんでした: {error}",
         L10nKey::SettingsUpdatePrepareFailed => "アップデートに失敗しました: {error}",
         L10nKey::SettingsUpdateLaunchFailed => "インストーラーを起動できませんでした: {error}",
         L10nKey::SettingsUpdateUnsupportedMacos => {
             "この tty7 は書き込み可能な tty7.app バンドルにないため、自分自身を置き換えられません。「アプリケーション」へ移動するか、リリースページから更新してください"
-        }
-        L10nKey::SettingsUpdateUnsupportedLinux => {
-            "このアーキテクチャ向けの Linux パッケージはリリースにありません。ソースからビルドするか、パッケージマネージャーをご利用ください"
-        }
-        L10nKey::SettingsUpdateLinuxPackage => {
-            "Linux は手動で更新します。リリースページから {name} をダウンロードするか、パッケージマネージャーをご利用ください"
-        }
-        L10nKey::SettingsUpdateUnsupportedWindows => {
-            "この tty7 は認識可能な Inno Setup 版でもポータブル ZIP 版でもないため、自動更新できません。リリースページを開いて手動で更新してください"
-        }
-        L10nKey::SettingsUpdateWindowsAllUsers => {
-            "tty7 はすべてのユーザー向けにインストールされており、置き換えには管理者権限が必要ですが、tty7 は自ら昇格を要求しません。リリースページからインストーラーを実行して更新してください"
-        }
-        L10nKey::SettingsUpdateUnsupportedPlatform => {
-            "このプラットフォームでは自動インストールを利用できません。リリースページを開いてください"
         }
         L10nKey::SettingsUpdateMissingPackage => {
             "このリリースには、現在のインストール形式に合う {name} パッケージがありません。リリースページを開いて別のパッケージを選んでください"

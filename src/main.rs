@@ -487,19 +487,11 @@ fn main() {
     crate::core::crash::install(role);
     crate::core::logfile::install(role);
 
-    // The Windows installer owns the Explorer context menu: a task checkbox
-    // runs these, and the uninstaller always runs the unregister half. Keeping
-    // the registry shape in `explorer_context_menu` rather than in the .iss
-    // means the installer and the running app can never disagree about it.
-    // Handled after the log file is open, because a GUI-subsystem process has
-    // no console to report a failure on and Inno does not surface exit codes:
-    // the log is the only place the reason can survive.
+    // Retained CLI flags from the former Windows Explorer-menu installer path.
+    // On macOS `explorer_context_menu::{register,unregister}` are no-ops; keep
+    // the flags so old scripts fail closed without launching the GUI.
     if let Some(register) = explorer_menu_action_from(&args) {
         let result = if register {
-            // The verb labels are localized, and this process stops at the
-            // `return` below — it never reaches the `set_locale` on the GUI
-            // path. Without this read every install would write English
-            // entries, whatever language the user runs tty7 in.
             crate::ui::i18n::set_locale(&Config::load().gui_language);
             crate::core::explorer_context_menu::register()
         } else {

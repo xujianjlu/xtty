@@ -695,38 +695,17 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::UpdateDialogDetail => {
             "tty7 {version} is available — you're on {current}. Installing restarts the app; the background server keeps running, so your panes survive."
         }
-        L10nKey::UpdateDialogDetailWindows => {
-            "tty7 {version} is available — you're on {current}. Installing restarts the app and the background service: processes in your panes are ended, and your tabs and layout come back with fresh shells."
-        }
         L10nKey::UpdateDialogDetailManual => {
             "tty7 {version} is available — you're on {current}. {hint}"
         }
         L10nKey::UpdateDialogCannotSelfUpdate => "This installation cannot update itself.",
         L10nKey::UpdateDialogLater => "Later",
         L10nKey::UpdateDialogNextLaunch => "Install on Next Launch",
-        L10nKey::UpdateDialogNeedsElevation => {
-            "tty7 is installed for all users, so Windows asks for administrator approval once before installing. tty7 itself never runs elevated."
-        }
         L10nKey::SettingsUpdateCheckFailed => "Could not check for updates: {error}",
         L10nKey::SettingsUpdatePrepareFailed => "Update failed: {error}",
         L10nKey::SettingsUpdateLaunchFailed => "Could not start the installer: {error}",
         L10nKey::SettingsUpdateUnsupportedMacos => {
             "This copy is not in a writable tty7.app bundle, so it cannot replace itself. Move tty7 to Applications, or open the release page to update."
-        }
-        L10nKey::SettingsUpdateUnsupportedLinux => {
-            "The release has no Linux package for this architecture. Build from source, or use your package manager."
-        }
-        L10nKey::SettingsUpdateLinuxPackage => {
-            "Linux installations are updated by hand. Download {name} from the release page, or use your package manager."
-        }
-        L10nKey::SettingsUpdateUnsupportedWindows => {
-            "This copy is not a recognized Inno Setup or portable ZIP installation, so it cannot update itself. Open the release page to update it by hand."
-        }
-        L10nKey::SettingsUpdateWindowsAllUsers => {
-            "tty7 is installed for all users, so replacing it needs administrator rights that tty7 will not ask for itself. Open the release page and run the installer to update."
-        }
-        L10nKey::SettingsUpdateUnsupportedPlatform => {
-            "Automatic installation is not available on this platform. Open the release page."
         }
         L10nKey::SettingsUpdateMissingPackage => {
             "The release has no {name} package for this installation. Open the release page to choose another package."

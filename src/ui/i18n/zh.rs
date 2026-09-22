@@ -613,35 +613,16 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::UpdateDialogDetail => {
             "tty7 {version} 已发布，你现在是 {current}。安装会重启应用；后台 server 不动，pane 里的东西都还在。"
         }
-        L10nKey::UpdateDialogDetailWindows => {
-            "tty7 {version} 已发布，你现在是 {current}。安装会重启应用和后台 server：pane 里的进程会被结束，标签页和布局以全新的 shell 恢复。"
-        }
         L10nKey::UpdateDialogDetailManual => "tty7 {version} 已发布，你现在是 {current}。{hint}",
         L10nKey::UpdateDialogCannotSelfUpdate => "这份安装无法自行更新。",
         L10nKey::UpdateDialogLater => "以后再说",
         L10nKey::UpdateDialogNextLaunch => "下次启动时安装",
-        L10nKey::UpdateDialogNeedsElevation => {
-            "tty7 是为所有用户安装的，安装前 Windows 会请求一次管理员批准。tty7 本身不会以管理员身份运行。"
-        }
         L10nKey::SettingsUpdateCheckFailed => "无法检查更新：{error}",
         L10nKey::SettingsUpdatePrepareFailed => "更新失败：{error}",
         L10nKey::SettingsUpdateLaunchFailed => "无法启动安装程序：{error}",
         L10nKey::SettingsUpdateUnsupportedMacos => {
             "当前副本不在可写的 tty7.app 包里，无法自我替换。请把 tty7 移到“应用程序”，或打开发布页面更新。"
         }
-        L10nKey::SettingsUpdateUnsupportedLinux => {
-            "发布版本中没有适用于该架构的 Linux 包。请自行从源码构建，或使用包管理器。"
-        }
-        L10nKey::SettingsUpdateLinuxPackage => {
-            "Linux 需要手动更新。请到发布页面下载 {name}，或使用包管理器。"
-        }
-        L10nKey::SettingsUpdateUnsupportedWindows => {
-            "当前副本不是可识别的 Inno Setup 安装版或便携 ZIP 版，无法自我更新。请打开发布页面手动更新。"
-        }
-        L10nKey::SettingsUpdateWindowsAllUsers => {
-            "tty7 是为所有用户安装的，替换需要管理员权限，而 tty7 不会自行提权。请打开发布页面，自行运行安装程序更新。"
-        }
-        L10nKey::SettingsUpdateUnsupportedPlatform => "此平台不支持自动安装，请打开发布页面。",
         L10nKey::SettingsUpdateMissingPackage => {
             "该版本没有适用于当前安装的 {name} 包。请打开发布页面选择其他包。"
         }
