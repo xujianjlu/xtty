@@ -1,0 +1,2225 @@
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::{Arc, OnceLock};
+
+use serde::{Deserialize, Serialize};
+
+pub const SUPPORTED_GUI_LANGUAGES: &[&str] = &["en", "zh-CN", "ja-JP"];
+
+#[derive(Default, Clone, Eq, PartialEq, Hash)]
+pub struct FontFeatures(pub Arc<Vec<(String, u32)>>);
+
+impl FontFeatures {
+    pub fn tag_value_list(&self) -> &[(String, u32)] {
+        self.0.as_slice()
+    }
+
+    pub fn is_calt_enabled(&self) -> Option<bool> {
+        self.0
+            .iter()
+            .find(|(feature, _)| feature == "calt")
+            .map(|(_, value)| *value == 1)
+    }
+}
+
+impl std::fmt::Debug for FontFeatures {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut debug = f.debug_struct("FontFeatures");
+        for (tag, value) in self.tag_value_list() {
+            debug.field(tag, value);
+        }
+        debug.finish()
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+enum FeatureValue {
+    Bool(bool),
+    Number(serde_json::Number),
+}
+
+fn is_valid_feature_tag(tag: &str) -> bool {
+    tag.len() == 4 && tag.chars().all(|c| c.is_ascii_alphanumeric())
+}
+
+impl<'de> serde::Deserialize<'de> for FontFeatures {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::{MapAccess, Visitor};
+
+        struct FontFeaturesVisitor;
+
+        impl<'de> Visitor<'de> for FontFeaturesVisitor {
+            type Value = FontFeatures;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("a map of font features")
+            }
+
+            fn visit_map<M>(self, mut access: M) -> Result<Self::Value, M::Error>
+            where
+                M: MapAccess<'de>,
+            {
+                let mut feature_list = Vec::new();
+                while let Some((key, value)) =
+                    access.next_entry::<String, Option<FeatureValue>>()?
+                {
+                    if !is_valid_feature_tag(&key) {
+                        log::error!("Incorrect font feature tag: {key}");
+                        continue;
+                    }
+                    let Some(value) = value else { continue };
+                    match value {
+                        FeatureValue::Bool(enable) => {
+                            feature_list.push((key, u32::from(enable)));
+                        }
+                        FeatureValue::Number(value) => match value.as_u64() {
+                            Some(value) => feature_list.push((key, value as u32)),
+                            None => {
+                                log::error!(
+                                    "Incorrect font feature value {value} for feature tag {key}"
+                                );
+                                continue;
+                            }
+                        },
+                    }
+                }
+                Ok(FontFeatures(Arc::new(feature_list)))
+            }
+        }
+
+        deserializer.deserialize_map(FontFeaturesVisitor)
+    }
+}
+
+impl serde::Serialize for FontFeatures {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeMap;
+
+        let mut map = serializer.serialize_map(None)?;
+        for (tag, value) in self.tag_value_list() {
+            map.serialize_entry(tag, value)?;
+        }
+        map.end()
+    }
+}
+
+/// One action's line in `keybindings`.
+///
+/// The two shapes mean different things, so a save writes back whichever one
+/// was read.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum KeybindingOverride {
+    /// `"NextTab": "cmd-shift-]"` — a chord *beside* the ones the action
+    /// already has, the way VS Code, Zed and kitty read a line like it (#868).
+    /// Empty unbinds the action, which is what `""` has always meant here.
+    Add(String),
+    /// `"NextTab": ["cmd-shift-]"]` — exactly these chords, replacing the
+    /// default and the preset's. `[]` unbinds. This is what the Settings page
+    /// writes, because recording a shortcut there sets it.
+    Exact(Vec<String>),
+}
+
+/// An iTerm-style rule that reacts to text printed by a terminal.
+///
+/// The secret is deliberately absent. `credential` is only the account name
+/// of an entry in the operating-system keychain; serialising a trigger must
+/// never serialise the password it sends.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(default)]
+pub struct PasswordTrigger {
+    pub name: String,
+    pub pattern: String,
+    pub regex: bool,
+    pub credential: String,
+    pub send_enter: bool,
+    pub enabled: bool,
+    pub cooldown_ms: u64,
+}
+
+impl Default for PasswordTrigger {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            pattern: String::new(),
+            regex: false,
+            credential: String::new(),
+            send_enter: true,
+            enabled: true,
+            cooldown_ms: 1_500,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct Config {
+    pub font_family: String,
+    pub font_fallbacks: Vec<String>,
+    pub font_family_bold: Option<String>,
+    pub font_family_italic: Option<String>,
+    pub font_features: Option<FontFeatures>,
+    pub font_size: f32,
+    pub line_height: f32,
+    /// The interface's root font size, in pixels — everything outside the
+    /// terminal grid is sized against it.
+    ///
+    /// It is the CSS-style `rem` the whole chrome is laid out in, not one
+    /// label's size: raising it scales panel text, section headings and the
+    /// spacing derived from them together. Its own default matches the size
+    /// the chrome was drawn at, so an existing config renders unchanged.
+    #[serde(default = "default_ui_font_size")]
+    pub ui_font_size: f32,
+    /// The face the chrome is drawn in; `None` is the system UI font.
+    ///
+    /// Only the chrome — the terminal grid keeps `font_family`. The
+    /// struct-level `serde(default)` fills it in for a config written before
+    /// the setting existed, and like every other optional key it is written
+    /// out as `null` rather than dropped, so the file still lists what can be
+    /// set by hand.
+    pub ui_font_family: Option<String>,
+    pub theme: String,
+    pub theme_preset: String,
+    pub theme_follow_system: bool,
+    pub theme_preset_light: String,
+    pub theme_preset_dark: String,
+    #[serde(default = "default_true")]
+    pub theme_legible_palette: bool,
+    pub window_opacity: Option<f32>,
+    pub window_blur: Option<bool>,
+    #[serde(default = "default_true")]
+    pub dim_inactive_panes: bool,
+    pub keybindings: HashMap<String, KeybindingOverride>,
+    #[serde(default = "default_preset")]
+    pub keybinding_preset: String,
+    #[serde(default = "default_prefix")]
+    pub prefix: String,
+    pub shell: Option<ShellConfig>,
+    /// Lenient on purpose: this is a hand-edited key with a nested shape, and a
+    /// typo in one entry must not fail the whole `Config` and hand the user
+    /// back defaults that the next settings write would then persist over what
+    /// they wrote.
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub custom_shells: Vec<CustomShell>,
+
+    /// Output-driven password rules. Passwords live in the OS keychain under
+    /// `credential`, never in this config file.
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub password_triggers: Vec<PasswordTrigger>,
+
+    pub link_url: bool,
+    /// What a clicked file link opens in. `None` means the key predates this
+    /// setting; [`Config::sanitize`] resolves it, and every reader should go
+    /// through [`Config::file_open_mode`] rather than read it raw.
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub link_file_open: Option<LinkFileOpen>,
+    pub link_file_command: Option<String>,
+    pub ssh_loopback_forward: bool,
+    pub cursor_blink: bool,
+    pub scrollback_limit: usize,
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub new_tab_position: NewTabPosition,
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub tab_bar_position: TabBarPosition,
+    #[serde(default = "default_sidebar_width")]
+    pub sidebar_width: f32,
+    #[serde(default)]
+    pub sidebar_collapsed: bool,
+    #[serde(default)]
+    pub right_panel_visible: bool,
+    #[serde(default = "default_right_panel_width")]
+    pub right_panel_width: f32,
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub right_panel_tab: RightPanelTab,
+    /// Global, not per-overlay — the same call VS Code's
+    /// `diffEditor.renderSideBySide` makes.
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub diff_view: DiffViewMode,
+    /// How the code / diff surface shares the window with the terminal — for a
+    /// tab that has not been told otherwise. The choice itself is per tab, made
+    /// on the document header's context menu; this is the value a fresh tab
+    /// starts from, and therefore the one every untold tab is still reading,
+    /// which is why the menu never writes it.
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub document_layout: DocumentLayout,
+    /// The share of the terminal column — the flex area between the sidebar and
+    /// the right panel — the document column takes when docked. The named
+    /// widths land on a third, a half and two thirds; a drag leaves whatever it
+    /// leaves, held to [`DOCUMENT_RATIO_MIN`]..=[`DOCUMENT_RATIO_MAX`]. Live
+    /// layout narrows it further when the terminal's floor needs the width.
+    #[serde(default = "default_document_ratio")]
+    pub document_ratio: f32,
+    /// The source control panel's history section starts collapsed: a graph
+    /// unfurling the first time someone opens the panel is a worse first
+    /// impression than one they asked for.
+    #[serde(default)]
+    pub scm_graph_expanded: bool,
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub sidebar_grouping: SidebarGrouping,
+    /// Which sidebar groups are folded shut, by group key: the repo root the
+    /// group is named after, or the empty string for the scratch group, which
+    /// has no root of its own and no real key can ever collide with.
+    ///
+    /// Kept as a list of the folded ones rather than a flag per group because
+    /// groups come and go with the tabs — a group nobody has opened yet has to
+    /// start expanded, and an entry for a repo that is no longer around costs
+    /// one dead path in the file.
+    ///
+    /// `String`, not `PathBuf`: serde refuses to serialize a non-UTF-8
+    /// `PathBuf`, and `Config::save` turns that refusal into one `warn!` and
+    /// a return — so a single repo root with odd bytes in it would silently
+    /// stop the *whole* config being written from then on. A lossy spelling
+    /// of such a root at worst folds two of them together.
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub sidebar_collapsed_groups: Vec<String>,
+    #[serde(default = "default_true")]
+    pub sidebar_diff_preview: bool,
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub notify_on_command_finish: NotifyMode,
+    pub check_for_updates: bool,
+    /// Which release feed update checks follow. Stable by default, so an
+    /// installation only ever ends up on Nightly by asking for it.
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub update_channel: UpdateChannel,
+    /// Whether a found update is fetched and verified before the user asks for
+    /// it. On by default: it turns "spend five minutes downloading" into "press
+    /// restart", which is the whole difference between an update people apply
+    /// and one they postpone forever. Nothing is ever *installed* without an
+    /// explicit choice — the staged package waits in Settings.
+    ///
+    /// Worth turning off on a metered connection: the packages run 25–30 MB and
+    /// a check happens every six hours.
+    #[serde(default = "default_true")]
+    pub auto_download_updates: bool,
+    /// Whether the GUI puts the bundled `tty7` CLI on PATH at launch (see
+    /// `core::cli_install`). On by default: the CLI is the agent-facing half of
+    /// this product and is worth nothing sitting unreachable inside the bundle.
+    /// Off is for people who keep their own `tty7` — a `cargo install` build, a
+    /// package manager's copy — and do not want it shadowed.
+    #[serde(default = "default_true")]
+    pub install_cli_on_path: bool,
+    /// GUI-only locale selection. Values: `en` or `zh-CN`.
+    /// CLI output stays English so agent/script integrations are stable.
+    #[serde(default = "default_gui_language")]
+    pub gui_language: String,
+    #[serde(default = "default_notify_threshold_secs")]
+    pub notify_threshold_secs: u64,
+    #[serde(default = "default_true")]
+    pub restore_session: bool,
+    #[serde(default = "default_true")]
+    pub show_tray_icon: bool,
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub bell: BellMode,
+    /// Whether tty7 edits the shell prompt itself. On by default: the inline
+    /// editor is what gives a prompt selection, undo, a completion menu and the
+    /// fuzzy history — none of which a shell's own line editor offers.
+    ///
+    /// Off hands every keystroke at the prompt straight to the PTY, so zsh's
+    /// ZLE / readline / fish own editing again and the keybindings written in a
+    /// dotfile work exactly as they do outside tty7. Shell integration itself
+    /// stays on: prompt boundaries, cwd, exit status and notifications are
+    /// unaffected. `tab_completion` and `history_search` are tty7's own menus,
+    /// so both are moot while this is off.
+    #[serde(default = "default_true")]
+    pub prompt_editor: bool,
+    #[serde(default = "default_true")]
+    pub tab_completion: bool,
+    #[serde(default = "default_true")]
+    pub history_search: bool,
+
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub cursor_style: CursorStyle,
+
+    pub macos_option_as_alt: bool,
+    pub mouse_hide_while_typing: bool,
+    pub focus_follows_mouse: bool,
+    pub mouse_scroll_multiplier: f32,
+    /// Spread a wheel detent over several frames instead of jumping the whole
+    /// distance at once. Trackpad gestures are left alone — they are already a
+    /// continuous stream, and animating one would just add lag.
+    #[serde(default = "default_true")]
+    pub smooth_scroll: bool,
+    #[serde(default = "default_true")]
+    pub mouse_reporting: bool,
+    /// Which modifier turns the wheel into a font zoom over a terminal.
+    ///
+    /// Defaults to the platform modifier, which is what tty7 has always done —
+    /// but on macOS that is ⌘, a key people are holding half the time for
+    /// something else entirely, so the font jumps size while they scroll
+    /// (#668). Movable, and switchable off.
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub mouse_zoom_modifier: MouseZoomModifier,
+    pub clipboard_trim_trailing_spaces: bool,
+    pub copy_on_select: bool,
+    /// Optional HTTP/SOCKS proxy for tty7's *own* update checks and release
+    /// downloads; when set it overrides the system proxy and the environment.
+    /// Programs running in a pane are unaffected — they inherit their proxy
+    /// from their own environment, as in any other terminal.
+    ///
+    /// Normalised by [`Config::sanitize`], so `Some` always means a non-blank
+    /// value. Examples: `http://127.0.0.1:7890`, `socks5://127.0.0.1:1080`.
+    #[serde(default)]
+    pub http_proxy: Option<String>,
+    #[serde(default = "default_true")]
+    pub smart_select: bool,
+    #[serde(default = "default_word_separators")]
+    pub word_separators: String,
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub startup_mode: StartupMode,
+    #[serde(default = "default_true")]
+    pub remember_window_size: bool,
+
+    #[serde(default)]
+    pub working_directory: WorkingDirectory,
+    #[serde(default)]
+    pub env: HashMap<String, String>,
+
+    #[serde(default)]
+    pub ssh_profiles: Vec<crate::core::ssh_profile::SshProfile>,
+    #[serde(default = "default_true")]
+    pub verify_host_keys: bool,
+    #[serde(default)]
+    pub ssh_warn_on_close: bool,
+    #[serde(default)]
+    pub ssh_profile_frecency: HashMap<uuid::Uuid, ProfileUsage>,
+
+    #[serde(default)]
+    pub command_frecency: HashMap<String, ProfileUsage>,
+
+    #[serde(default)]
+    pub agent_commands: HashMap<String, String>,
+    #[serde(default = "default_true")]
+    pub restore_agent_sessions: bool,
+    /// Give each pane its own shell history instead of one file every pane
+    /// appends to and reads back.
+    ///
+    /// Seeded from the shell's real history file, so a new pane is not blank,
+    /// and merged back into it when the pane closes, so nothing typed is lost.
+    /// Off by default because shared history is what a terminal has always
+    /// done, and someone who has not asked for the change would experience it
+    /// as their history mysteriously forgetting the other window.
+    #[serde(default)]
+    pub per_pane_history: bool,
+
+    /// This instance is the stand-in for a file that could not be read or
+    /// parsed: `load` kept a copy aside and handed back defaults. Never
+    /// serialized — it describes how the file *load* went, not a setting —
+    /// and it makes [`Config::save`] refuse to run, because writing these
+    /// defaults back over the user's hand-edited file is how one typo becomes
+    /// permanent data loss (#537). Cleared only by a load that parses.
+    #[serde(skip)]
+    pub quarantined: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(default)]
+pub struct ProfileUsage {
+    pub count: u32,
+    pub last_used: u64,
+}
+
+impl ProfileUsage {
+    pub fn score(&self, now: u64) -> f64 {
+        if self.count == 0 {
+            return 0.0;
+        }
+        let age_days = now.saturating_sub(self.last_used) as f64 / 86_400.0;
+        self.count as f64 / (1.0 + age_days / 7.0)
+    }
+}
+
+pub fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(default)]
+pub struct WorkingDirectory {
+    #[serde(deserialize_with = "de_lenient")]
+    pub strategy: WdStrategy,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum WdStrategy {
+    #[default]
+    Inherit,
+    Home,
+    Custom,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum StartupMode {
+    #[default]
+    Normal,
+    Maximized,
+    Fullscreen,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CursorStyle {
+    #[default]
+    Block,
+    Bar,
+    Underline,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum NewTabPosition {
+    #[default]
+    AfterCurrent,
+    End,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum TabBarPosition {
+    Top,
+    #[default]
+    Left,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SidebarGrouping {
+    #[default]
+    Repo,
+    /// By repository where there is one; a tab whose cwd is known not to be
+    /// in a repo groups under that cwd instead of falling to Scratch.
+    RepoOrDirectory,
+    None,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum NotifyMode {
+    Never,
+    #[default]
+    Unfocused,
+    Always,
+}
+
+/// Which release feed this installation follows.
+///
+/// The channel is a property of the installation, not something derived from
+/// the version number. Without it the only thing separating a Nightly from a
+/// Stable is how their versions happen to sort, which is how a Nightly ends up
+/// being walked back onto Stable by an update it never asked for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum UpdateChannel {
+    #[default]
+    Stable,
+    /// Follows the rolling `nightly` prerelease, which is rebuilt from `main`
+    /// every night.
+    Nightly,
+}
+
+/// The modifier that makes the mouse wheel resize the font.
+///
+/// `Platform` keeps the historical binding — ⌘ on macOS, Ctrl elsewhere — and
+/// is stored rather than the resolved key so one config file can be shared
+/// between machines that disagree about which key that is.
+///
+/// Shift is deliberately not offered: shift+wheel is the escape hatch that
+/// scrolls the scrollback out from under a mouse-reporting program.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum MouseZoomModifier {
+    #[default]
+    Platform,
+    Ctrl,
+    Alt,
+    /// The wheel never zooms; every scroll goes to the buffer.
+    None,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum BellMode {
+    None,
+    #[default]
+    Visual,
+    Audible,
+    Both,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct ShellConfig {
+    pub program: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+}
+
+/// A launcher the user put in the new-tab menu themselves.
+///
+/// `shell` names the one command that stands in for the platform default;
+/// these are the rest — a distro, a container, a REPL, the same shell against a
+/// different profile. They are launched exactly as written, which is why `args`
+/// crosses as user-authored: tty7 has no defaults to contribute to a command it
+/// did not choose.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(default)]
+pub struct CustomShell {
+    pub label: String,
+    pub program: String,
+    pub args: Vec<String>,
+}
+
+pub fn default_font_fallbacks() -> Vec<String> {
+    let names: &[&str] = if cfg!(target_os = "macos") {
+        &[
+            "Menlo",
+            "Hasklug Nerd Font Mono",
+            "Maple Mono NF CN",
+            "PingFang SC",
+            "Apple Color Emoji",
+        ]
+    } else {
+        // Remote Linux tty7-server (and other Unix hosts).
+        &[
+            "Maple Mono NF CN",
+            "DejaVu Sans Mono",
+            "Noto Sans CJK SC",
+            "Noto Color Emoji",
+        ]
+    };
+    names.iter().map(|n| n.to_string()).collect()
+}
+
+pub fn platform_last_resort_fallbacks() -> &'static [&'static str] {
+    if cfg!(target_os = "macos") {
+        &["PingFang SC", "Apple Color Emoji"]
+    } else {
+        &["Noto Sans CJK SC", "Noto Color Emoji"]
+    }
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            font_family: "Hack".to_string(),
+            font_fallbacks: default_font_fallbacks(),
+            font_family_bold: None,
+            font_family_italic: None,
+            font_features: None,
+            font_size: 15.0,
+            line_height: 1.4,
+            ui_font_size: default_ui_font_size(),
+            ui_font_family: None,
+            theme: "light".to_string(),
+            theme_preset: "light".to_string(),
+            theme_follow_system: false,
+            theme_preset_light: "light".to_string(),
+            theme_preset_dark: "dark".to_string(),
+            theme_legible_palette: true,
+            window_opacity: None,
+            window_blur: None,
+            dim_inactive_panes: true,
+            keybindings: HashMap::new(),
+            keybinding_preset: default_preset(),
+            prefix: default_prefix(),
+            shell: None,
+            custom_shells: Vec::new(),
+            password_triggers: Vec::new(),
+            link_url: true,
+            link_file_open: Some(LinkFileOpen::Internal),
+            link_file_command: None,
+            ssh_loopback_forward: true,
+            cursor_blink: true,
+            scrollback_limit: 10_000,
+            new_tab_position: NewTabPosition::AfterCurrent,
+            tab_bar_position: TabBarPosition::Left,
+            sidebar_width: default_sidebar_width(),
+            sidebar_collapsed: false,
+            right_panel_visible: false,
+            right_panel_width: default_right_panel_width(),
+            right_panel_tab: RightPanelTab::Info,
+            diff_view: DiffViewMode::Split,
+            document_layout: DocumentLayout::default(),
+            document_ratio: default_document_ratio(),
+            scm_graph_expanded: false,
+            sidebar_grouping: SidebarGrouping::Repo,
+            sidebar_collapsed_groups: Vec::new(),
+            sidebar_diff_preview: true,
+            notify_on_command_finish: NotifyMode::Unfocused,
+            check_for_updates: true,
+            update_channel: UpdateChannel::default(),
+            auto_download_updates: true,
+            install_cli_on_path: true,
+            gui_language: default_gui_language(),
+            notify_threshold_secs: default_notify_threshold_secs(),
+            restore_session: true,
+            show_tray_icon: true,
+            bell: BellMode::Visual,
+            prompt_editor: true,
+            tab_completion: true,
+            history_search: true,
+            cursor_style: CursorStyle::Block,
+            macos_option_as_alt: false,
+            mouse_hide_while_typing: true,
+            focus_follows_mouse: false,
+            mouse_scroll_multiplier: 1.0,
+            smooth_scroll: true,
+            mouse_reporting: true,
+            mouse_zoom_modifier: MouseZoomModifier::default(),
+            clipboard_trim_trailing_spaces: false,
+            copy_on_select: false,
+            http_proxy: None,
+            smart_select: true,
+            word_separators: default_word_separators(),
+            startup_mode: StartupMode::Normal,
+            remember_window_size: true,
+            working_directory: WorkingDirectory::default(),
+            env: HashMap::new(),
+            ssh_profiles: Vec::new(),
+            verify_host_keys: true,
+            ssh_warn_on_close: false,
+            ssh_profile_frecency: HashMap::new(),
+            command_frecency: HashMap::new(),
+            agent_commands: HashMap::new(),
+            restore_agent_sessions: true,
+            per_pane_history: false,
+            quarantined: false,
+        }
+    }
+}
+
+/// How the file behind a [`Config::load_with_outcome`] went — the answer a
+/// hot-reload watcher needs before it swaps a running app onto the result,
+/// because "no file yet" and "a broken file" must not do the same thing
+/// (#537).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoadOutcome {
+    /// The file parsed (after the usual field-level leniency).
+    Parsed,
+    /// There is no file (or no config dir yet): the defaults simply are the
+    /// config, and saving them is fine.
+    Absent,
+    /// The file existed but did not parse. A copy was kept beside it, and the
+    /// returned config is the defaults with writes suppressed — saving over
+    /// the broken file would make one typo permanent.
+    Quarantined,
+    /// The file is there but could not be read at all. Writes are suppressed
+    /// the same way, but nothing was parked beside it: there was nothing
+    /// readable to copy. Distinct from [`LoadOutcome::Quarantined`] because
+    /// telling the user to look in `config.json.corrupt` for contents that
+    /// were never written there sends them after a file that is not there.
+    Unreadable,
+}
+
+impl LoadOutcome {
+    /// Whether the file is standing between the user and their settings: the
+    /// values handed back are defaults with writes suppressed, not anything
+    /// the user wrote.
+    pub fn failed(self) -> bool {
+        matches!(self, Self::Quarantined | Self::Unreadable)
+    }
+}
+
+impl Config {
+    pub fn load() -> Self {
+        Self::load_with_outcome().0
+    }
+
+    /// [`Config::load`] with the verdict the file earned. Most callers want
+    /// the values either way and use `load`; the watcher that swaps a running
+    /// app onto the result needs the outcome to keep a broken file from
+    /// evicting the settings the app is running on.
+    pub fn load_with_outcome() -> (Self, LoadOutcome) {
+        let Some(path) = Self::path() else {
+            return (Config::default(), LoadOutcome::Absent);
+        };
+        let text = match std::fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return (Config::default(), LoadOutcome::Absent);
+            }
+            Err(e) => {
+                // Unreadable is not unparseable, but the rule is the same:
+                // what cannot be read must not be overwritten. There may be
+                // nothing readable to keep a copy of, so nothing is parked —
+                // the file itself is still where the user left it.
+                log::warn!(
+                    "failed to read config at {}: {e}; using defaults, writes suppressed",
+                    path.display()
+                );
+                let mut cfg = Config::default();
+                cfg.quarantined = true;
+                return (cfg, LoadOutcome::Unreadable);
+            }
+        };
+        match serde_json::from_str::<Config>(strip_bom(&text)) {
+            Ok(mut cfg) => {
+                cfg.sanitize();
+                (cfg, LoadOutcome::Parsed)
+            }
+            Err(e) => {
+                // The next `save` overwrites this file wholesale, so handing
+                // back defaults with no trace quietly discards whatever the
+                // file held the moment anything — a dragged sidebar divider —
+                // writes. Park a copy first, the way `WindowViews::load`
+                // does, and mark the stand-in so `save` refuses to run for it.
+                log::warn!(
+                    "failed to parse config at {}: {e}; keeping it aside and using defaults",
+                    path.display()
+                );
+                quarantine(&path);
+                let mut cfg = Config::default();
+                cfg.quarantined = true;
+                (cfg, LoadOutcome::Quarantined)
+            }
+        }
+    }
+
+    /// What a clicked file link should open in, with the pre-setting default
+    /// filled in for a `Config` that never went through [`Self::sanitize`].
+    pub fn file_open_mode(&self) -> LinkFileOpen {
+        self.link_file_open.unwrap_or_default()
+    }
+
+    fn sanitize(&mut self) {
+        if !self.font_size.is_finite() || self.font_size <= 0.0 {
+            self.font_size = Config::default().font_size;
+        }
+        self.font_size = self.font_size.clamp(FONT_SIZE_MIN, FONT_SIZE_MAX);
+        if !self.line_height.is_finite() || self.line_height <= 0.0 {
+            self.line_height = Config::default().line_height;
+        }
+        self.line_height = self.line_height.clamp(LINE_HEIGHT_MIN, LINE_HEIGHT_MAX);
+        if !self.ui_font_size.is_finite() || self.ui_font_size <= 0.0 {
+            self.ui_font_size = default_ui_font_size();
+        }
+        // The whole chrome is a multiple of this, so a wild value does not
+        // shrink one label — it makes the window unusable. Keep the range to
+        // sizes the layout still holds together at.
+        self.ui_font_size = self.ui_font_size.clamp(UI_FONT_SIZE_MIN, UI_FONT_SIZE_MAX);
+        if let Some(family) = &self.ui_font_family
+            && family.trim().is_empty()
+        {
+            self.ui_font_family = None;
+        }
+        self.scrollback_limit = self.scrollback_limit.clamp(100, MAX_SCROLLBACK);
+        if !self.mouse_scroll_multiplier.is_finite() || self.mouse_scroll_multiplier <= 0.0 {
+            self.mouse_scroll_multiplier = Config::default().mouse_scroll_multiplier;
+        }
+        self.mouse_scroll_multiplier = self.mouse_scroll_multiplier.clamp(0.1, 10.0);
+        self.notify_threshold_secs = self.notify_threshold_secs.clamp(1, 3600);
+        self.window_opacity = self
+            .window_opacity
+            .filter(|o| o.is_finite())
+            .map(|o| o.clamp(0.2, 1.0));
+        if !self.sidebar_width.is_finite() || self.sidebar_width <= 0.0 {
+            self.sidebar_width = default_sidebar_width();
+        }
+        self.sidebar_width = self.sidebar_width.clamp(100.0, 2000.0);
+        if !self.right_panel_width.is_finite() || self.right_panel_width <= 0.0 {
+            self.right_panel_width = default_right_panel_width();
+        }
+        self.right_panel_width = self.right_panel_width.clamp(100.0, 2000.0);
+        if !self.document_ratio.is_finite() || self.document_ratio <= 0.0 {
+            self.document_ratio = default_document_ratio();
+        }
+        self.document_ratio = self
+            .document_ratio
+            .clamp(DOCUMENT_RATIO_MIN, DOCUMENT_RATIO_MAX);
+        if let Some(command) = &self.link_file_command
+            && command.trim().is_empty()
+        {
+            self.link_file_command = None;
+        }
+        // Absent means a config written before file links could open in the
+        // built-in editor. Anyone who had already pointed `link_file_command`
+        // at their own editor asked for that and keeps it; everyone else, who
+        // was silently getting the OS file association, gets the editor. A
+        // fresh `link_file_open` in a `Default` config would have taken the
+        // first group's editor away on upgrade.
+        self.link_file_open
+            .get_or_insert(match self.link_file_command {
+                Some(_) => LinkFileOpen::Command,
+                None => LinkFileOpen::Internal,
+            });
+        // Normalise here so every reader can take the field as-is instead of
+        // repeating a trim-and-drop-if-blank dance.
+        self.http_proxy = self
+            .http_proxy
+            .take()
+            .map(|proxy| proxy.trim().to_string())
+            .filter(|proxy| !proxy.is_empty());
+        if !SUPPORTED_GUI_LANGUAGES.contains(&self.gui_language.as_str()) {
+            self.gui_language = default_gui_language();
+        }
+    }
+
+    pub fn save(&self) {
+        if self.quarantined {
+            // The file this instance stands in for could not be read, so what
+            // the user wrote is still on disk — writing these defaults over it
+            // is the wholesale loss #537 is about. The fix is to repair the
+            // file; the next load that parses produces a writable config.
+            log::warn!("not saving over a config file that failed to load; fix or remove it first");
+            return;
+        }
+        let Some(path) = Self::path() else {
+            return;
+        };
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        match serde_json::to_string_pretty(self) {
+            Ok(text) => {
+                if let Err(e) = write_atomic(&path, text.as_bytes()) {
+                    log::warn!("failed to write config at {}: {e}", path.display());
+                }
+            }
+            Err(e) => log::warn!("failed to serialize config: {e}"),
+        }
+    }
+
+    fn path() -> Option<PathBuf> {
+        config_path("config.json")
+    }
+}
+
+static CONFIG_DIR_OVERRIDE: OnceLock<PathBuf> = OnceLock::new();
+
+pub fn set_config_dir(dir: PathBuf) {
+    let _ = CONFIG_DIR_OVERRIDE.set(dir);
+}
+
+fn config_dir() -> Option<PathBuf> {
+    if let Some(dir) = CONFIG_DIR_OVERRIDE.get() {
+        return Some(dir.clone());
+    }
+    machine_config_dir()
+}
+
+/// The config directory this machine resolves to when no single invocation
+/// redirects it — `$TTY7_CONFIG_DIR` where the box names one, the default under
+/// `$HOME` otherwise.
+///
+/// [`config_dir`] with the `--config-dir` override left off, which is the
+/// question "is this the machine's tty7 or a second one somebody pointed
+/// elsewhere" (see `machine::adopt_legacy_data_dir`). It cannot be answered by
+/// whether the override is set: `daemon::spawn` passes `--config-dir` to every
+/// daemon it starts, the ordinary install's included.
+pub fn machine_config_dir() -> Option<PathBuf> {
+    if let Some(dir) = std::env::var_os("TTY7_CONFIG_DIR").filter(|d| !d.is_empty()) {
+        return Some(PathBuf::from(dir));
+    }
+    default_config_dir()
+}
+
+#[cfg(unix)]
+pub fn default_config_dir() -> Option<PathBuf> {
+    let home = std::env::var_os("HOME").filter(|h| !h.is_empty())?;
+    Some(PathBuf::from(home).join(".config/tty7"))
+}
+
+pub fn config_path(file: &str) -> Option<PathBuf> {
+    Some(config_dir()?.join(file))
+}
+
+pub fn strip_bom(text: &str) -> &str {
+    text.strip_prefix('\u{FEFF}').unwrap_or(text)
+}
+
+/// Sets a corrupt state file aside (copied, the original left in place) so the
+/// caller can fall back to defaults without silently destroying what was there.
+pub(crate) fn quarantine(path: &std::path::Path) {
+    // A broken file is read again and again — `Config::load` alone runs on
+    // every pane spawn and every palette command — so this is reached over
+    // and over for the same contents. A sibling already holding those bytes
+    // *is* the copy this call would make; without the check, opening a
+    // couple of tabs on a broken config.json fills the config directory with
+    // eight identical `.corrupt` files and then overwrites the first one.
+    if let Ok(bytes) = std::fs::read(path)
+        && already_kept(path, &bytes)
+    {
+        return;
+    }
+    let aside = quarantine_path(path);
+    match std::fs::copy(path, &aside) {
+        Ok(_) => log::warn!("the previous contents were kept at {}", aside.display()),
+        Err(e) => log::warn!("could not keep a copy at {}: {e}", aside.display()),
+    }
+}
+
+/// Whether an earlier quarantine of `path` already holds exactly `bytes`.
+fn already_kept(path: &std::path::Path, bytes: &[u8]) -> bool {
+    quarantine_candidates(path).any(|kept| std::fs::read(&kept).is_ok_and(|held| held == bytes))
+}
+
+/// Like [`quarantine`], but moves the file out of the way — for files that
+/// cannot even be read, where copying would fail too.
+pub(crate) fn quarantine_by_rename(path: &std::path::Path) {
+    let aside = quarantine_path(path);
+    match std::fs::rename(path, &aside) {
+        Ok(()) => log::warn!("the previous contents were moved to {}", aside.display()),
+        Err(e) => log::warn!("could not move the file to {}: {e}", aside.display()),
+    }
+}
+
+/// Every name a quarantined copy of `path` may go under, oldest first.
+fn quarantine_candidates(path: &std::path::Path) -> impl Iterator<Item = PathBuf> + use<'_> {
+    const MAX_QUARANTINED: u32 = 8;
+
+    std::iter::once(path.with_extension("json.corrupt"))
+        .chain((1..MAX_QUARANTINED).map(|n| path.with_extension(format!("json.corrupt.{n}"))))
+}
+
+fn quarantine_path(path: &std::path::Path) -> PathBuf {
+    let mut candidates = quarantine_candidates(path);
+    let base = candidates.next().expect("the base name is always offered");
+    if !base.exists() {
+        return base;
+    }
+    candidates
+        .find(|candidate| !candidate.exists())
+        .unwrap_or(base)
+}
+
+pub fn write_atomic(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    write_atomic_mode(path, bytes, false)
+}
+
+pub fn write_atomic_private(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    write_atomic_mode(path, bytes, true)
+}
+
+fn write_atomic_mode(path: &std::path::Path, bytes: &[u8], private: bool) -> std::io::Result<()> {
+    use std::io::Write as _;
+    let dir = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+    let tmp = dir.join(format!(
+        ".{}.tmp.{}",
+        path.file_name().and_then(|n| n.to_str()).unwrap_or("out"),
+        std::process::id()
+    ));
+    {
+        let mut open = std::fs::OpenOptions::new();
+        open.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        if private {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            open.mode(0o600);
+        }
+        let mut f = open.open(&tmp)?;
+        f.write_all(bytes)?;
+        f.flush()?;
+        let _ = f.sync_all();
+    }
+    match std::fs::rename(&tmp, path) {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            let _ = std::fs::remove_file(&tmp);
+            Err(e)
+        }
+    }
+}
+
+pub fn config_dir_path() -> Option<PathBuf> {
+    config_dir()
+}
+
+pub fn shell_command() -> Option<(String, Vec<String>)> {
+    Config::load().shell.map(|s| (s.program, s.args))
+}
+
+pub fn working_directory_base() -> Option<PathBuf> {
+    let wd = Config::load().working_directory;
+    let home = || std::env::var_os("HOME").map(PathBuf::from);
+    match wd.strategy {
+        WdStrategy::Inherit => None,
+        WdStrategy::Home => home(),
+        WdStrategy::Custom => {
+            let p = wd.path.trim();
+            if p.is_empty() {
+                home()
+            } else {
+                Some(PathBuf::from(p))
+            }
+        }
+    }
+}
+
+pub fn extra_env() -> HashMap<String, String> {
+    Config::load().env
+}
+
+pub fn agent_commands_cached() -> &'static HashMap<String, String> {
+    static CACHE: std::sync::OnceLock<HashMap<String, String>> = std::sync::OnceLock::new();
+    CACHE.get_or_init(|| {
+        Config::load()
+            .agent_commands
+            .into_iter()
+            .map(|(k, v)| (k.to_ascii_lowercase(), v))
+            .collect()
+    })
+}
+
+fn default_preset() -> String {
+    "default".to_string()
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_gui_language() -> String {
+    "en".to_string()
+}
+
+fn default_word_separators() -> String {
+    ",│`|:\"' ()[]{}<>\t".to_string()
+}
+
+fn default_notify_threshold_secs() -> u64 {
+    10
+}
+
+fn default_prefix() -> String {
+    "ctrl-b".to_string()
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RightPanelTab {
+    #[default]
+    Info,
+    /// The source control panel. Renamed from `Changes` in place rather than
+    /// added alongside it: `rename` works in both directions, so a config
+    /// written by this version still says `"changes"` and an older build reads
+    /// it back unchanged. A fourth variant could not do that — the old build
+    /// would fall through `de_lenient` to `Info` and kick anyone who rolled
+    /// back off the panel they were sitting on. 260px has no room for a fourth
+    /// tab tile either.
+    #[serde(rename = "changes", alias = "scm", alias = "git")]
+    Scm,
+    Files,
+}
+
+/// What opens when a file link in the grid is clicked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LinkFileOpen {
+    /// tty7's own editor. The default, and the only one of the three that can
+    /// honour a `:line:column` suffix or open a file on a remote host.
+    #[default]
+    Internal,
+    /// Whatever the OS has the file associated with.
+    System,
+    /// [`Config::link_file_command`], for people who want their own editor.
+    Command,
+}
+
+/// How the diff overlay lays a file out. Side-by-side is the default because
+/// that is what everyone already sees.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DiffViewMode {
+    #[default]
+    Split,
+    Unified,
+}
+
+fn default_right_panel_width() -> f32 {
+    260.
+}
+
+/// Where the code / diff surface is drawn.
+///
+/// It used to be one thing — a full-workspace overlay — so there was nothing to
+/// name. Docking it beside the terminal is the default now: opening a file to
+/// read it while an agent talks underneath was the reason the built-in editor
+/// exists, and an overlay covers the agent. `Fill` is that overlay, kept for
+/// anyone who wants the whole window for the file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DocumentLayout {
+    #[default]
+    Dock,
+    Fill,
+}
+
+fn default_document_ratio() -> f32 {
+    0.5
+}
+
+/// The band `document_ratio` is held to — in the file *and* at the divider.
+///
+/// One shared pair rather than two, for the reason `FONT_SIZE_MIN` and its
+/// stepper are one pair (#550): a GUI that clamps somewhere the file does not
+/// writes a value `sanitize` then moves, and the user finds the thing they
+/// dropped somewhere else on the next launch. The divider clamps in *pixels*
+/// against the terminal's floor as well, which is the tighter limit on a narrow
+/// window; on a wide one this band is, and both ends of it have to be reachable
+/// and keepable.
+pub const DOCUMENT_RATIO_MIN: f32 = 0.2;
+pub const DOCUMENT_RATIO_MAX: f32 = 0.8;
+
+/// The named shares of the terminal column a document column can be snapped to,
+/// in the order the segmented control and the divider's double-click cycle use.
+pub const DOCUMENT_RATIO_THIRD: f32 = 1. / 3.;
+pub const DOCUMENT_RATIO_HALF: f32 = 0.5;
+pub const DOCUMENT_RATIO_TWO_THIRDS: f32 = 2. / 3.;
+pub const DOCUMENT_RATIO_STOPS: [f32; 3] = [
+    DOCUMENT_RATIO_THIRD,
+    DOCUMENT_RATIO_HALF,
+    DOCUMENT_RATIO_TWO_THIRDS,
+];
+
+/// The rem the chrome has always been laid out against — gpui's own default,
+/// which is what `text_sm()` and `text_xs()` resolve 14px and 12px from. Left
+/// alone, the interface looks exactly as it did before the size was settable.
+pub const UI_FONT_SIZE_DEFAULT: f32 = 16.0;
+pub const UI_FONT_SIZE_MIN: f32 = 12.0;
+pub const UI_FONT_SIZE_MAX: f32 = 24.0;
+
+/// The terminal's font-size and line-height bounds, shared by `sanitize` and
+/// the GUI's steppers. The GUI used to keep its own, narrower pair (6–48,
+/// 1.0–2.0), so a value inside the config range but outside the GUI's got
+/// pushed the *wrong way* by a single step — `font_size: 50` shrank to 48 on
+/// "+" — and written back to the file, permanently (#550). One range, defined
+/// where the value is validated, is the `ui_font_size` precedent.
+pub const FONT_SIZE_MIN: f32 = 4.0;
+pub const FONT_SIZE_MAX: f32 = 256.0;
+pub const LINE_HEIGHT_MIN: f32 = 0.5;
+pub const LINE_HEIGHT_MAX: f32 = 4.0;
+
+fn default_ui_font_size() -> f32 {
+    UI_FONT_SIZE_DEFAULT
+}
+
+fn default_sidebar_width() -> f32 {
+    220.0
+}
+
+pub const MAX_SCROLLBACK: usize = 100_000;
+
+pub(crate) fn de_lenient<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned + Default,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(T::deserialize(&value).unwrap_or_else(|e| {
+        log::warn!("ignoring invalid config value {value}: {e}; using default");
+        T::default()
+    }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn profile_usage_score_ranks_frequency_and_recency() {
+        let now = 100_000_000u64;
+        let day = 86_400u64;
+        assert_eq!(ProfileUsage::default().score(now), 0.0);
+        let a = ProfileUsage {
+            count: 10,
+            last_used: now,
+        };
+        let b = ProfileUsage {
+            count: 2,
+            last_used: now,
+        };
+        assert!(a.score(now) > b.score(now));
+        let recent = ProfileUsage {
+            count: 3,
+            last_used: now,
+        };
+        let stale = ProfileUsage {
+            count: 3,
+            last_used: now - 30 * day,
+        };
+        assert!(recent.score(now) > stale.score(now));
+    }
+
+    #[test]
+    fn ssh_warn_on_close_and_frecency_round_trip() {
+        let mut cfg = Config::default();
+        assert!(!cfg.ssh_warn_on_close);
+        cfg.ssh_warn_on_close = true;
+        let id = uuid::Uuid::new_v4();
+        cfg.ssh_profile_frecency.insert(
+            id,
+            ProfileUsage {
+                count: 4,
+                last_used: 42,
+            },
+        );
+        let json = serde_json::to_string(&cfg).unwrap();
+        let back: Config = serde_json::from_str(&json).unwrap();
+        assert!(back.ssh_warn_on_close);
+        assert_eq!(back.ssh_profile_frecency.get(&id).unwrap().count, 4);
+    }
+
+    /// The upgrade path, which is the whole reason `link_file_open` is an
+    /// `Option`: whichever way a config written before this key existed is
+    /// read, it has to keep doing what it did yesterday.
+    #[test]
+    fn link_file_open_takes_its_default_from_the_config_it_upgrades() {
+        let mut had_a_command: Config =
+            serde_json::from_str(r#"{"link_file_command":"code --goto {path}"}"#).unwrap();
+        had_a_command.sanitize();
+        assert_eq!(
+            had_a_command.file_open_mode(),
+            LinkFileOpen::Command,
+            "someone who pointed this at their own editor asked for it and keeps it"
+        );
+        assert_eq!(
+            had_a_command.link_file_command.as_deref(),
+            Some("code --goto {path}")
+        );
+
+        let mut had_none: Config = serde_json::from_str(r#"{"font_size": 15.0}"#).unwrap();
+        had_none.sanitize();
+        assert_eq!(
+            had_none.file_open_mode(),
+            LinkFileOpen::Internal,
+            "everyone else was silently getting the OS file association"
+        );
+
+        // A command that only ever held whitespace is no command at all —
+        // `sanitize` drops it, and the mode must not be decided on the corpse.
+        let mut blank: Config = serde_json::from_str(r#"{"link_file_command":"   "}"#).unwrap();
+        blank.sanitize();
+        assert_eq!(blank.link_file_command, None);
+        assert_eq!(blank.file_open_mode(), LinkFileOpen::Internal);
+
+        let mut chosen: Config =
+            serde_json::from_str(r#"{"link_file_open":"system","link_file_command":"code"}"#)
+                .unwrap();
+        chosen.sanitize();
+        assert_eq!(
+            chosen.file_open_mode(),
+            LinkFileOpen::System,
+            "an explicit choice outranks whatever the command box holds"
+        );
+
+        let json = serde_json::to_string(&chosen).unwrap();
+        assert!(json.contains("\"link_file_open\":\"system\""), "persisted");
+        let back: Config = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.file_open_mode(), LinkFileOpen::System);
+
+        // Unknown values fall back rather than refusing the whole file.
+        let garbage: Config = serde_json::from_str(r#"{"link_file_open":"emacs"}"#).unwrap();
+        assert_eq!(garbage.file_open_mode(), LinkFileOpen::Internal);
+    }
+
+    #[test]
+    fn sidebar_diff_preview_defaults_on_and_round_trips() {
+        assert!(Config::default().sidebar_diff_preview);
+
+        let old: Config = serde_json::from_str(r#"{"font_size": 15.0}"#).unwrap();
+        assert!(
+            old.sidebar_diff_preview,
+            "absent key means today's behaviour"
+        );
+
+        let off: Config = serde_json::from_str(r#"{"sidebar_diff_preview": false}"#).unwrap();
+        assert!(!off.sidebar_diff_preview);
+        let json = serde_json::to_string(&off).unwrap();
+        assert!(json.contains("\"sidebar_diff_preview\":false"), "persisted");
+        let back: Config = serde_json::from_str(&json).unwrap();
+        assert!(!back.sidebar_diff_preview);
+    }
+
+    #[test]
+    fn sidebar_grouping_defaults_and_round_trips_leniently() {
+        assert_eq!(Config::default().sidebar_grouping, SidebarGrouping::Repo);
+
+        let text = serde_json::to_string(&Config {
+            sidebar_grouping: SidebarGrouping::RepoOrDirectory,
+            ..Config::default()
+        })
+        .unwrap();
+        assert!(text.contains("\"sidebar_grouping\":\"repo-or-directory\""));
+        let back: Config = serde_json::from_str(&text).unwrap();
+        assert_eq!(back.sidebar_grouping, SidebarGrouping::RepoOrDirectory);
+
+        let flat: Config = serde_json::from_str(r#"{"sidebar_grouping":"none"}"#).unwrap();
+        assert_eq!(flat.sidebar_grouping, SidebarGrouping::None);
+
+        // Unknown values fall back to Repo instead of rejecting the whole config.
+        let lenient: Config = serde_json::from_str(r#"{"sidebar_grouping":"folders"}"#).unwrap();
+        assert_eq!(lenient.sidebar_grouping, SidebarGrouping::Repo);
+    }
+
+    #[test]
+    fn dim_inactive_panes_defaults_on_and_round_trips() {
+        assert!(Config::default().dim_inactive_panes);
+
+        let old: Config = serde_json::from_str(r#"{"font_size": 15.0}"#).unwrap();
+        assert!(old.dim_inactive_panes);
+
+        let off: Config = serde_json::from_str(r#"{"dim_inactive_panes": false}"#).unwrap();
+        assert!(!off.dim_inactive_panes);
+        let json = serde_json::to_string(&off).unwrap();
+        let back: Config = serde_json::from_str(&json).unwrap();
+        assert!(!back.dim_inactive_panes);
+    }
+
+    #[test]
+    fn theme_follow_system_defaults_and_round_trips() {
+        let cfg: Config = serde_json::from_str(r#"{"theme_preset":"dracula"}"#).unwrap();
+        assert!(!cfg.theme_follow_system);
+        assert_eq!(cfg.theme_preset_light, "light");
+        assert_eq!(cfg.theme_preset_dark, "dark");
+        assert_eq!(cfg.theme_preset, "dracula");
+        // The palette rescue defaults on, and survives a round trip either way.
+        assert!(cfg.theme_legible_palette);
+
+        let mut cfg = Config::default();
+        cfg.theme_follow_system = true;
+        cfg.theme_preset_light = "one_light".to_string();
+        cfg.theme_preset_dark = "dracula".to_string();
+        let json = serde_json::to_string(&cfg).unwrap();
+        let back: Config = serde_json::from_str(&json).unwrap();
+        assert!(back.theme_follow_system);
+        assert_eq!(back.theme_preset_light, "one_light");
+        assert_eq!(back.theme_preset_dark, "dracula");
+
+        let off: Config = serde_json::from_str(r#"{"theme_legible_palette":false}"#).unwrap();
+        assert!(!off.theme_legible_palette);
+        let json = serde_json::to_string(&off).unwrap();
+        let back: Config = serde_json::from_str(&json).unwrap();
+        assert!(!back.theme_legible_palette);
+    }
+
+    #[test]
+    fn font_features_are_optional_and_parse_as_gpui_features() {
+        let cfg: Config =
+            serde_json::from_str(r#"{"font_features":{"calt":true,"liga":1}}"#).unwrap();
+        let features = cfg.font_features.expect("font features should parse");
+        assert_eq!(features.is_calt_enabled(), Some(true));
+        assert!(
+            features
+                .tag_value_list()
+                .iter()
+                .any(|(tag, value)| tag == "liga" && *value == 1)
+        );
+
+        let default_cfg = Config::default();
+        assert!(default_cfg.font_features.is_none());
+    }
+
+    #[test]
+    fn font_features_round_trip_to_integer_valued_json() {
+        let features: FontFeatures =
+            serde_json::from_str(r#"{"calt":true,"liga":1,"ss01":0,"zero":false}"#).unwrap();
+        assert_eq!(
+            features.tag_value_list(),
+            &[
+                ("calt".to_string(), 1),
+                ("liga".to_string(), 1),
+                ("ss01".to_string(), 0),
+                ("zero".to_string(), 0),
+            ]
+        );
+
+        let json = serde_json::to_string(&features).unwrap();
+        assert_eq!(json, r#"{"calt":1,"liga":1,"ss01":0,"zero":0}"#);
+        let back: FontFeatures = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, features);
+        assert_eq!(serde_json::to_string(&back).unwrap(), json);
+    }
+
+    #[test]
+    fn font_features_skip_bad_tags_and_values_instead_of_failing() {
+        let features: FontFeatures = serde_json::from_str(
+            r#"{"toolong":1,"ss":1,"calt":true,"liga":null,"kern":-1,"dlig":1.5}"#,
+        )
+        .unwrap();
+        assert_eq!(features.tag_value_list(), &[("calt".to_string(), 1)]);
+    }
+
+    #[test]
+    fn font_features_survive_a_config_round_trip() {
+        let cfg: Config =
+            serde_json::from_str(r#"{"font_features":{"calt":true,"liga":1}}"#).unwrap();
+        let json = serde_json::to_string(&cfg).unwrap();
+        let back: Config = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.font_features, cfg.font_features);
+        assert_eq!(
+            back.font_features.as_ref().map(|f| f.tag_value_list()),
+            Some(&[("calt".to_string(), 1), ("liga".to_string(), 1)][..])
+        );
+    }
+
+    #[test]
+    fn stale_override_keys_are_ignored() {
+        let cfg: Config = serde_json::from_str(
+            r##"{"font_size": 20.0, "colors": {"border": "#fff"}, "ansi_colors": {"color1": "#f00"}}"##,
+        )
+        .expect("stale override keys must be ignored");
+        assert_eq!(cfg.font_size, 20.0);
+        assert_eq!(cfg.theme_preset, "light");
+    }
+
+    #[test]
+    fn sanitize_clamps_degenerate_font_metrics() {
+        let sanitized = |font_size: f32, line_height: f32| {
+            let mut cfg = Config {
+                font_size,
+                line_height,
+                ..Config::default()
+            };
+            cfg.sanitize();
+            (cfg.font_size, cfg.line_height)
+        };
+
+        let (fs, lh) = sanitized(0.0, 0.0);
+        assert!(fs >= 4.0, "font_size clamped above zero");
+        assert!(lh >= 0.5, "line_height clamped above zero");
+
+        let (fs, lh) = sanitized(f32::NAN, f32::INFINITY);
+        assert!(fs.is_finite() && fs > 0.0);
+        assert!(lh.is_finite() && lh > 0.0);
+
+        assert_eq!(sanitized(15.0, 1.4), (15.0, 1.4));
+    }
+
+    #[test]
+    fn sanitize_clamps_to_the_same_bounds_the_gui_steps_within() {
+        // The GUI used to clamp to its own, narrower pair, so a config-legal
+        // value landed outside the stepper's range and one click pushed it the
+        // wrong way. The bounds are one shared set now: `Tty7App::set_font_size`
+        // and `set_line_height` clamp to these very constants, which is what
+        // makes the steppers and the Ctrl+=/Ctrl+- keys agree with the file
+        // (#550).
+        //
+        // The numbers themselves are the support surface
+        // `docs/reference/configuration.mdx` publishes, so pin them: narrowing
+        // either side is a documented behaviour change, not a refactor.
+        assert_eq!((FONT_SIZE_MIN, FONT_SIZE_MAX), (4.0, 256.0));
+        assert_eq!((LINE_HEIGHT_MIN, LINE_HEIGHT_MAX), (0.5, 4.0));
+
+        // A value at either edge survives sanitize unchanged, so the stepper
+        // has somewhere to stop rather than a value that keeps being rewritten.
+        let mut cfg = Config {
+            font_size: FONT_SIZE_MIN,
+            line_height: LINE_HEIGHT_MAX,
+            ..Config::default()
+        };
+        cfg.sanitize();
+        assert_eq!(cfg.font_size, FONT_SIZE_MIN);
+        assert_eq!(cfg.line_height, LINE_HEIGHT_MAX);
+
+        // And a value past an edge lands *on* that edge — the direction the
+        // step was going — rather than anywhere else.
+        let mut cfg = Config {
+            font_size: 1_000.0,
+            line_height: 0.1,
+            ..Config::default()
+        };
+        cfg.sanitize();
+        assert_eq!(cfg.font_size, FONT_SIZE_MAX, "over the top clamps down");
+        assert_eq!(
+            cfg.line_height, LINE_HEIGHT_MIN,
+            "under the floor clamps up"
+        );
+
+        // The values the issue was reported with: both are legal, so sanitize
+        // leaves them alone, and the steppers now step from where they are.
+        let mut cfg = Config {
+            font_size: 50.0,
+            line_height: 3.0,
+            ..Config::default()
+        };
+        cfg.sanitize();
+        assert_eq!((cfg.font_size, cfg.line_height), (50.0, 3.0));
+        // Both are inside the range the steppers clamp to, which is the whole
+        // point: `50 + 1` and `3.0 - 0.05` are legal, so neither click can be
+        // turned around by a clamp.
+        assert!(50.0 + 1.0 <= FONT_SIZE_MAX && 3.0 - 0.05 >= LINE_HEIGHT_MIN);
+    }
+
+    #[test]
+    fn ui_font_family_defaults_to_none_and_sanitizes_blank_to_none() {
+        let cfg: Config = serde_json::from_str(r#"{"font_size": 15.0}"#).unwrap();
+        assert_eq!(cfg.ui_font_family, None);
+
+        let mut cfg: Config = serde_json::from_str(r#"{"ui_font_family": "  "}"#).unwrap();
+        cfg.sanitize();
+        assert_eq!(cfg.ui_font_family, None);
+
+        let mut cfg: Config = serde_json::from_str(r#"{"ui_font_family": "Inter"}"#).unwrap();
+        cfg.sanitize();
+        assert_eq!(cfg.ui_font_family, Some("Inter".to_string()));
+    }
+
+    #[test]
+    fn a_config_written_before_ui_font_size_existed_keeps_the_chrome_it_had() {
+        // The whole interface is laid out against this, so a missing field
+        // must not resolve to serde's 0.0 — that collapses every window the
+        // user already has, on upgrade, without them touching a setting.
+        let cfg: Config = serde_json::from_str(r#"{"font_size": 15.0}"#).unwrap();
+        assert_eq!(cfg.ui_font_size, UI_FONT_SIZE_DEFAULT);
+    }
+
+    #[test]
+    fn sanitize_holds_ui_font_size_to_sizes_the_layout_survives() {
+        let sanitized = |ui_font_size: f32| {
+            let mut cfg = Config {
+                ui_font_size,
+                ..Config::default()
+            };
+            cfg.sanitize();
+            cfg.ui_font_size
+        };
+
+        assert_eq!(sanitized(0.0), UI_FONT_SIZE_DEFAULT);
+        assert_eq!(sanitized(f32::NAN), UI_FONT_SIZE_DEFAULT);
+        assert_eq!(sanitized(-3.0), UI_FONT_SIZE_DEFAULT);
+        assert_eq!(sanitized(1000.0), UI_FONT_SIZE_MAX);
+        assert_eq!(sanitized(2.0), UI_FONT_SIZE_MIN);
+        // A size the user actually picked comes back untouched.
+        assert_eq!(sanitized(18.0), 18.0);
+    }
+
+    struct TestDir(std::path::PathBuf);
+
+    impl TestDir {
+        fn new(name: &str) -> Self {
+            let dir = std::env::temp_dir().join(format!("tty7-test-{name}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            Self(dir)
+        }
+
+        fn path(&self) -> &std::path::Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TestDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn write_atomic_replaces_contents_and_leaves_no_temp() {
+        let dir = TestDir::new("atomic");
+        let target = dir.path().join("data.json");
+        write_atomic(&target, b"first").unwrap();
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "first");
+        write_atomic(&target, b"second-longer-and-then-short").unwrap();
+        write_atomic(&target, b"3rd").unwrap();
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "3rd");
+        let leftover: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().contains(".tmp."))
+            .collect();
+        assert!(leftover.is_empty(), "temp file should be renamed away");
+    }
+
+    #[test]
+    fn behavior_enums_fall_back_leniently_on_bad_values() {
+        let cfg: Config = serde_json::from_str(
+            r#"{"font_size": 20.0, "new_tab_position": "middle", "notify_on_command_finish": "sometimes", "tab_bar_position": "diagonal"}"#,
+        )
+        .expect("a bad enum value must not fail the whole parse");
+        assert_eq!(cfg.font_size, 20.0);
+        assert_eq!(cfg.new_tab_position, NewTabPosition::AfterCurrent);
+        assert_eq!(cfg.notify_on_command_finish, NotifyMode::Unfocused);
+        assert_eq!(cfg.tab_bar_position, TabBarPosition::Left);
+
+        let cfg: Config = serde_json::from_str(
+            r#"{"new_tab_position": "end", "notify_on_command_finish": "always", "tab_bar_position": "top"}"#,
+        )
+        .unwrap();
+        assert_eq!(cfg.new_tab_position, NewTabPosition::End);
+        assert_eq!(cfg.notify_on_command_finish, NotifyMode::Always);
+        assert_eq!(cfg.tab_bar_position, TabBarPosition::Top);
+    }
+
+    #[test]
+    fn working_directory_defaults_to_inherit_and_parses_kebab() {
+        let cfg = Config::default();
+        assert_eq!(cfg.working_directory.strategy, WdStrategy::Inherit);
+        assert!(cfg.working_directory.path.is_empty());
+
+        let cfg: Config = serde_json::from_str(
+            r#"{"working_directory": {"strategy": "custom", "path": "/tmp/x"}}"#,
+        )
+        .unwrap();
+        assert_eq!(cfg.working_directory.strategy, WdStrategy::Custom);
+        assert_eq!(cfg.working_directory.path, "/tmp/x");
+
+        let cfg: Config =
+            serde_json::from_str(r#"{"working_directory": {"strategy": "elsewhere"}}"#).unwrap();
+        assert_eq!(cfg.working_directory.strategy, WdStrategy::Inherit);
+    }
+
+    #[test]
+    fn sanitize_clamps_scroll_multiplier_into_band() {
+        let clamp = |m: f32| {
+            let mut cfg = Config {
+                mouse_scroll_multiplier: m,
+                ..Config::default()
+            };
+            cfg.sanitize();
+            cfg.mouse_scroll_multiplier
+        };
+        assert_eq!(clamp(1.0), 1.0);
+        assert_eq!(clamp(0.0), 1.0);
+        assert_eq!(clamp(-3.0), 1.0);
+        assert_eq!(clamp(100.0), 10.0);
+        assert_eq!(clamp(0.01), 0.1);
+    }
+
+    /// A width the user dropped the divider at has to come back where they left
+    /// it. `sanitize` holds `document_ratio` to a band; the divider clamps to
+    /// the same one, through these constants, so nothing it can write is
+    /// something the next launch moves. The regression this pins: the drag used
+    /// to clamp in pixels alone, so a column pushed against either edge of a
+    /// wide window was saved outside the band and reopened hundreds of points
+    /// from where it was dropped.
+    #[test]
+    fn sanitize_holds_document_ratio_to_the_band_the_divider_clamps_to() {
+        let clamp = |r: f32| {
+            let mut cfg = Config {
+                document_ratio: r,
+                ..Config::default()
+            };
+            cfg.sanitize();
+            cfg.document_ratio
+        };
+        // Both edges are legal, so a divider dropped on one has somewhere to
+        // stop rather than a value that keeps being rewritten.
+        assert_eq!(clamp(DOCUMENT_RATIO_MIN), DOCUMENT_RATIO_MIN);
+        assert_eq!(clamp(DOCUMENT_RATIO_MAX), DOCUMENT_RATIO_MAX);
+        for stop in DOCUMENT_RATIO_STOPS {
+            assert_eq!(clamp(stop), stop, "a named width must survive the file");
+        }
+        assert_eq!(clamp(0.05), DOCUMENT_RATIO_MIN);
+        assert_eq!(clamp(0.95), DOCUMENT_RATIO_MAX);
+        assert_eq!(clamp(0.0), default_document_ratio());
+        assert_eq!(clamp(-1.0), default_document_ratio());
+        assert_eq!(clamp(f32::NAN), default_document_ratio());
+    }
+
+    #[test]
+    fn sanitize_clamps_window_opacity_override() {
+        let clamp = |o: Option<f32>| {
+            let mut cfg = Config {
+                window_opacity: o,
+                ..Config::default()
+            };
+            cfg.sanitize();
+            cfg.window_opacity
+        };
+        assert_eq!(clamp(None), None);
+        assert_eq!(clamp(Some(0.8)), Some(0.8));
+        assert_eq!(clamp(Some(0.0)), Some(0.2));
+        assert_eq!(clamp(Some(2.0)), Some(1.0));
+        assert_eq!(clamp(Some(f32::NAN)), None);
+    }
+
+    #[test]
+    fn sanitize_clamps_scrollback_into_band() {
+        let clamp = |n: usize| {
+            let mut cfg = Config {
+                scrollback_limit: n,
+                ..Config::default()
+            };
+            cfg.sanitize();
+            cfg.scrollback_limit
+        };
+        assert_eq!(clamp(0), 100);
+        assert_eq!(clamp(10_000), 10_000);
+        assert_eq!(clamp(usize::MAX), MAX_SCROLLBACK);
+    }
+
+    #[test]
+    fn new_terminal_prefs_default_and_parse_leniently() {
+        let cfg = Config::default();
+        assert!(cfg.restore_session);
+        assert!(cfg.mouse_reporting);
+        assert!(cfg.prompt_editor);
+        assert!(cfg.tab_completion);
+        assert!(cfg.history_search);
+        assert_eq!(cfg.notify_threshold_secs, 10);
+        assert_eq!(cfg.bell, BellMode::Visual);
+
+        let cfg: Config = serde_json::from_str(r#"{"font_size": 15.0}"#).unwrap();
+        assert!(cfg.restore_session);
+        assert!(cfg.mouse_reporting);
+        assert!(cfg.prompt_editor);
+        assert!(cfg.tab_completion);
+        assert!(cfg.history_search);
+        assert_eq!(cfg.notify_threshold_secs, 10);
+        assert_eq!(cfg.bell, BellMode::Visual);
+
+        let cfg: Config = serde_json::from_str(r#"{"tab_completion": false}"#).unwrap();
+        assert!(!cfg.tab_completion);
+        let cfg: Config = serde_json::from_str(r#"{"history_search": false}"#).unwrap();
+        assert!(!cfg.history_search);
+        let cfg: Config = serde_json::from_str(r#"{"prompt_editor": false}"#).unwrap();
+        assert!(!cfg.prompt_editor);
+
+        let cfg: Config = serde_json::from_str(
+            r#"{"restore_session": false, "mouse_reporting": false, "bell": "audible"}"#,
+        )
+        .unwrap();
+        assert!(!cfg.restore_session);
+        assert!(!cfg.mouse_reporting);
+        assert_eq!(cfg.bell, BellMode::Audible);
+
+        let cfg: Config = serde_json::from_str(r#"{"bell": "both"}"#).unwrap();
+        assert_eq!(cfg.bell, BellMode::Both);
+
+        let cfg: Config = serde_json::from_str(r#"{"bell": "loud"}"#).unwrap();
+        assert_eq!(cfg.bell, BellMode::Visual);
+
+        assert_eq!(serde_json::to_string(&BellMode::Both).unwrap(), "\"both\"");
+    }
+
+    /// #668: a config written on a Mac travels to a Linux box, where the
+    /// platform modifier is a different key — so the *choice* is stored, not
+    /// the key it resolves to. An unknown value must not silently disable
+    /// zooming either.
+    #[test]
+    fn the_zoom_modifier_round_trips_and_falls_back() {
+        let cfg: Config = serde_json::from_str(r#"{"mouse_zoom_modifier": "none"}"#).unwrap();
+        assert_eq!(cfg.mouse_zoom_modifier, MouseZoomModifier::None);
+
+        let cfg: Config = serde_json::from_str(r#"{"mouse_zoom_modifier": "alt"}"#).unwrap();
+        assert_eq!(cfg.mouse_zoom_modifier, MouseZoomModifier::Alt);
+
+        let cfg: Config = serde_json::from_str(r#"{"font_size": 15.0}"#).unwrap();
+        assert_eq!(cfg.mouse_zoom_modifier, MouseZoomModifier::Platform);
+
+        let cfg: Config = serde_json::from_str(r#"{"mouse_zoom_modifier": "meta"}"#).unwrap();
+        assert_eq!(cfg.mouse_zoom_modifier, MouseZoomModifier::Platform);
+
+        assert_eq!(
+            serde_json::to_string(&MouseZoomModifier::None).unwrap(),
+            "\"none\""
+        );
+    }
+
+    #[test]
+    fn sanitize_clamps_notify_threshold_into_band() {
+        let clamp = |n: u64| {
+            let mut cfg = Config {
+                notify_threshold_secs: n,
+                ..Config::default()
+            };
+            cfg.sanitize();
+            cfg.notify_threshold_secs
+        };
+        assert_eq!(clamp(0), 1);
+        assert_eq!(clamp(10), 10);
+        assert_eq!(clamp(100_000), 3600);
+    }
+
+    #[test]
+    fn sanitize_normalizes_blank_http_proxy_to_none() {
+        let normalize = |proxy: Option<&str>| {
+            let mut cfg = Config {
+                http_proxy: proxy.map(String::from),
+                ..Config::default()
+            };
+            cfg.sanitize();
+            cfg.http_proxy
+        };
+        assert_eq!(normalize(None), None);
+        assert_eq!(normalize(Some("")), None);
+        assert_eq!(normalize(Some("   ")), None);
+        assert_eq!(
+            normalize(Some("  http://127.0.0.1:7890 ")),
+            Some("http://127.0.0.1:7890".to_string())
+        );
+    }
+
+    #[test]
+    fn gui_language_defaults_to_english_and_rejects_unsupported_values() {
+        let cfg = Config::default();
+        assert_eq!(cfg.gui_language, "en");
+
+        let cfg: Config = serde_json::from_str(r#"{"gui_language": "zh-CN"}"#).unwrap();
+        assert_eq!(cfg.gui_language, "zh-CN");
+
+        let cfg: Config = serde_json::from_str(r#"{"gui_language": "ja-JP"}"#).unwrap();
+        assert_eq!(cfg.gui_language, "ja-JP");
+
+        let mut cfg: Config = serde_json::from_str(r#"{"gui_language": "ko"}"#).unwrap();
+        cfg.sanitize();
+        assert_eq!(cfg.gui_language, "en");
+    }
+
+    #[test]
+    fn keybinding_preset_and_prefix_default_and_round_trip() {
+        let cfg = Config::default();
+        assert_eq!(cfg.keybinding_preset, "default");
+        assert_eq!(cfg.prefix, "ctrl-b");
+
+        let cfg: Config = serde_json::from_str(r#"{"font_size": 15.0}"#).unwrap();
+        assert_eq!(cfg.keybinding_preset, "default");
+        assert_eq!(cfg.prefix, "ctrl-b");
+
+        let cfg: Config =
+            serde_json::from_str(r#"{"keybinding_preset": "tmux", "prefix": "ctrl-a"}"#).unwrap();
+        assert_eq!(cfg.keybinding_preset, "tmux");
+        assert_eq!(cfg.prefix, "ctrl-a");
+    }
+
+    #[test]
+    fn default_font_fallbacks_are_platform_appropriate() {
+        let defaults = default_font_fallbacks();
+        assert!(!defaults.is_empty());
+
+        for name in platform_last_resort_fallbacks() {
+            assert!(
+                defaults.iter().any(|f| f == name),
+                "default chain {defaults:?} omits stock face {name}"
+            );
+        }
+
+        let maple = defaults.iter().position(|f| f == "Maple Mono NF CN");
+        let maple = maple.expect("the exact-fit CJK face must stay in the chain");
+        for name in platform_last_resort_fallbacks() {
+            let stock = defaults.iter().position(|f| f == name).unwrap();
+            assert!(maple < stock, "{name} must not preempt Maple Mono NF CN");
+        }
+
+        if !cfg!(target_os = "macos") {
+            for name in ["Menlo", "Apple Color Emoji"] {
+                assert!(
+                    !defaults.iter().any(|f| f == name),
+                    "{name} ships only with macOS"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn config_deserialize_fills_missing_fields_from_defaults() {
+        let cfg: Config = serde_json::from_str(r#"{"font_size": 20.0}"#).unwrap();
+        assert_eq!(cfg.font_size, 20.0);
+        assert_eq!(cfg.line_height, 1.4);
+        assert_eq!(cfg.font_family, "Hack");
+        assert_eq!(cfg.theme_preset, "light");
+        assert!(cfg.keybindings.is_empty());
+    }
+
+    #[test]
+    fn keybindings_take_a_chord_or_a_list_and_write_back_what_they_read() {
+        // A string is the shape every config written before #868 has, from the
+        // Settings page and by hand; a list is the one that replaces an
+        // action's chords outright. Both have to load, and a save must not turn
+        // one into the other — the two mean different things.
+        let written = serde_json::json!({
+            "NextTab": "cmd-shift-]",
+            "AlternatePaste": "",
+            "PrevTab": ["cmd-shift-[", "ctrl-shift-tab"],
+            "SplitRight": [],
+        });
+        let cfg: Config =
+            serde_json::from_value(serde_json::json!({ "keybindings": written.clone() }))
+                .expect("both shapes load");
+        assert_eq!(cfg.keybindings.len(), 4);
+        assert_eq!(serde_json::to_value(&cfg.keybindings).unwrap(), written);
+    }
+
+    fn pin_config_dir() {
+        let dir = std::env::temp_dir().join(format!("tty7-covtest-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).ok();
+        set_config_dir(dir);
+    }
+
+    static CONFIG_FILE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn lock_config_file() -> std::sync::MutexGuard<'static, ()> {
+        CONFIG_FILE.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    #[test]
+    fn save_load_and_shell_command_round_trip_through_disk() {
+        let _guard = lock_config_file();
+        pin_config_dir();
+        let mut cfg = Config {
+            font_size: 18.0,
+            ..Config::default()
+        };
+        cfg.shell = Some(ShellConfig {
+            program: "fish".to_string(),
+            args: vec!["-l".to_string()],
+        });
+        let mut profile = crate::core::ssh_profile::SshProfile::new("prod-web");
+        profile.host = "10.0.0.5".to_string();
+        profile.user = "deploy".to_string();
+        profile.port = 2222;
+        profile.auth = crate::core::ssh_profile::AuthMode::PublicKey;
+        profile.credential_ref = Some(crate::core::keychain::CredentialRef::password(
+            "deploy", "10.0.0.5", 2222,
+        ));
+        cfg.ssh_profiles = vec![profile.clone()];
+        cfg.save();
+
+        let loaded = Config::load();
+        assert_eq!(loaded.font_size, 18.0);
+        assert_eq!(
+            loaded.shell.as_ref().map(|s| s.program.as_str()),
+            Some("fish")
+        );
+        assert_eq!(loaded.ssh_profiles, vec![profile]);
+
+        let (program, args) = shell_command().expect("shell override present");
+        assert_eq!(program, "fish");
+        assert_eq!(args, vec!["-l".to_string()]);
+    }
+
+    #[test]
+    fn a_utf8_bom_does_not_silently_reset_the_config() {
+        let _guard = lock_config_file();
+        pin_config_dir();
+        let path = Config::path().expect("pinned config dir");
+        let text = "\u{FEFF}{\"font_size\": 21.0, \"restore_session\": false}";
+        write_atomic(&path, text.as_bytes()).unwrap();
+
+        let loaded = Config::load();
+        assert_eq!(loaded.font_size, 21.0);
+        assert!(!loaded.restore_session);
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_corrupt_config_is_kept_aside_and_never_overwritten() {
+        let _guard = lock_config_file();
+        pin_config_dir();
+        let path = Config::path().expect("pinned config dir");
+        let aside = path.with_extension("json.corrupt");
+        clear_quarantines(&path);
+        std::fs::write(&path, "{ not json").unwrap();
+
+        let (loaded, outcome) = Config::load_with_outcome();
+        assert_eq!(outcome, LoadOutcome::Quarantined);
+        assert!(loaded.quarantined, "the stand-in must say what it is");
+        assert_eq!(
+            std::fs::read_to_string(&aside).as_deref().ok(),
+            Some("{ not json"),
+            "the next save overwrites config.json wholesale, so the old \
+             contents must already be parked beside it"
+        );
+
+        // The save every sidebar drag issues must not turn one typo into
+        // permanent loss: a quarantined config refuses to write, and the file
+        // on disk stays exactly the user's own.
+        loaded.save();
+        assert_eq!(
+            std::fs::read_to_string(&path).as_deref().ok(),
+            Some("{ not json"),
+            "a quarantined config must never overwrite the file it stood in for"
+        );
+
+        // Fixing the file is what re-arms writes.
+        std::fs::write(&path, r#"{"font_size": 19.0}"#).unwrap();
+        let (fixed, outcome) = Config::load_with_outcome();
+        assert_eq!(outcome, LoadOutcome::Parsed);
+        assert!(!fixed.quarantined);
+        fixed.save();
+        assert!(std::fs::read_to_string(&path).unwrap().contains("19.0"));
+
+        std::fs::remove_file(&path).ok();
+        clear_quarantines(&path);
+    }
+
+    #[test]
+    fn a_config_that_stays_broken_is_parked_once_not_once_per_read() {
+        let _guard = lock_config_file();
+        pin_config_dir();
+        let path = Config::path().expect("pinned config dir");
+        clear_quarantines(&path);
+        std::fs::write(&path, "{ not json").unwrap();
+
+        // `Config::load` runs on every pane spawn and every palette command,
+        // so a file left broken is read dozens of times a session. Each read
+        // used to leave another copy, filling the config directory and then
+        // overwriting the oldest one.
+        for _ in 0..12 {
+            let _ = Config::load();
+        }
+        let parked: Vec<_> = quarantine_candidates(&path)
+            .filter(|candidate| candidate.exists())
+            .collect();
+        assert_eq!(
+            parked.len(),
+            1,
+            "one broken file, one copy — found {parked:?}"
+        );
+
+        // A *different* broken version is still worth keeping.
+        std::fs::write(&path, "{ also not json").unwrap();
+        let _ = Config::load();
+        let parked: Vec<_> = quarantine_candidates(&path)
+            .filter(|candidate| candidate.exists())
+            .collect();
+        assert_eq!(parked.len(), 2, "found {parked:?}");
+        assert_eq!(
+            std::fs::read_to_string(&parked[0]).unwrap(),
+            "{ not json",
+            "the first rescue copy is still the first one"
+        );
+
+        std::fs::remove_file(&path).ok();
+        clear_quarantines(&path);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_unreadable_config_suppresses_writes_without_parking_a_copy() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let _guard = lock_config_file();
+        pin_config_dir();
+        let path = Config::path().expect("pinned config dir");
+        clear_quarantines(&path);
+        std::fs::write(&path, r#"{"font_size": 21.0}"#).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
+        if std::fs::read_to_string(&path).is_ok() {
+            std::fs::remove_file(&path).ok();
+            return;
+        }
+
+        let (loaded, outcome) = Config::load_with_outcome();
+        // Not `Quarantined`: nothing was parked, so the notification must not
+        // point at a `config.json.corrupt` that was never written.
+        assert_eq!(outcome, LoadOutcome::Unreadable);
+        assert!(outcome.failed());
+        assert!(
+            loaded.quarantined,
+            "what cannot be read must not be written"
+        );
+        assert!(
+            quarantine_candidates(&path).all(|candidate| !candidate.exists()),
+            "there was nothing readable to copy"
+        );
+
+        loaded.save();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            r#"{"font_size": 21.0}"#,
+            "the file the app could not read is the file the user still has"
+        );
+        std::fs::remove_file(&path).ok();
+    }
+
+    fn clear_quarantines(path: &std::path::Path) {
+        for candidate in quarantine_candidates(path) {
+            std::fs::remove_file(candidate).ok();
+        }
+    }
+
+    #[test]
+    fn a_missing_config_file_is_absent_not_quarantined() {
+        let _guard = lock_config_file();
+        pin_config_dir();
+        let path = Config::path().expect("pinned config dir");
+        std::fs::remove_file(&path).ok();
+
+        let (loaded, outcome) = Config::load_with_outcome();
+        assert_eq!(outcome, LoadOutcome::Absent);
+        // A first run saves its defaults without anyone calling that loss.
+        assert!(!loaded.quarantined);
+    }
+
+    #[test]
+    fn the_quarantined_flag_never_reaches_disk() {
+        let cfg = Config {
+            quarantined: true,
+            ..Config::default()
+        };
+        let text = serde_json::to_string(&cfg).unwrap();
+        assert!(!text.contains("quarantined"));
+        // And a hand-written `"quarantined": true` in the file does not
+        // suppress saves either — the flag belongs to the loader, not the file.
+        let parsed: Config =
+            serde_json::from_str(r#"{"quarantined": true, "font_size": 20.0}"#).unwrap();
+        assert!(!parsed.quarantined);
+        assert_eq!(parsed.font_size, 20.0);
+    }
+
+    #[test]
+    fn strip_bom_only_removes_a_leading_marker() {
+        assert_eq!(strip_bom("{}"), "{}");
+        assert_eq!(strip_bom("\u{FEFF}{}"), "{}");
+        assert_eq!(strip_bom("\u{FEFF}\u{FEFF}{}"), "\u{FEFF}{}");
+        let inner = "{\"tab_title\":\"\u{FEFF}\"}";
+        assert_eq!(strip_bom(inner), inner);
+        assert_eq!(strip_bom(""), "");
+    }
+
+    #[test]
+    fn ssh_profiles_default_empty_and_parse_from_json() {
+        let cfg = Config::default();
+        assert!(cfg.ssh_profiles.is_empty());
+        let cfg: Config = serde_json::from_str(r#"{"font_size": 15.0}"#).unwrap();
+        assert!(cfg.ssh_profiles.is_empty());
+
+        let cfg: Config = serde_json::from_str(
+            r#"{"ssh_profiles":[{"name":"a","host":"h","auth":"bogus","port":2200}]}"#,
+        )
+        .expect("a bad per-profile enum must not fail the whole config parse");
+        assert_eq!(cfg.ssh_profiles.len(), 1);
+        assert_eq!(cfg.ssh_profiles[0].name, "a");
+        assert_eq!(cfg.ssh_profiles[0].port, 2200);
+        assert_eq!(
+            cfg.ssh_profiles[0].auth,
+            crate::core::ssh_profile::AuthMode::Auto
+        );
+    }
+
+    #[test]
+    fn a_mistyped_custom_shell_does_not_cost_the_user_the_rest_of_the_config() {
+        let cfg = Config::default();
+        assert!(cfg.custom_shells.is_empty());
+
+        let cfg: Config =
+            serde_json::from_str(r#"{"font_size": 15.0, "custom_shells": {"Ubuntu": "wsl.exe"}}"#)
+                .expect("a bad custom_shells must not fail the whole config parse");
+        assert!(cfg.custom_shells.is_empty());
+        // The point of the leniency: `Config::load` hands back defaults for a
+        // config that fails to parse, and the next settings write persists them
+        // over the file. Everything the user wrote beside the typo survives.
+        assert_eq!(cfg.font_size, 15.0);
+
+        let cfg: Config = serde_json::from_str(
+            r#"{"custom_shells":[{"label":"Ubuntu","program":"wsl.exe","args":["-d","Ubuntu"]}]}"#,
+        )
+        .expect("a well-formed list parses");
+        assert_eq!(cfg.custom_shells.len(), 1);
+        assert_eq!(cfg.custom_shells[0].program, "wsl.exe");
+        assert_eq!(cfg.custom_shells[0].args, ["-d", "Ubuntu"]);
+    }
+
+    #[test]
+    fn config_path_resolves_under_the_pinned_dir() {
+        pin_config_dir();
+        let p = config_path("config.json").expect("config path resolves");
+        assert!(p.ends_with("config.json"));
+        assert_eq!(p.parent(), config_dir_path().as_deref());
+    }
+}

@@ -1,0 +1,109 @@
+---
+title: "Keyboard shortcuts"
+description: "Every default binding, plus the action names for rebinding."
+---
+
+**Settings → Keybindings** (<kbd>⌘ ,</kbd>) is the live version of this page —
+it shows what *your* copy is bound to. This is the shipped default.
+
+## Tabs and workspaces
+
+| Action | Shortcut |
+|---|---|
+| New Tab | <kbd>⌘ T</kbd> |
+| Close Pane / Tab | <kbd>⌘ W</kbd> |
+| Reopen Closed Tab | <kbd>⌘ ⇧ T</kbd> |
+| Next Tab · Previous Tab | <kbd>⌃ ⇥</kbd> · <kbd>⌃ ⇧ ⇥</kbd> |
+| Go to Tab 1–9 | <kbd>⌘ 1</kbd>…<kbd>⌘ 9</kbd> |
+| New Workspace | <kbd>⌘ ⇧ N</kbd> |
+| Switch Workspace | <kbd>⌘ ⇧ O</kbd> |
+| New Window | <kbd>⌘ N</kbd> |
+
+## Panes
+
+| Action | Shortcut |
+|---|---|
+| Split Right | <kbd>⌘ D</kbd> |
+| Split Down | <kbd>⌘ ⇧ D</kbd> |
+| Next Pane · Previous Pane | <kbd>⌘ ]</kbd> · <kbd>⌘ [</kbd> |
+| Focus Pane Left / Right / Up / Down | <kbd>⌘ ⌥ ←→↑↓</kbd> |
+| Zoom Pane | <kbd>⌘ ⇧ ⏎</kbd> |
+| Enter Full Screen | <kbd>⌘ ⏎</kbd> |
+
+## View
+
+| Action | Shortcut |
+|---|---|
+| Command Palette | <kbd>⌘ P</kbd> |
+| Toggle Left Sidebar | <kbd>⌘ B</kbd> |
+| Toggle Right Panel | <kbd>⌘ J</kbd> |
+| Toggle Code Panel | <kbd>⌘ ⇧ E</kbd> |
+| Font Size Up · Down · Reset | <kbd>⌘ +</kbd> · <kbd>⌘ −</kbd> · <kbd>⌘ 0</kbd> |
+| Zoom the font | <kbd>⌘</kbd> + wheel |
+
+## Terminal
+
+| Action | Shortcut |
+|---|---|
+| Find in Terminal | <kbd>⌘ F</kbd> |
+| Find Next · Previous | <kbd>⌘ G</kbd> · <kbd>⌘ ⇧ G</kbd> |
+| Clear Scrollback | <kbd>⌘ K</kbd> |
+| Copy · Paste | <kbd>⌘ C</kbd> · <kbd>⌘ V</kbd> |
+| Insert Newline (at the prompt) | <kbd>⇧ ⏎</kbd> · <kbd>⌥ ⏎</kbd> |
+| Fuzzy history search | <kbd>⌃ R</kbd> |
+| Accept ghost suggestion | <kbd>→</kbd> |
+| Completion menu | <kbd>⇥</kbd> |
+
+Every <kbd>Ctrl</kbd> chord that stands for a control code reaches the program
+you are running: <kbd>Ctrl 6</kbd> and <kbd>Ctrl ⇧ 6</kbd> are `^^` (vim's
+alternate file), <kbd>Ctrl /</kbd> and <kbd>Ctrl ⇧ −</kbd> are `^_` (readline's
+undo), <kbd>Ctrl 3</kbd> is Escape. The plain <kbd>Ctrl</kbd> chords tty7 keeps
+are the ones that stand for nothing: <kbd>Ctrl ⇥</kbd> for the next tab.
+
+## Git and SSH
+
+| Action | Shortcut |
+|---|---|
+| Commit (caret in the message box) | <kbd>⌘ ⏎</kbd> |
+| Save (in the editor) | <kbd>⌘ S</kbd> |
+| Restart SSH Session | <kbd>⌘ ⇧ R</kbd> |
+
+## Application
+
+| Action | Shortcut |
+|---|---|
+| Settings | <kbd>⌘ ,</kbd> |
+| Keyboard Shortcuts | <kbd>⌘ /</kbd> |
+| Hide tty7 · Hide Others · Minimize | <kbd>⌘ H</kbd> · <kbd>⌘ ⌥ H</kbd> · <kbd>⌘ M</kbd> |
+| Quit | <kbd>⌘ Q</kbd> |
+
+## Actions with no default key
+
+All of these are in the command palette, and all are bindable under **Settings →
+Keybindings**:
+
+| Group | Actions |
+|---|---|
+| Tabs | `RenameTab` · `NewWorktreeTab` · `CloseOtherTabs` · `CloseTabsToTheRight` · `CopyWorkingDirectory` · `MarkTabUnread` · `ToggleTabSidebar` |
+| Panes | `ResizePaneLeft/Right/Up/Down` · `SwapPaneNext` · `SwapPanePrev` |
+| Workspaces | `SelectWorkspace1`…`SelectWorkspace9` · `RenameWorkspace` · `StopWorkspace` · `DeleteWorkspace` |
+| Agents | `ForkAgentSession` (+ `Right` / `Left` / `Down` / `Up`) · `CopyAgentSessionId` |
+| Git | `ScmStageAll` · `ScmUnstageAll` · `ScmDiscardAll` · `ScmCommitAmend` · `ScmRefresh` · `ScmSync` · `ScmPush` · `ScmPull` · `ScmFetch` · `ScmCheckoutBranch` · `ScmCreateBranch` · `ScmToggleGraph` · `ToggleDiffViewMode` |
+| Panels | `ShowRightPanelInfo` · `ShowRightPanelChanges` · `ShowRightPanelFiles` |
+| SSH | `ToggleSftp` · `ShowSshForwards` · `OpenSshProfiles` |
+| Application | `CloseWindow` · `About` · `CheckForUpdates` · `OpenDocumentation` · `OpenDiscord` · `ReportIssue` · `ShowAll` · `ZoomWindow` |
+
+## Rebinding syntax
+
+```json
+{
+  "keybindings": {
+    "ResizePaneLeft": "ctrl-alt-left",
+    "ToggleSftp": "secondary-shift-u",
+    "ScmSync": "ctrl-b s"
+  }
+}
+```
+
+`secondary` means <kbd>⌘</kbd> on macOS. A space separates the steps of a chord.
+[More →](/customization/keybindings)

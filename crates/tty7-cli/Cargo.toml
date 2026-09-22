@@ -1,0 +1,57 @@
+# The thin console CLI: the `tty7` on the user's PATH.
+# A control/pane-protocol client of tty7-server — the GUI is never required.
+# Kept apart from the GUI binary on purpose (subsystem, upgrade file locks,
+# millisecond cold start).
+[package]
+name = "tty7-cli"
+version.workspace = true
+edition.workspace = true
+description = "tty7's command line: a thin client for the tty7 server — workspaces, tabs, panes, agents, no GUI required"
+repository = "https://github.com/l0ng-ai/tty7"
+license = "Apache-2.0"
+publish = false
+
+[[bin]]
+name = "tty7"
+path = "src/main.rs"
+
+[dependencies]
+# Protocol types only (ControlRequest/ReplyOk, the machine tree, PaneProcs).
+# Default features: no gssapi, no remote-install — the CLI is a client of a
+# server that already exists, it never links krb5 or an HTTP fetcher.
+tty7-core = { path = "../tty7-core" }
+
+anyhow.workspace = true
+serde_json.workspace = true
+
+# The command grammar. Not in [workspace.dependencies] because this is its only
+# user, same as the GUI package's own single-user pins (regex, memchr, …).
+clap = { version = "4", features = ["derive"] }
+
+# Column alignment in the tables. Byte length is not display width: a CJK
+# workspace name or cwd is two columns per char, and padding by len() puts
+# every column after it out of line. Already in the tree via alacritty.
+unicode-width = "0.2"
+
+# The VT parser behind `capture --plain`. A pane's replay is a byte stream, and
+# recovering the text from it is a terminal's job, not a regex's: only the grid
+# knows that a break at column 120 was a wrap rather than a newline, that a CR
+# meant "overwrite this line", or which cell a wide char and its spacer share.
+# The same crate the GUI renders with, at the same rev, so the two agree about
+# what a pane says.
+alacritty_terminal.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"
+
+# The end-to-end suite drives the compiled tty7 against a real isolated
+# server; its own main doubles as that server process, so no libtest harness.
+[[test]]
+name = "cli_e2e"
+harness = false
+
+[lints]
+workspace = true
