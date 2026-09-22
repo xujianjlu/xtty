@@ -39,10 +39,7 @@ impl RemoteLink {
     }
 
     pub fn is_stdio_bridge(&self) -> bool {
-        matches!(
-            self,
-            RemoteLink::SessionExec(_) | RemoteLink::LocalStdio(_)
-        )
+        matches!(self, RemoteLink::SessionExec(_) | RemoteLink::LocalStdio(_))
     }
 
     pub fn is_ssh(&self) -> bool {

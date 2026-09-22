@@ -456,16 +456,15 @@ fn pane_environment(
     // user who redirects PATH in their `env` block gets the binary that PATH
     // resolves rather than the daemon's.
     if let Some(path) = shell_env_path(
-            shell,
-            || {
-                extra_env
-                    .get("PATH")
-                    .cloned()
-                    .or_else(|| std::env::var("PATH").ok())
-            },
-            |candidate| std::path::Path::new(candidate).is_file(),
-        )
-    {
+        shell,
+        || {
+            extra_env
+                .get("PATH")
+                .cloned()
+                .or_else(|| std::env::var("PATH").ok())
+        },
+        |candidate| std::path::Path::new(candidate).is_file(),
+    ) {
         env.push((SHELL_ENV.to_string(), path));
     }
     env.extend(

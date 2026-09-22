@@ -1246,7 +1246,6 @@ mod tests {
         assert!(complete_foreign("cat ~/ap", 8, dir.as_path()).is_none());
     }
 
-
     #[test]
     fn a_remote_pane_still_gets_a_signatures_static_candidates() {
         let c = complete("git ", 4, None, Some("zsh")).expect("subcommands need no filesystem");

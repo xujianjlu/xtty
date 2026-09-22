@@ -3392,7 +3392,10 @@ mod tests {
             Some("Save as SSH Host…")
         );
         assert_eq!(
-            host_form_label(&RemoteTarget::LocalStdio { program: "x".into(), args: vec![] }),
+            host_form_label(&RemoteTarget::LocalStdio {
+                program: "x".into(),
+                args: vec![]
+            }),
             None,
             "a WSL distro is configured nowhere this form could reach"
         );

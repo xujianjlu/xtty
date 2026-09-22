@@ -332,9 +332,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::SettingsConnectTimeout => "连接超时（秒）",
         L10nKey::SettingsConnectTimeoutDesc => "留空 = 库默认值。",
         L10nKey::SettingsX11Forwarding => "X11 转发",
-        L10nKey::SettingsX11ForwardingDesc => {
-            "请求 X11 转发（需要 XQuartz）。"
-        }
+        L10nKey::SettingsX11ForwardingDesc => "请求 X11 转发（需要 XQuartz）。",
         L10nKey::SettingsShellIntegration => "Shell 集成",
         L10nKey::SettingsShellIntegrationDesc => "让远程 shell 报告提示符、退出码和工作目录。",
         L10nKey::SettingsLoginScripts => "登录脚本",

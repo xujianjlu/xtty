@@ -328,7 +328,6 @@ pub(crate) fn workspace_surface_color(cx: &App) -> Hsla {
     }
 }
 
-
 pub(crate) fn background_appearance(cx: &App) -> WindowBackgroundAppearance {
     let config = cx.global::<Config>();
     let theme = presets::by_id(cx, &effective_preset_id(cx));
@@ -801,3 +800,4 @@ mod tests {
             assert_eq!(effective_preset_id(cx), Config::default().theme_preset);
         });
     }
+}

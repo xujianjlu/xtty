@@ -493,7 +493,6 @@ pub enum TabBarPosition {
     Left,
 }
 
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum SidebarGrouping {
@@ -1735,7 +1734,6 @@ mod tests {
         assert_eq!(clamp(Some(2.0)), Some(1.0));
         assert_eq!(clamp(Some(f32::NAN)), None);
     }
-
 
     #[test]
     fn sanitize_clamps_scrollback_into_band() {

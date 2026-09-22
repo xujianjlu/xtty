@@ -1066,10 +1066,6 @@ impl TabAgentSession {
     }
 }
 
-
-
-
-
 /// What a full-window overlay (settings, the opened file, the diff view)
 /// paints between its own fill and its content.
 ///
@@ -1122,8 +1118,7 @@ pub(crate) fn window_background_image_layer(cx: &App) -> Option<gpui::Div> {
 fn clear_window_override_values(config: &mut Config, backdrop_is_local: bool) {
     config.window_opacity = None;
     config.window_blur = None;
-    if backdrop_is_local {
-    }
+    if backdrop_is_local {}
 }
 
 /// The id the fullscreen hint is pushed under, so that entering again replaces
@@ -2518,9 +2513,10 @@ impl Tty7App {
         let config = cx.global::<Config>();
         let theme = crate::ui::presets::by_id(cx, &crate::ui::theme::effective_preset_id(cx));
         let blur = config.window_blur.unwrap_or(theme.blur);
-        config.window_opacity.or(theme.opacity).unwrap_or_else(|| {
-            crate::ui::theme::default_window_opacity()
-        })
+        config
+            .window_opacity
+            .or(theme.opacity)
+            .unwrap_or_else(|| crate::ui::theme::default_window_opacity())
     }
 
     pub(crate) fn set_window_opacity(
@@ -2547,7 +2543,6 @@ impl Tty7App {
         cx.notify();
     }
 
-
     pub(crate) fn reset_window_overrides(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         {
             let config = cx.global_mut::<Config>();
@@ -2572,7 +2567,6 @@ impl Tty7App {
             slider.update(cx, |s, cx| s.set_value(eff, window, cx));
         }
     }
-
 
     pub(crate) fn pick_theme_image(&mut self, cx: &mut Context<Self>) {
         let rx = cx.prompt_for_paths(gpui::PathPromptOptions {
@@ -5842,7 +5836,6 @@ impl Tty7App {
             .unwrap_or_else(crate::ui::i18n::default_language_code)
     }
 
-
     pub(crate) fn set_gui_language(
         &mut self,
         code: &'static str,
@@ -6492,10 +6485,7 @@ impl Tty7App {
                 }
             };
             Some(rgb)
-        } else if v
-            .remote_context()
-            .is_some()
-        {
+        } else if v.remote_context().is_some() {
             Some(0x9CA3AF)
         } else {
             None

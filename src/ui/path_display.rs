@@ -239,9 +239,6 @@ mod tests {
         ));
     }
 
-
-
-
     #[test]
     fn native_separators_is_a_no_op_off_windows() {
         // On Unix the OS separator is `/`; a path that happens to contain

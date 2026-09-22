@@ -1143,7 +1143,8 @@ mod tests {
             "the action's wire tag changed"
         );
 
-        let legacy = br#"{"target":{"local_stdio":{"program":"tty7-server","args":[]}},"channel":"pane"}"#;
+        let legacy =
+            br#"{"target":{"local_stdio":{"program":"tty7-server","args":[]}},"channel":"pane"}"#;
         let back = RouteHeader::decode(legacy).unwrap();
         assert_eq!(back.action, RouteAction::Forward);
         assert_eq!(back.channel, RouteChannel::Pane, "and nothing else moved");
@@ -1204,7 +1205,6 @@ mod tests {
         assert!(routed.join().unwrap().is_err());
     }
 
-    
     #[test]
     fn the_default_auth_responder_cancels() {
         assert!(matches!(

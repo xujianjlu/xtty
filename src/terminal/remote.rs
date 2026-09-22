@@ -170,7 +170,10 @@ pub struct PaneWorkspace {
 
 impl PaneWorkspace {
     pub fn shares_localhost(&self) -> bool {
-        matches!(self.target, crate::core::session::RemoteTarget::LocalStdio { .. })
+        matches!(
+            self.target,
+            crate::core::session::RemoteTarget::LocalStdio { .. }
+        )
     }
 
     pub fn route_header(&self) -> anyhow::Result<crate::daemon::router::RouteHeader> {
@@ -2721,11 +2724,6 @@ mod macos_notify {
     }
 }
 
-
-
-
-
-
 /// Ask the tray dispatch loop to bring `leaf_id` to the front. Runs on whatever
 /// thread the platform hands the activation to, so it only touches the channel.
 fn reveal_pane(leaf_id: u64) {
@@ -2733,9 +2731,6 @@ fn reveal_pane(leaf_id: u64) {
         let _ = tx.try_send(crate::ui::tray::TrayAction::RevealPane { leaf_id });
     }
 }
-
-
-
 
 /// Ungated on purpose: what a workspace can build a route out of is the same
 /// on every platform, and so is the name the refusal carries.
@@ -3154,7 +3149,10 @@ mod tests {
     fn a_wsl_workspace_routes_by_distro() {
         let ws = PaneWorkspace {
             workspace: crate::core::session::WorkspaceId::new(),
-            target: crate::core::session::RemoteTarget::LocalStdio { program: "Ubuntu-22.04".into(), args: vec![] },
+            target: crate::core::session::RemoteTarget::LocalStdio {
+                program: "Ubuntu-22.04".into(),
+                args: vec![],
+            },
             spec: None,
             label: None,
             resize_echo: false,
@@ -4254,7 +4252,10 @@ mod tests {
         // answer rides the same gate through `local_daemon_supports`, so this
         // covers the deferral for both.
         term.route = PaneRoute::Remote {
-            header: Box::new(crate::daemon::router::RouteHeader::local_stdio("tty7-server", &[])),
+            header: Box::new(crate::daemon::router::RouteHeader::local_stdio(
+                "tty7-server",
+                &[],
+            )),
             resize_echo: true,
         };
 
@@ -4321,7 +4322,10 @@ mod tests {
         // What `for_workspace` builds when the host's hello named no echo —
         // an older server, or a link that was down when the route was made.
         term.route = PaneRoute::Remote {
-            header: Box::new(crate::daemon::router::RouteHeader::local_stdio("tty7-server", &[])),
+            header: Box::new(crate::daemon::router::RouteHeader::local_stdio(
+                "tty7-server",
+                &[],
+            )),
             resize_echo: false,
         };
 

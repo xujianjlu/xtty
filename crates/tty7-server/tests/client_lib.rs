@@ -92,19 +92,19 @@ fn size() -> WinSize {
 }
 
 fn one_shot_shell(command: &str) -> ShellSpec {
-        ShellSpec {
-            program: "/bin/sh".into(),
-            args: vec!["-c".into(), command.into()],
-            args_are_tty7_defaults: false,
-        }
+    ShellSpec {
+        program: "/bin/sh".into(),
+        args: vec!["-c".into(), command.into()],
+        args_are_tty7_defaults: false,
+    }
 }
 
 fn interactive_shell() -> ShellSpec {
-        ShellSpec {
-            program: "/bin/sh".into(),
-            args: Vec::new(),
-            args_are_tty7_defaults: false,
-        }
+    ShellSpec {
+        program: "/bin/sh".into(),
+        args: Vec::new(),
+        args_are_tty7_defaults: false,
+    }
 }
 
 fn seed(pane: u64) -> PaneSeed {

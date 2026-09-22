@@ -945,4 +945,3 @@ mod tests {
         assert_eq!(entry("192.168.1.20").authority(), "192.168.1.20:8080");
     }
 }
-

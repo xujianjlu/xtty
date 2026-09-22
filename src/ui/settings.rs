@@ -5667,8 +5667,7 @@ impl Tty7App {
             .cloned()
             .collect();
         let current_program = program_input.read(cx).value().trim().to_string();
-        let platform_default_item: SharedString =
-            t(L10nKey::AppPlaceholderLoginShell).into();
+        let platform_default_item: SharedString = t(L10nKey::AppPlaceholderLoginShell).into();
         let picker_app = cx.entity().downgrade();
         let picker_input = program_input.clone();
         // The chevron rides inside the field rather than beside it: hung on the
@@ -8475,7 +8474,6 @@ mod tests {
         assert!(window_overrides_active(&opacity));
         assert!(window_overrides_active(&blur));
     }
-
 
     #[test]
     fn every_section_has_search_entries() {

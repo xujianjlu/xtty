@@ -524,14 +524,11 @@ mod tests {
         );
     }
 
-
-
     #[test]
     fn basename_reduces_paths_to_shell_names() {
         assert_eq!(basename("/usr/local/bin/fish"), "fish");
         assert_eq!(basename("zsh"), "zsh");
     }
-
 
     #[test]
     fn a_unique_configured_shell_is_added_first_with_its_args() {
@@ -662,7 +659,11 @@ mod tests {
         let mut inventory = menu(&["zsh"]);
         append_custom(
             &mut inventory,
-            &[custom("Dev container", "docker", &["exec", "-it", "dev", "bash"])],
+            &[custom(
+                "Dev container",
+                "docker",
+                &["exec", "-it", "dev", "bash"],
+            )],
         );
 
         let added = inventory.shells.last().expect("the entry");
@@ -670,7 +671,12 @@ mod tests {
         assert_eq!(added.program, "docker");
         assert_eq!(
             added.args,
-            vec!["exec".to_string(), "-it".to_string(), "dev".to_string(), "bash".to_string()]
+            vec![
+                "exec".to_string(),
+                "-it".to_string(),
+                "dev".to_string(),
+                "bash".to_string()
+            ]
         );
         assert!(
             !added.args_are_tty7_defaults,

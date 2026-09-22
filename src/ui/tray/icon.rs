@@ -11,14 +11,12 @@ const GLYPH_SVG: &[u8] = include_bytes!("../../../assets/tray.svg");
 
 const SIZE: u32 = 36;
 
-
 pub(super) fn render() -> Option<RgbaImage> {
     let tree = usvg::Tree::from_data(GLYPH_SVG, &usvg::Options::default()).ok()?;
     let mut pixmap = tiny_skia::Pixmap::new(SIZE, SIZE)?;
     resvg::render(&tree, fit_center(&tree, SIZE), &mut pixmap.as_mut());
     Some(to_rgba(&pixmap))
 }
-
 
 pub(super) fn agent_avatar(
     agent: crate::core::cli_agent::CLIAgent,
@@ -146,8 +144,6 @@ fn recolor(pixmap: &mut tiny_skia::Pixmap, rgb: (u8, u8, u8)) {
     }
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -201,7 +197,6 @@ mod tests {
         let covered = img.data.chunks_exact(4).filter(|p| p[3] > 0).count();
         assert!(covered > 0, "icon rendered fully transparent");
     }
-
 
     #[test]
     fn agent_avatar_renders_brand_and_fallback() {
@@ -257,5 +252,4 @@ mod tests {
             );
         }
     }
-
 }

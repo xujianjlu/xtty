@@ -8345,7 +8345,10 @@ mod tests {
     #[test]
     fn local_stdio_workspace_needs_no_forward() {
         let w = ws(
-            RemoteTarget::LocalStdio { program: "Ubuntu".into(), args: vec![] },
+            RemoteTarget::LocalStdio {
+                program: "Ubuntu".into(),
+                args: vec![],
+            },
             false,
         );
         assert_eq!(
@@ -8391,7 +8394,6 @@ mod tests {
         assert_eq!(remote_paste_user(None, Some(&spec)), Some("me"));
     }
 
-
     #[test]
     fn panes_with_no_distro_of_their_own_have_no_share() {
         let ssh = ws(RemoteTarget::direct("me", "dev.box", 22), true);
@@ -8402,7 +8404,10 @@ mod tests {
     #[test]
     fn local_stdio_and_specless_workspaces_keep_the_local_image_path() {
         let wsl = ws(
-            RemoteTarget::LocalStdio { program: "Ubuntu".into(), args: vec![] },
+            RemoteTarget::LocalStdio {
+                program: "Ubuntu".into(),
+                args: vec![],
+            },
             false,
         );
         assert_eq!(remote_paste_user(Some(&wsl), None), None);
@@ -9716,9 +9721,7 @@ pub(crate) fn test_stream_pair() -> (
     crate::daemon::transport::Stream,
     crate::daemon::transport::Stream,
 ) {
-    {
-        std::os::unix::net::UnixStream::pair().unwrap()
-    }
+    { std::os::unix::net::UnixStream::pair().unwrap() }
 }
 
 #[cfg(test)]

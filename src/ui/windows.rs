@@ -795,7 +795,6 @@ fn close_window_for(cx: &mut App, workspace: WorkspaceId) {
 }
 
 fn window_options(cx: &mut App, workspace: Option<WorkspaceId>) -> WindowOptions {
-
     let remember = cx.global::<Config>().remember_window_size;
     let remembered = remember
         .then(|| {
@@ -1098,7 +1097,10 @@ mod tests {
         // The directory is a path on this computer, so a remote workspace is
         // the one restore candidate a path-carrying launch declines.
         let remote = WindowView::on_remote(RemoteRef::new(
-            RemoteTarget::LocalStdio { program: "Ubuntu".into(), args: vec![] },
+            RemoteTarget::LocalStdio {
+                program: "Ubuntu".into(),
+                args: vec![],
+            },
             WorkspaceId::new(),
         ));
         let remote_id = remote.id;

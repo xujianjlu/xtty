@@ -3057,7 +3057,10 @@ mod tests {
     /// before it reaches anything else — so a test that asserts on what the
     /// pump does to a link must not use one, or it passes by not getting there.
     fn resolvable_machine(name: &str) -> (HostId, RemoteTarget) {
-        let target = RemoteTarget::LocalStdio { program: name.to_string(), args: vec![] };
+        let target = RemoteTarget::LocalStdio {
+            program: name.to_string(),
+            args: vec![],
+        };
         (target.host_id(), target)
     }
 

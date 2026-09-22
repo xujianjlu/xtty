@@ -888,7 +888,6 @@ mod argument_tests {
         assert_eq!(equals, Some(PathBuf::from("C:\\cfg")));
     }
 
-
     #[test]
     fn a_pathless_forward_asks_the_gui_to_surface_and_exits_only_on_bool_true() {
         let delivered = forward_open_path_with(

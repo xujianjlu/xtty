@@ -83,7 +83,6 @@ static DOWNLOAD_VERIFYING: AtomicBool = AtomicBool::new(false);
 
 const PROGRESS_TICK: Duration = Duration::from_millis(120);
 
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AvailableUpdate {
     pub version: String,
@@ -774,7 +773,6 @@ fn launch_pending(pending: PendingUpdate, cx: &mut App) {
     }
 }
 
-
 /// Records a failure where the user can still find it tomorrow, and lets the
 /// version prompt again.
 ///
@@ -850,7 +848,6 @@ pub fn apply_pending_at_launch() -> bool {
         let _ = std::fs::remove_dir_all(&pending.stage);
         return false;
     }
-
 
     log::info!(
         "applying the staged {} update before startup",
@@ -1020,7 +1017,6 @@ fn is_stage_name(name: &str) -> bool {
     name.starts_with(".tty7-update-") || name.starts_with("tty7-update-")
 }
 
-
 pub(crate) fn localized_update_phase(phase: &UpdatePhase) -> Option<String> {
     match phase {
         UpdatePhase::Idle => None,
@@ -1136,9 +1132,7 @@ impl PendingUpdate {
         }
         .launch()
     }
-
 }
-
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct FailureRecord {
@@ -1495,9 +1489,7 @@ struct PackageOffer {
 
 impl PackageOffer {
     fn plain(name: String) -> Self {
-        Self {
-            name,
-        }
+        Self { name }
     }
 }
 
@@ -1521,7 +1513,6 @@ fn package_for_current_install(version: &str) -> Result<PackageOffer, UpdateInst
         "tty7-{version}-macos-{arch}.zip"
     )))
 }
-
 
 fn prepare_update(
     version: &str,
@@ -1616,7 +1607,6 @@ fn update_outcome_path() -> Option<PathBuf> {
     crate::core::config::config_path(tty7_core::daemon::install::outcome::OUTCOME_FILE_NAME)
 }
 
-
 /// The named options after the positional arguments. Everything the updater
 /// must know about this process's configuration crosses as arguments, never
 /// the environment: on Windows an elevated (UAC) child does not inherit the
@@ -1643,7 +1633,6 @@ fn update_staging_dir(parent: &Path) -> Result<tempfile::TempDir> {
         .tempdir_in(parent)
         .context("creating update staging directory")
 }
-
 
 fn write_staged_asset(dir: &Path, name: &str, bytes: &[u8]) -> Result<PathBuf> {
     let path = dir.join(name);
@@ -1703,7 +1692,6 @@ fn prepare_macos_update(
     })
 }
 
-
 fn current_macos_app_bundle() -> Option<PathBuf> {
     std::env::current_exe().ok()?.ancestors().find_map(|path| {
         (path.extension().and_then(|ext| ext.to_str()) == Some("app")).then(|| path.to_path_buf())
@@ -1718,7 +1706,6 @@ fn bundled_updater() -> Option<PathBuf> {
     let updater = current_macos_app_bundle()?.join("Contents/MacOS/tty7-updater");
     updater.is_file().then_some(updater)
 }
-
 
 fn can_stage_replacement_in(dir: &Path) -> bool {
     tempfile::Builder::new()
@@ -1916,7 +1903,6 @@ mod tests {
             ))
         );
     }
-
 
     #[test]
     fn parses_versions_with_and_without_prefix() {
@@ -2434,7 +2420,6 @@ mod tests {
         assert_eq!(args[2], PathBuf::from("/tmp/stage/tty7.zip"));
     }
 
-
     /// A plan persisted by a build from before the tail-argument protocol
     /// cannot be carried out by its own staged helper: it relied on the
     /// environment, which an elevated child never inherits (#504). The plan
@@ -2465,6 +2450,4 @@ mod tests {
         assert!(!plan(0).is_usable());
         assert!(!plan(PLAN_VERSION + 1).is_usable());
     }
-
-
 }

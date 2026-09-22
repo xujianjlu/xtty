@@ -375,9 +375,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::SettingsConnectTimeout => "Connect timeout (s)",
         L10nKey::SettingsConnectTimeoutDesc => "Blank = library default.",
         L10nKey::SettingsX11Forwarding => "X11 forwarding",
-        L10nKey::SettingsX11ForwardingDesc => {
-            "Request X11 forwarding (needs XQuartz)."
-        }
+        L10nKey::SettingsX11ForwardingDesc => "Request X11 forwarding (needs XQuartz).",
         L10nKey::SettingsShellIntegration => "Shell integration",
         L10nKey::SettingsShellIntegrationDesc => {
             "Let the remote shell report prompts, exit codes, and the working directory."

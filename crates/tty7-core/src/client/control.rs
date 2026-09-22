@@ -319,7 +319,9 @@ mod tests {
             assert_eq!(kind, ROUTE_KIND, "the ROUTE frame must come first");
             let header = RouteHeader::decode(&payload).expect("decode the header");
             assert_eq!(header.channel, RouteChannel::Control);
-            assert!(matches!(header.target, RouteTarget::LocalStdio { ref program, .. } if program == "tty7-server"));
+            assert!(
+                matches!(header.target, RouteTarget::LocalStdio { ref program, .. } if program == "tty7-server")
+            );
 
             let ack = serde_json::to_vec(&RouteAck {
                 ok: true,

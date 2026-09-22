@@ -198,10 +198,7 @@ impl Daemon {
             .stderr(Stdio::null())
             .spawn()
             .expect("start the in-test tty7 server");
-        let daemon = Daemon {
-            child,
-            dir,
-        };
+        let daemon = Daemon { child, dir };
         daemon.await_ready();
         daemon
     }

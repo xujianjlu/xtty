@@ -1033,13 +1033,10 @@ fn setup_bash() -> Option<Injection> {
     })
 }
 
-
-
 /// POSIX single-quoting, for a body some other shell has to re-parse.
 fn shell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))
 }
-
 
 pub fn setup(program: Option<&str>, args: &[String], has_custom_args: bool) -> Option<Injection> {
     let _ = args;
@@ -1593,7 +1590,7 @@ mod tests {
     }
 
     /// Guards the Unix half of the PowerShell integration, which had no coverage
-        /// so a script written against `$env:USERNAME` / `$env:COMPUTERNAME` /
+    /// so a script written against `$env:USERNAME` / `$env:COMPUTERNAME` /
     /// `$env:USERPROFILE` shipped for two platforms where all three are empty.
     #[cfg(unix)]
     #[test]
@@ -1938,7 +1935,6 @@ mod tests {
             let want = PathBuf::from(format!("/{want}"));
             assert_eq!(got, want, "payload for {translated}");
         }
-
     }
 
     #[test]
@@ -2425,5 +2421,4 @@ mod tests {
             .map(|dir| dir.join("nu"))
             .find(|p| p.is_file())
     }
-
 }

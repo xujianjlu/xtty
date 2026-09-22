@@ -321,7 +321,6 @@ fn handshake(
     RemoteHost::over_unix(stream, connection_key, hello)
 }
 
-
 pub fn list_workspaces(host: &Arc<RemoteHost>) -> io::Result<Vec<RemoteWorkspaceRow>> {
     match host.client().call(ControlRequest::MachineGet)? {
         ReplyOk::MachineTree(machine) => Ok(rows_from_machine(&machine)),
@@ -1200,5 +1199,4 @@ mod tests {
         let hosts = vec![host("gate2jup", "root@18.143.92.244")];
         assert!(filter_hosts(&hosts, "zzz").is_empty());
     }
-
 }

@@ -1,4 +1,3 @@
-
 use alacritty_terminal::event::EventListener;
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Line, Point};
@@ -88,12 +87,9 @@ pub(super) fn is_cjk(c: char) -> bool {
     )
 }
 
-
-
 pub(super) fn cjk_word_range(text: &str, click: usize) -> Option<(usize, usize)> {
     tokenizer::word_range(text, click)
 }
-
 
 mod tokenizer {
     use core_foundation::base::{CFIndex, CFRange, TCFType};

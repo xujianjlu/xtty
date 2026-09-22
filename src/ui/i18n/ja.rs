@@ -380,9 +380,7 @@ pub fn translate_ja(key: L10nKey) -> Option<&'static str> {
         L10nKey::SettingsConnectTimeout => "接続タイムアウト（秒）",
         L10nKey::SettingsConnectTimeoutDesc => "空欄 = ライブラリのデフォルト",
         L10nKey::SettingsX11Forwarding => "X11 転送",
-        L10nKey::SettingsX11ForwardingDesc => {
-            "X11 転送を要求（XQuartz が必要）"
-        }
+        L10nKey::SettingsX11ForwardingDesc => "X11 転送を要求（XQuartz が必要）",
         L10nKey::SettingsShellIntegration => "シェル統合",
         L10nKey::SettingsShellIntegrationDesc => {
             "リモートシェルにプロンプト・終了コード・作業ディレクトリを報告させる"
