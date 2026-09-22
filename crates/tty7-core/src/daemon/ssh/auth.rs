@@ -898,16 +898,6 @@ async fn try_agent(
         };
         try_agent_identities(handle, spec, agent, round).await
     }
-    #[cfg(windows)]
-    {
-        let pipe = std::env::var("SSH_AUTH_SOCK")
-            .unwrap_or_else(|_| r"\\.\pipe\openssh-ssh-agent".to_string());
-        let agent = match AgentClient::connect_named_pipe(&pipe).await {
-            Ok(a) => a,
-            Err(_) => return Outcome::Skipped,
-        };
-        try_agent_identities(handle, spec, agent, round).await
-    }
 }
 
 async fn try_agent_identities<S>(

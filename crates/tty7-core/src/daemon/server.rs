@@ -370,9 +370,6 @@ pub fn run_daemon() -> anyhow::Result<()> {
             }
         }
     }
-    #[cfg(not(unix))]
-    log::info!("no control listener on this platform; serving panes only");
-
     run_with(registry, _seat.is_some())
 }
 
@@ -492,14 +489,6 @@ fn hand_over(registry: &Registry, exe: &std::path::Path) -> anyhow::Error {
         carried,
         registry.alloc_id(),
         crate::daemon::singleton::held_fd(),
-    )
-}
-
-#[cfg(not(unix))]
-fn hand_over(_registry: &Registry, _exe: &std::path::Path) -> anyhow::Error {
-    anyhow::anyhow!(
-        "this platform has no way to replace a running program while keeping its \
-         open consoles, so the daemon has to be stopped and started"
     )
 }
 
@@ -658,8 +647,6 @@ fn exit_now() -> ! {
     unsafe {
         libc::_exit(0)
     }
-    #[cfg(not(unix))]
-    std::process::exit(0)
 }
 
 fn handle_conn(stream: Stream, registry: Arc<Registry>) -> anyhow::Result<()> {

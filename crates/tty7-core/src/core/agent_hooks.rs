@@ -27,15 +27,6 @@ pub fn run_agent_hook(agent: &str, event: &str) {
     write_to_controlling_tty(&build_hook_sequence(agent, event, &input));
 }
 
-#[cfg(not(unix))]
-fn detach_console() {
-    use windows_sys::Win32::System::Console::FreeConsole;
-    unsafe {
-        FreeConsole();
-    }
-}
-
-#[cfg(unix)]
 fn detach_console() {}
 
 fn effective_agent(agent: &str, ran_by_grok: bool) -> &str {
@@ -164,91 +155,6 @@ fn ancestor_tty_device() -> Option<std::path::PathBuf> {
         pid = ppid;
     }
     None
-}
-
-#[cfg(not(unix))]
-fn write_to_controlling_tty(bytes: &[u8]) -> bool {
-    let procs = crate::daemon::winproc::snapshot();
-    let ancestors = ancestor_pids(&procs);
-
-    let name_of = |pid: u32| {
-        procs
-            .iter()
-            .find(|p| p.pid == pid)
-            .map(|p| p.name.to_ascii_lowercase())
-    };
-    let shell = ancestors.iter().copied().find(|&pid| {
-        procs
-            .iter()
-            .find(|p| p.pid == pid)
-            .and_then(|p| name_of(p.parent))
-            .is_some_and(|n| is_tty7_host_exe(&n))
-    });
-
-    if let Some(pid) = shell {
-        if attach_and_write(pid, bytes) {
-            return true;
-        }
-    }
-
-    let mut any = false;
-    for pid in ancestors {
-        any |= attach_and_write(pid, bytes);
-    }
-    any
-}
-
-#[cfg(any(not(unix), test))]
-fn is_tty7_host_exe(name: &str) -> bool {
-    matches!(name, "tty7-app.exe" | "tty7-server.exe" | "tty7.exe")
-}
-
-#[cfg(not(unix))]
-fn attach_and_write(pid: u32, bytes: &[u8]) -> bool {
-    use windows_sys::Win32::System::Console::{AttachConsole, FreeConsole};
-    unsafe {
-        FreeConsole();
-        if AttachConsole(pid) == 0 {
-            return false;
-        }
-    }
-    let ok = write_conout(bytes);
-    unsafe {
-        FreeConsole();
-    }
-    ok
-}
-
-#[cfg(not(unix))]
-fn write_conout(bytes: &[u8]) -> bool {
-    use std::io::Write as _;
-    match std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open("CONOUT$")
-    {
-        Ok(mut out) => out.write_all(bytes).and_then(|_| out.flush()).is_ok(),
-        Err(_) => false,
-    }
-}
-
-#[cfg(not(unix))]
-fn ancestor_pids(procs: &[crate::daemon::winproc::Proc]) -> Vec<u32> {
-    let parent_of = |pid: u32| procs.iter().find(|p| p.pid == pid).map(|p| p.parent);
-    let mut out = Vec::new();
-    let mut seen = std::collections::HashSet::new();
-    let mut cur = std::process::id();
-    seen.insert(cur);
-    for _ in 0..16 {
-        match parent_of(cur) {
-            Some(parent) if parent != 0 && seen.insert(parent) => {
-                out.push(parent);
-                cur = parent;
-            }
-            _ => break,
-        }
-    }
-    out
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -571,27 +477,10 @@ impl<'a> HookTarget<'a> {
         )
     }
 
-    /// A shell-safe executable path for generated hook commands.
+    /// Optional bare executable name for generated hook commands.
     ///
-    /// On Windows, Codex runs hook commands through the session's shell, which
-    /// is frequently PowerShell. `pwsh -Command` drops the quotes around a
-    /// path containing spaces, so the usual `"C:\Program Files\..."` form is
-    /// parsed as `C:\Program` and fails — and even a quoted path without
-    /// spaces is a syntax error in PowerShell (invoking a quoted path requires
-    /// the `&` call operator). When the executable resolves by its bare file
-    /// name from PATH, we can emit the name without any quoting, which every
-    /// shell (`cmd.exe`, PowerShell, bash) executes correctly.
-    ///
-    /// Returns `None` when the executable is not resolvable by name from PATH,
-    /// or when the first PATH match is a different binary; callers then fall
-    /// back to the quoted full path.
+    /// Always `None` on macOS/Unix: callers fall back to the quoted full path.
     fn hook_command_exe(&self) -> Option<String> {
-        #[cfg(windows)]
-        if self.is_local() {
-            if let Some(name) = path_resolvable_name(&self.exe) {
-                return Some(name);
-            }
-        }
         None
     }
 
@@ -742,14 +631,7 @@ pub fn refresh_hooks_at_launch() -> usize {
 }
 
 fn home_dir() -> Option<PathBuf> {
-    #[cfg(unix)]
-    {
-        std::env::var_os("HOME").map(PathBuf::from)
-    }
-    #[cfg(not(unix))]
-    {
-        std::env::var_os("USERPROFILE").map(PathBuf::from)
-    }
+    std::env::var_os("HOME").map(PathBuf::from)
 }
 
 const OWNED_FILE_STEM_JSON: &str = "tty7.json";
@@ -1174,30 +1056,6 @@ fn toml_command_is_marked(entry: &toml_edit::Table, marker: &str) -> bool {
 /// yields the same binary. Returns `None` when the name does not resolve, or
 /// when an earlier PATH entry contains a different file with the same name
 /// (a bare-name command would then invoke the wrong binary).
-#[cfg(windows)]
-fn path_resolvable_name(exe: &Path) -> Option<String> {
-    let name = exe.file_name()?.to_str()?;
-    let path_var = std::env::var_os("PATH")?;
-    let exe_canonical = std::fs::canonicalize(exe).ok()?;
-    for dir in std::env::split_paths(&path_var) {
-        let candidate = dir.join(name);
-        let Ok(candidate_canonical) = std::fs::canonicalize(&candidate) else {
-            continue;
-        };
-        if same_windows_path(&candidate_canonical, &exe_canonical) {
-            return Some(name.to_string());
-        }
-        return None;
-    }
-    None
-}
-
-#[cfg(windows)]
-fn same_windows_path(a: &Path, b: &Path) -> bool {
-    a.to_string_lossy()
-        .eq_ignore_ascii_case(&b.to_string_lossy())
-}
-
 fn enable_codex_hooks_feature() -> Result<(), String> {
     let candidates = [
         PathBuf::from("/opt/homebrew/bin/codex"),
@@ -1549,16 +1407,6 @@ mod tests {
                     .any(|detected| HookAgent::of_detected(detected) == Some(hooked)),
                 "{hooked:?} has hooks but no detected agent maps to it"
             );
-        }
-    }
-
-    #[test]
-    fn every_tty7_daemon_host_takes_the_console_fast_path() {
-        for name in ["tty7-app.exe", "tty7-server.exe", "tty7.exe"] {
-            assert!(is_tty7_host_exe(name), "{name} hosts tty7 shells");
-        }
-        for name in ["explorer.exe", "cmd.exe", "tty7", "tty7-app", "wt.exe"] {
-            assert!(!is_tty7_host_exe(name), "{name} is not a tty7 host process");
         }
     }
 
@@ -2139,10 +1987,6 @@ mod tests {
         let host = local_host();
         let target = HookTarget::local(&*host).expect("home resolves in tests");
         let cmd = target.hook_command(HookAgent::Claude, "stop");
-        // On Windows the executable may be emitted as a bare PATH-resolvable
-        // name: PowerShell cannot invoke a quoted path without the `&` call
-        // operator, so quoting is avoided whenever possible.
-        #[cfg(not(windows))]
         assert!(cmd.starts_with('"'));
         assert!(cmd.ends_with("agent-hook claude stop"));
     }

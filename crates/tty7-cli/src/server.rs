@@ -303,11 +303,7 @@ fn server_exe() -> Result<PathBuf> {
 }
 
 fn server_exe_name() -> &'static str {
-    if cfg!(windows) {
-        "tty7-server.exe"
-    } else {
-        "tty7-server"
-    }
+    "tty7-server"
 }
 
 /// Where the server binary is, in the order the three sources are trusted.
@@ -355,18 +351,6 @@ fn detach(cmd: &mut Command) {
             Ok(())
         });
     }
-}
-
-#[cfg(windows)]
-fn detach(cmd: &mut Command) {
-    use std::os::windows::process::CommandExt as _;
-
-    // The daemon's flags, not a second opinion. `CREATE_NEW_PROCESS_GROUP` used
-    // to be in here too, and it disables Ctrl+C for everything in the new group:
-    // the server, every pane shell it spawns, and everything those shells run
-    // (#451, #314). `DETACHED_PROCESS` alone already leaves the server without a
-    // console for a control event to arrive on.
-    cmd.creation_flags(spawn::DAEMON_CREATION_FLAGS);
 }
 
 #[cfg(not(any(unix, windows)))]

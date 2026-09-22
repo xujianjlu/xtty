@@ -2,25 +2,13 @@ use std::io::{self, Read};
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
-#[cfg(windows)]
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-
 const REAP_POLL: Duration = Duration::from_millis(25);
 
 pub fn hide_console(cmd: &mut Command) -> &mut Command {
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt as _;
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
     cmd
 }
 
 pub fn hide_console_tokio(cmd: &mut tokio::process::Command) -> &mut tokio::process::Command {
-    #[cfg(windows)]
-    {
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
     cmd
 }
 

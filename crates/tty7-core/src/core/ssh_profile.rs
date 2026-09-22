@@ -295,8 +295,6 @@ pub fn expand_identity_placeholders(path: &str, host: &str, user: &str) -> Strin
 
 /// The platform home directory: `%USERPROFILE%` on Windows, `$HOME` elsewhere.
 fn home_dir() -> Option<String> {
-    #[cfg(windows)]
-    let var = "USERPROFILE";
     #[cfg(not(windows))]
     let var = "HOME";
     std::env::var(var).ok().filter(|h| !h.is_empty())

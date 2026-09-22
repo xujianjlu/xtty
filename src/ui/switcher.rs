@@ -448,7 +448,6 @@ impl Tty7App {
         cx: &mut Context<Self>,
     ) {
         remote_connect::register(cx);
-        remote_connect::sweep_wsl(cx);
         let query = cx.new(|cx| {
             InputState::new(window, cx)
                 .placeholder(crate::ui::i18n::t(
@@ -3110,7 +3109,7 @@ pub(crate) fn host_form_label(target: &RemoteTarget) -> Option<&'static str> {
         RemoteTarget::Alias { .. } | RemoteTarget::Direct { .. } => {
             Some(t(L10nKey::SwitcherSaveAsHost))
         }
-        RemoteTarget::Wsl { .. } | RemoteTarget::LocalStdio { .. } => None,
+        RemoteTarget::LocalStdio { .. } => None,
     }
 }
 
@@ -3393,9 +3392,7 @@ mod tests {
             Some("Save as SSH Host…")
         );
         assert_eq!(
-            host_form_label(&RemoteTarget::Wsl {
-                distro: "Ubuntu".into()
-            }),
+            host_form_label(&RemoteTarget::LocalStdio { program: "x".into(), args: vec![] }),
             None,
             "a WSL distro is configured nowhere this form could reach"
         );

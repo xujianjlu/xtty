@@ -36,13 +36,6 @@ fn home_dir() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-#[cfg(not(unix))]
-fn home_dir() -> Option<PathBuf> {
-    std::env::var_os("USERPROFILE")
-        .filter(|h| !h.is_empty())
-        .map(PathBuf::from)
-}
-
 pub fn host_token(host: &str, port: u16) -> String {
     if port == 22 {
         host.to_string()

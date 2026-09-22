@@ -24,7 +24,7 @@ use uuid::Uuid;
 
 use crate::core::config::{
     BellMode, Config, CursorStyle, LinkFileOpen, MouseZoomModifier, NewTabPosition, NotifyMode,
-    TabBarPosition, UI_FONT_SIZE_DEFAULT, UpdateChannel, WindowBackdrop,
+    TabBarPosition, UI_FONT_SIZE_DEFAULT, UpdateChannel,
 };
 use crate::core::keychain::{
     CredentialRef, CredentialStore as _, OsCredentialStore, key_account_from_contents,
@@ -321,16 +321,12 @@ fn settings_header_id(title: &str) -> SharedString {
     SharedString::from(format!("settings-header-{title}"))
 }
 
-/// Whether the reset control has any effective override to clear on this
-/// platform. A synchronized Windows backdrop remains stored elsewhere but is
-/// inert here, so only platforms that expose it locally may count it.
-fn window_overrides_active(config: &Config, backdrop_is_local: bool) -> bool {
-    config.window_opacity.is_some()
-        || config.window_blur.is_some()
-        || (backdrop_is_local && config.window_backdrop != WindowBackdrop::Auto)
+/// Whether the reset control has any effective override to clear.
+fn window_overrides_active(config: &Config) -> bool {
+    config.window_opacity.is_some() || config.window_blur.is_some()
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone)]
 pub(crate) enum SettingsSection {
     Appearance,
     Terminal,
@@ -2701,7 +2697,7 @@ impl Tty7App {
             return div().into_any_element();
         };
         let config = cx.global::<Config>();
-        let overridden = window_overrides_active(config, false);
+        let overridden = window_overrides_active(config);
         let dim_inactive_panes = config.dim_inactive_panes;
         let opacity = Tty7App::effective_window_opacity(cx);
 
@@ -2722,8 +2718,6 @@ impl Tty7App {
                     .child(format!("{:.0}%", opacity * 100.)),
             )
             .into_any_element();
-        // Windows exposes the native backdrop materials directly; macOS keeps
-        // the simple blur toggle, which drives its vibrancy.
         let blur_control =
             {
                 let theme = presets::by_id(cx, &crate::ui::theme::effective_preset_id(cx));
@@ -2735,12 +2729,6 @@ impl Tty7App {
                     }))
                     .into_any_element()
             };
-        // `Auto` is the one backdrop that still defers to the legacy blur
-        // flag, which is shared with the other platforms' vibrancy switch and
-        // travels with a synced config. Offer that switch here exactly when it
-        // has an effect — otherwise a stored `window_blur: true` would blur
-        // the window with no visible control to clear it, short of the reset
-        // button, which also discards the user's opacity.
         let auto_blur_row: Option<Stateful<Div>> = None;
         let dim_switch = crate::ui::theme::switch("dim-inactive-panes", cx)
             .checked(dim_inactive_panes)
@@ -8477,28 +8465,17 @@ mod tests {
             settings_row_id("Codex", "Installed")
         );
     }
-
     #[test]
-    fn synced_windows_backdrop_is_only_a_local_override_on_windows() {
-        let mut config = Config::default();
-        config.window_backdrop = WindowBackdrop::MicaAlt;
-
-        assert!(window_overrides_active(&config, true));
-        assert!(!window_overrides_active(&config, false));
-    }
-
-    #[test]
-    fn opacity_and_blur_are_local_overrides_on_every_platform() {
+    fn opacity_and_blur_are_local_overrides() {
         let mut opacity = Config::default();
         opacity.window_opacity = Some(0.8);
-        opacity.window_backdrop = WindowBackdrop::Mica;
         let mut blur = Config::default();
         blur.window_blur = Some(true);
-        blur.window_backdrop = WindowBackdrop::Acrylic;
 
-        assert!(window_overrides_active(&opacity, false));
-        assert!(window_overrides_active(&blur, false));
+        assert!(window_overrides_active(&opacity));
+        assert!(window_overrides_active(&blur));
     }
+
 
     #[test]
     fn every_section_has_search_entries() {

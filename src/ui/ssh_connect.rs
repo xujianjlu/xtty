@@ -251,7 +251,7 @@ impl Tty7App {
                 let target = crate::core::ssh_profile::to_connect_string(&profile);
                 self.open_ssh_profile_new_from_target(target, window, cx);
             }
-            RemoteTarget::Wsl { .. } | RemoteTarget::LocalStdio { .. } => {}
+            RemoteTarget::LocalStdio { .. } => {}
         }
     }
 

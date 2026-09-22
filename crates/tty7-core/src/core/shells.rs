@@ -1,8 +1,4 @@
-#[cfg(windows)]
-use std::ffi::OsStr;
 use std::path::Path;
-#[cfg(windows)]
-use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
@@ -112,14 +108,7 @@ fn append_custom(inventory: &mut ShellInventory, custom: &[crate::core::config::
 }
 
 pub fn detect_shells() -> Vec<DetectedShell> {
-    #[cfg(unix)]
-    {
-        detect_unix()
-    }
-    #[cfg(windows)]
-    {
-        detect_windows()
-    }
+    detect_unix()
 }
 
 pub fn default_shell_name(configured: Option<&str>) -> String {
@@ -225,11 +214,7 @@ fn is_bare_program(program: &Path) -> bool {
 /// paths that have not been installed yet.
 fn comparable_program_path(program: &Path) -> String {
     let resolved = std::fs::canonicalize(program).unwrap_or_else(|_| program.to_path_buf());
-    let mut value = resolved.to_string_lossy().into_owned();
-    if cfg!(windows) {
-        value = value.replace('/', "\\").to_ascii_lowercase();
-    }
-    value
+    resolved.to_string_lossy().into_owned()
 }
 
 /// The user's login shell, straight from the passwd database.
@@ -240,17 +225,9 @@ fn comparable_program_path(program: &Path) -> String {
 /// only the fallback for the rare setup where the lookup fails (a directory
 /// service that is down, a uid with no passwd entry).
 pub fn login_shell() -> String {
-    #[cfg(unix)]
-    {
-        pick_login_shell(passwd_shell(), std::env::var("SHELL").ok())
-    }
-    #[cfg(windows)]
-    {
-        windows_default_shell().to_string()
-    }
+    pick_login_shell(passwd_shell(), std::env::var("SHELL").ok())
 }
 
-#[cfg_attr(windows, allow(dead_code))]
 fn pick_login_shell(passwd: Option<String>, env: Option<String>) -> String {
     passwd
         .into_iter()
@@ -302,12 +279,7 @@ fn basename(program: &str) -> String {
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| program.to_string());
-    if cfg!(windows) {
-        let lower = base.to_ascii_lowercase();
-        lower.strip_suffix(".exe").unwrap_or(&lower).to_string()
-    } else {
-        base
-    }
+    base
 }
 
 /// Keeps conventional executable names for POSIX shells while giving Nushell
@@ -320,7 +292,6 @@ fn shell_label(name: &str) -> String {
     }
 }
 
-#[cfg_attr(windows, allow(dead_code))]
 fn parse_etc_shells(content: &str) -> Vec<String> {
     content
         .lines()
@@ -330,7 +301,6 @@ fn parse_etc_shells(content: &str) -> Vec<String> {
         .collect()
 }
 
-#[cfg_attr(windows, allow(dead_code))]
 fn unix_shells_from(
     candidates: impl IntoIterator<Item = String>,
     exists: impl Fn(&str) -> bool,
@@ -356,12 +326,10 @@ fn unix_shells_from(
 /// that wins the name is `/bin/bash` — macOS's 3.2 from 2007, which is old
 /// enough that bash-completion 2.x refuses to load. Probing `$PATH` first makes
 /// the menu's "bash" the same binary typing `bash` would reach.
-#[cfg_attr(windows, allow(dead_code))]
 const PATH_PROBED_SHELLS: [&str; 12] = [
     "bash", "zsh", "fish", "nu", "pwsh", "elvish", "xonsh", "sh", "ksh", "dash", "tcsh", "csh",
 ];
 
-#[cfg_attr(windows, allow(dead_code))]
 fn path_shell_candidates(path_var: &str) -> Vec<String> {
     let dirs: Vec<&str> = path_var.split(':').filter(|d| d.starts_with('/')).collect();
     PATH_PROBED_SHELLS
@@ -384,534 +352,6 @@ fn detect_unix() -> Vec<DetectedShell> {
         .chain(path_shell_candidates(&path_var))
         .chain(parse_etc_shells(&etc));
     unix_shells_from(candidates, |p| Path::new(p).is_file())
-}
-
-#[cfg(windows)]
-pub fn windows_default_shell() -> &'static str {
-    use std::sync::OnceLock;
-    static DEFAULT: OnceLock<String> = OnceLock::new();
-    DEFAULT.get_or_init(|| {
-        find_pwsh7()
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "powershell.exe".to_string())
-    })
-}
-
-#[cfg(windows)]
-fn find_pwsh7() -> Option<PathBuf> {
-    let mut roots = Vec::new();
-    for var in ["ProgramFiles", "ProgramFiles(x86)", "ProgramFiles(Arm)"] {
-        if let Some(pf) = std::env::var_os(var).filter(|v| !v.is_empty()) {
-            let pf = PathBuf::from(pf);
-            roots.push(pf.join("PowerShell").join("7"));
-            roots.push(pf.join("PowerShell").join("7-preview"));
-        }
-    }
-    if let Some(home) = std::env::var_os("USERPROFILE").filter(|v| !v.is_empty()) {
-        let home = PathBuf::from(home);
-        roots.push(home.join(".dotnet").join("tools"));
-        roots.push(home.join("scoop").join("shims"));
-    }
-    if let Some(local) = std::env::var_os("LOCALAPPDATA").filter(|v| !v.is_empty()) {
-        roots.push(PathBuf::from(local).join("Microsoft").join("WindowsApps"));
-    }
-    pick_first_existing(roots.iter().map(|r| r.join("pwsh.exe")))
-        .or_else(|| find_in_path("pwsh.exe"))
-}
-
-#[cfg(windows)]
-fn pick_first_existing(candidates: impl IntoIterator<Item = PathBuf>) -> Option<PathBuf> {
-    candidates.into_iter().find(|p| p.is_file())
-}
-
-#[cfg(windows)]
-fn find_in_path(exe: &str) -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    find_in_path_var(exe, &path)
-}
-
-/// Finds an exact executable name using Windows' ordered `PATH` directories.
-///
-/// The caller supplies the `.exe` suffix explicitly so a directory with the
-/// same name is never mistaken for a launchable shell. Keeping the path value
-/// separate also makes the lookup testable without mutating process-global
-/// environment variables while other tests are running.
-#[cfg(windows)]
-fn find_in_path_var(exe: &str, path: &OsStr) -> Option<PathBuf> {
-    std::env::split_paths(path)
-        .map(|dir| dir.join(exe))
-        .find(|p| p.is_file())
-}
-
-#[cfg(windows)]
-fn detect_windows() -> Vec<DetectedShell> {
-    let mut out = Vec::new();
-    let system_root =
-        PathBuf::from(std::env::var_os("SystemRoot").unwrap_or_else(|| r"C:\Windows".into()));
-
-    if let Some(pwsh) = find_pwsh7() {
-        out.push(DetectedShell::bare(
-            "PowerShell 7",
-            pwsh.to_string_lossy().into_owned(),
-        ));
-    }
-
-    // Nushell has no stable Windows installation directory across package
-    // managers, so mirror command resolution and offer the first `nu.exe`
-    // reachable through the current system PATH.
-    if let Some(nu) = find_in_path("nu.exe") {
-        out.push(DetectedShell::bare(
-            "Nushell",
-            nu.to_string_lossy().into_owned(),
-        ));
-    }
-
-    let ps5 = system_root
-        .join("System32")
-        .join("WindowsPowerShell")
-        .join("v1.0")
-        .join("powershell.exe");
-    if ps5.is_file() {
-        out.push(DetectedShell::bare(
-            "Windows PowerShell",
-            ps5.to_string_lossy().into_owned(),
-        ));
-    }
-
-    let cmd = std::env::var_os("ComSpec")
-        .map(PathBuf::from)
-        .filter(|p| p.is_file())
-        .unwrap_or_else(|| system_root.join("System32").join("cmd.exe"));
-    if cmd.is_file() {
-        out.push(DetectedShell::bare(
-            "Command Prompt",
-            cmd.to_string_lossy().into_owned(),
-        ));
-    }
-
-    if let Some(bash) = find_git_bash() {
-        out.push(DetectedShell {
-            label: "Git Bash".into(),
-            program: bash.to_string_lossy().into_owned(),
-            args: vec!["-i".into(), "-l".into()],
-            args_are_tty7_defaults: true,
-            user_authored: false,
-        });
-    }
-
-    for distro in list_wsl_distros().unwrap_or_default() {
-        out.push(DetectedShell {
-            label: format!("WSL · {distro}"),
-            program: "wsl.exe".into(),
-            args: vec!["--distribution".into(), distro, "--cd".into(), "~".into()],
-            args_are_tty7_defaults: true,
-            user_authored: false,
-        });
-    }
-
-    out
-}
-
-#[cfg(all(windows, test))]
-pub fn git_bash_path() -> Option<PathBuf> {
-    find_git_bash()
-}
-
-#[cfg(all(windows, test))]
-pub fn nushell_path() -> Option<PathBuf> {
-    find_in_path("nu.exe")
-}
-
-#[cfg(all(windows, test))]
-mod wsl_tests {
-    #[test]
-    fn the_default_distro_is_one_of_the_installed_ones() {
-        let installed = super::wsl_distros();
-        if installed.is_empty() {
-            eprintln!("skipping: no WSL distributions installed");
-            return;
-        }
-        let default = super::default_wsl_distro()
-            .expect("a machine with installed distros names a default in Lxss");
-        assert!(
-            installed.contains(&default),
-            "registry default {default:?} not in {installed:?}"
-        );
-    }
-
-    /// Windows Terminal drops `Modern = 1` distros from this very key, because
-    /// they hand it a profile fragment separately and it would otherwise list
-    /// them twice. Copying that filter here would hide the ordinary distro on
-    /// an up-to-date machine — on the box this was written on, the only one.
-    #[test]
-    fn a_modern_distro_is_still_offered() {
-        let installed = super::wsl_distros();
-        if installed.is_empty() {
-            eprintln!("skipping: no WSL distributions installed");
-            return;
-        }
-        let modern: Vec<String> = super::registry_user_subkeys(super::LXSS)
-            .unwrap_or_default()
-            .iter()
-            .filter(|guid| {
-                super::registry_user_dword(&format!(r"{}\{guid}", super::LXSS), "Modern") == Some(1)
-            })
-            .filter_map(|guid| {
-                super::registry_user_string(&format!(r"{}\{guid}", super::LXSS), "DistributionName")
-            })
-            .filter(|name| super::worth_offering(name))
-            .collect();
-        if modern.is_empty() {
-            eprintln!("skipping: no modern WSL distributions installed");
-            return;
-        }
-        for name in &modern {
-            assert!(
-                installed.contains(name),
-                "modern distro {name:?} was dropped from {installed:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn listing_the_distros_does_not_wait_on_the_wsl_service() {
-        // Only the registry answer is meant to be fast. When there is none the
-        // fallback to `wsl.exe` is doing exactly what it exists for, and timing
-        // it would fail this test on every machine without WSL installed.
-        if super::registered_wsl_distros().is_none() {
-            eprintln!("skipping: the registry has no distro list to read");
-            return;
-        }
-        let started = std::time::Instant::now();
-        let _ = super::wsl_distros();
-        let elapsed = started.elapsed();
-        assert!(
-            elapsed < std::time::Duration::from_millis(500),
-            "the listing went to `wsl.exe` after all: {elapsed:?}"
-        );
-    }
-
-    /// The list is what the shell menu offers, so a distro that cannot open a
-    /// pane must not be on it: `wsl -l -q`, which this replaced, only ever
-    /// listed installed ones.
-    #[test]
-    fn a_distro_that_is_not_installed_is_not_offered() {
-        let Some(guids) = super::registry_user_subkeys(super::LXSS) else {
-            eprintln!("skipping: the registry has no distro list to read");
-            return;
-        };
-        let half_installed: Vec<String> = guids
-            .iter()
-            .map(|guid| format!(r"{}\{guid}", super::LXSS))
-            .filter(|key| super::registry_user_dword(key, "State").is_some_and(|state| state != 1))
-            .filter_map(|key| super::registry_user_string(&key, "DistributionName"))
-            .collect();
-        if half_installed.is_empty() {
-            eprintln!("skipping: every registered distro finished installing");
-            return;
-        }
-        let offered = super::wsl_distros();
-        for name in &half_installed {
-            assert!(
-                !offered.contains(name),
-                "unfinished distro {name:?} was offered in {offered:?}"
-            );
-        }
-    }
-}
-
-pub fn wsl_distros() -> Vec<String> {
-    wsl_distros_probed().unwrap_or_default()
-}
-
-/// Where `wsl.exe` registers what is installed: one subkey per distro, named by
-/// GUID, carrying `DistributionName` and `State`.
-#[cfg(windows)]
-const LXSS: &str = r"Software\Microsoft\Windows\CurrentVersion\Lxss";
-
-/// The distro `wsl.exe` launches when no `--distribution` is given, read from
-/// the registry (`Lxss\DefaultDistribution` names the per-distro key that
-/// carries `DistributionName`). The registry rather than `wsl -l`: this runs
-/// on the pane-spawn path, where a microsecond read beats a subprocess.
-#[cfg(windows)]
-pub fn default_wsl_distro() -> Option<String> {
-    let guid = registry_user_string(LXSS, "DefaultDistribution")?;
-    let name = registry_user_string(&format!(r"{LXSS}\{guid}"), "DistributionName")?;
-    (!name.is_empty()).then_some(name)
-}
-
-#[cfg(not(windows))]
-pub fn default_wsl_distro() -> Option<String> {
-    None
-}
-
-#[cfg(windows)]
-fn registry_user_string(subkey: &str, value: &str) -> Option<String> {
-    use windows_sys::Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_SZ, RegGetValueW};
-
-    fn wide(s: &str) -> Vec<u16> {
-        s.encode_utf16().chain(std::iter::once(0)).collect()
-    }
-    let subkey = wide(subkey);
-    let value = wide(value);
-    let mut bytes: u32 = 0;
-    // SAFETY: a null data pointer makes this a pure sizing call; the key and
-    // value names are NUL-terminated UTF-16 owned right above.
-    let rc = unsafe {
-        RegGetValueW(
-            HKEY_CURRENT_USER,
-            subkey.as_ptr(),
-            value.as_ptr(),
-            RRF_RT_REG_SZ,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            &mut bytes,
-        )
-    };
-    if rc != 0 || bytes == 0 {
-        return None;
-    }
-    let mut buf = vec![0u16; (bytes as usize).div_ceil(2)];
-    let mut size = bytes;
-    // SAFETY: `buf` is `size` bytes as the sizing call reported;
-    // RegGetValueW writes at most that many and NUL-terminates REG_SZ data.
-    let rc = unsafe {
-        RegGetValueW(
-            HKEY_CURRENT_USER,
-            subkey.as_ptr(),
-            value.as_ptr(),
-            RRF_RT_REG_SZ,
-            std::ptr::null_mut(),
-            buf.as_mut_ptr().cast(),
-            &mut size,
-        )
-    };
-    if rc != 0 {
-        return None;
-    }
-    let len = buf.iter().position(|&u| u == 0).unwrap_or(buf.len());
-    Some(String::from_utf16_lossy(&buf[..len]))
-}
-
-pub fn wsl_distros_probed() -> Option<Vec<String>> {
-    #[cfg(windows)]
-    {
-        list_wsl_distros()
-    }
-    #[cfg(not(windows))]
-    {
-        Some(Vec::new())
-    }
-}
-
-#[cfg(windows)]
-fn find_git_bash() -> Option<PathBuf> {
-    let mut candidates = Vec::new();
-    for var in ["ProgramFiles", "ProgramFiles(x86)"] {
-        if let Some(pf) = std::env::var_os(var).filter(|v| !v.is_empty()) {
-            candidates.push(PathBuf::from(pf).join("Git").join("bin").join("bash.exe"));
-        }
-    }
-    if let Some(local) = std::env::var_os("LOCALAPPDATA").filter(|v| !v.is_empty()) {
-        candidates.push(
-            PathBuf::from(local)
-                .join("Programs")
-                .join("Git")
-                .join("bin")
-                .join("bash.exe"),
-        );
-    }
-    pick_first_existing(candidates)
-}
-
-#[cfg(windows)]
-const WSL_LIST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
-
-/// Distros that exist to carry a container runtime, not to be typed into.
-#[cfg_attr(unix, allow(dead_code))]
-const NOT_FOR_TYPING: [&str; 2] = ["docker-desktop", "rancher-desktop"];
-
-#[cfg_attr(unix, allow(dead_code))]
-fn worth_offering(name: &str) -> bool {
-    !name.is_empty() && !NOT_FOR_TYPING.iter().any(|hidden| name.starts_with(hidden))
-}
-
-/// The installed distros, from `Lxss` — the same registry key `wsl.exe` itself
-/// registers them in, and the one `default_wsl_distro` above already reads.
-///
-/// Not `wsl -l -q`, because that has to reach the WSL service, and reaching the
-/// WSL service is exactly the part that can be slow: issue #454 was a machine
-/// where it took 3.3s, past the timeout below, so the list came back empty
-/// every time and no distro was ever offered in the shell menu. A registry read
-/// is microseconds and cannot hang, because nothing is listening on it.
-///
-/// Windows Terminal made this same move in 2021 (microsoft/terminal#10967) for
-/// the same reason, but skips distros whose key carries `Modern = 1`. That is a
-/// deduplication rule specific to Terminal — modern distros ship it a profile
-/// fragment of their own, so reading both would list them twice. Nothing ships
-/// tty7 anything, so we take them all; skipping them here would hide the most
-/// ordinary distro on an up-to-date machine.
-///
-/// `State` we do read, the way Terminal does: a distro is only offered while it
-/// says 1, "installed". An install that was interrupted — `wsl --install` shut
-/// down halfway, a failed `--import`, one being uninstalled right now — leaves
-/// the key behind with a name and some other state, and `wsl -l -q` (which this
-/// replaced) never listed those. Offering one puts a distro in the shell menu
-/// that can only open a pane that dies of a WSL registration error.
-///
-/// `None` means "could not tell", never "there is nothing": the caller falls
-/// back to `wsl.exe` on it, and a caller further up keeps the last good list.
-#[cfg(windows)]
-fn registered_wsl_distros() -> Option<Vec<String>> {
-    let guids = registry_user_subkeys(LXSS)?;
-    let names: Vec<String> = guids
-        .iter()
-        .map(|guid| format!(r"{LXSS}\{guid}"))
-        // A key with no `State` at all is taken at its word: the absent value
-        // is not evidence of a broken install, and inventing one would be how
-        // this hides a working distro.
-        .filter(|key| registry_user_dword(key, "State").unwrap_or(INSTALLED) == INSTALLED)
-        .filter_map(|key| registry_user_string(&key, "DistributionName"))
-        .filter(|name| worth_offering(name))
-        .collect();
-
-    // Subkeys but nothing to show for them is not an answer either: every name
-    // unreadable has the shape of a permissions problem, not of a machine with
-    // no distros on it — that machine has an empty `Lxss`, and says so.
-    if names.is_empty() && !guids.is_empty() {
-        return None;
-    }
-    Some(names)
-}
-
-/// `State` of a distro that finished installing and has not started leaving.
-#[cfg(windows)]
-const INSTALLED: u32 = 1;
-
-#[cfg(windows)]
-fn registry_user_dword(subkey: &str, value: &str) -> Option<u32> {
-    use windows_sys::Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_DWORD, RegGetValueW};
-
-    fn wide(s: &str) -> Vec<u16> {
-        s.encode_utf16().chain(std::iter::once(0)).collect()
-    }
-    let (subkey, value) = (wide(subkey), wide(value));
-    let mut data: u32 = 0;
-    let mut size = std::mem::size_of::<u32>() as u32;
-    // SAFETY: both names are NUL-terminated and owned here, and `data` is a
-    // live u32 exactly `size` bytes long, which is what a DWORD read writes.
-    let rc = unsafe {
-        RegGetValueW(
-            HKEY_CURRENT_USER,
-            subkey.as_ptr(),
-            value.as_ptr(),
-            RRF_RT_REG_DWORD,
-            std::ptr::null_mut(),
-            (&raw mut data).cast(),
-            &mut size,
-        )
-    };
-    (rc == 0).then_some(data)
-}
-
-/// The names of a key's subkeys, or `None` if they could not all be read.
-///
-/// All or nothing on purpose. The list this feeds is what the shell menu offers,
-/// and a caller that cannot tell a short list from a complete one would quietly
-/// drop distros: the walk is by index, so a key that changes underneath it —
-/// `wsl --unregister` running right now, a Store install rewriting `Lxss` —
-/// ends early, and reporting that as the answer is worse than admitting it.
-#[cfg(windows)]
-fn registry_user_subkeys(subkey: &str) -> Option<Vec<String>> {
-    use windows_sys::Win32::Foundation::ERROR_NO_MORE_ITEMS;
-    use windows_sys::Win32::System::Registry::{
-        HKEY, HKEY_CURRENT_USER, KEY_READ, RegCloseKey, RegEnumKeyExW, RegOpenKeyExW,
-    };
-
-    let subkey: Vec<u16> = subkey.encode_utf16().chain(std::iter::once(0)).collect();
-    let mut key: HKEY = std::ptr::null_mut();
-    // SAFETY: `subkey` is NUL-terminated and owned here; `key` is written only
-    // on success and closed on every path out below.
-    if unsafe { RegOpenKeyExW(HKEY_CURRENT_USER, subkey.as_ptr(), 0, KEY_READ, &mut key) } != 0 {
-        return None;
-    }
-
-    let mut names = Vec::new();
-    // A registry key name is at most 255 characters, plus the terminator.
-    let mut buf = [0u16; 256];
-    let mut ended_with = None;
-    for index in 0.. {
-        let mut len = buf.len() as u32;
-        // SAFETY: `buf` really is `len` units long, and every pointer that is
-        // not wanted is null, which this call documents as "do not report it".
-        let rc = unsafe {
-            RegEnumKeyExW(
-                key,
-                index,
-                buf.as_mut_ptr(),
-                &mut len,
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-            )
-        };
-        if rc != 0 {
-            ended_with = Some(rc);
-            break;
-        }
-        names.push(String::from_utf16_lossy(&buf[..len as usize]));
-    }
-
-    // SAFETY: `key` was opened above and is not used after this.
-    unsafe { RegCloseKey(key) };
-    // There is one honest way for the walk to end. Anything else — the key
-    // deleted underneath it, a name that would not fit — leaves a list that is
-    // short by an unknown amount, which nobody downstream can tell from a real
-    // one, so say nothing instead.
-    (ended_with == Some(ERROR_NO_MORE_ITEMS)).then_some(names)
-}
-
-#[cfg(windows)]
-fn list_wsl_distros() -> Option<Vec<String>> {
-    if let Some(registered) = registered_wsl_distros() {
-        return Some(registered);
-    }
-
-    // The registry would not answer — no `Lxss` key at all, or a walk of it that
-    // ended somewhere other than the end. Either way this is not a "there are no
-    // distros" to pass on, so ask the slow way rather than claim there is nothing.
-    log::debug!("{LXSS} gave no usable answer; falling back to `wsl -l -q`");
-    let mut cmd = std::process::Command::new("wsl.exe");
-    cmd.args(["-l", "-q"]);
-    let output = match crate::core::proc::output_within(
-        crate::core::proc::hide_console(&mut cmd),
-        WSL_LIST_TIMEOUT,
-    ) {
-        Ok(output) => output,
-        Err(e) => {
-            log::warn!("could not list the WSL distros: {e}");
-            return None;
-        }
-    };
-    if !output.status.success() {
-        return None;
-    }
-    Some(parse_wsl_list(&output.stdout))
-}
-
-#[cfg_attr(unix, allow(dead_code))]
-fn parse_wsl_list(bytes: &[u8]) -> Vec<String> {
-    let units: Vec<u16> = bytes
-        .chunks_exact(2)
-        .map(|c| u16::from_le_bytes([c[0], c[1]]))
-        .collect();
-    let text = String::from_utf16_lossy(&units);
-    text.lines()
-        .map(|l| l.trim_matches(|c: char| c.is_whitespace() || c == '\u{feff}' || c == '\0'))
-        .filter(|l| worth_offering(l))
-        .map(str::to_string)
-        .collect()
 }
 
 #[cfg(test)]
@@ -1084,45 +524,14 @@ mod tests {
         );
     }
 
-    #[test]
-    fn parse_wsl_list_decodes_utf16le_and_filters() {
-        let text = "Ubuntu\r\ndocker-desktop\r\ndocker-desktop-data\r\nDebian\r\n\r\n";
-        let bytes: Vec<u8> = text.encode_utf16().flat_map(u16::to_le_bytes).collect();
-        assert_eq!(parse_wsl_list(&bytes), vec!["Ubuntu", "Debian"]);
-    }
 
-    #[test]
-    fn parse_wsl_list_tolerates_bom_and_empty_input() {
-        assert_eq!(parse_wsl_list(&[]), Vec::<String>::new());
-        let text = "\u{feff}Arch\r\n";
-        let bytes: Vec<u8> = text.encode_utf16().flat_map(u16::to_le_bytes).collect();
-        assert_eq!(parse_wsl_list(&bytes), vec!["Arch"]);
-    }
 
     #[test]
     fn basename_reduces_paths_to_shell_names() {
         assert_eq!(basename("/usr/local/bin/fish"), "fish");
         assert_eq!(basename("zsh"), "zsh");
-        #[cfg(windows)]
-        {
-            assert_eq!(basename(r"C:\Program Files\PowerShell\7\pwsh.exe"), "pwsh");
-            assert_eq!(basename("CMD.EXE"), "cmd");
-        }
     }
 
-    #[cfg(windows)]
-    #[test]
-    fn windows_path_probe_finds_the_first_nushell_file() {
-        let first = tempfile::tempdir().unwrap();
-        let second = tempfile::tempdir().unwrap();
-        let directory_named_like_nu = first.path().join("nu.exe");
-        std::fs::create_dir(&directory_named_like_nu).unwrap();
-        let expected = second.path().join("nu.exe");
-        std::fs::write(&expected, b"test executable placeholder").unwrap();
-
-        let path = std::env::join_paths([first.path(), second.path()]).unwrap();
-        assert_eq!(find_in_path_var("nu.exe", &path), Some(expected));
-    }
 
     #[test]
     fn a_unique_configured_shell_is_added_first_with_its_args() {
@@ -1146,11 +555,7 @@ mod tests {
 
     #[test]
     fn a_bare_configured_name_reuses_the_detected_friendly_entry() {
-        let detected_program = if cfg!(windows) {
-            r"C:\Tools\Nushell\nu.exe"
-        } else {
-            "/opt/nushell/bin/nu"
-        };
+        let detected_program = "/opt/nushell/bin/nu";
         let inventory = inventory_from(
             vec![DetectedShell::bare("Nushell", detected_program)],
             Some(("nu".into(), vec!["--login".into()])),
@@ -1179,16 +584,8 @@ mod tests {
 
     #[test]
     fn explicit_same_named_shells_at_different_paths_stay_distinct() {
-        let first = if cfg!(windows) {
-            r"C:\Shells\first\custom.exe"
-        } else {
-            "/opt/shells/first/custom"
-        };
-        let second = if cfg!(windows) {
-            r"D:\Shells\second\custom.exe"
-        } else {
-            "/opt/shells/second/custom"
-        };
+        let first = "/opt/shells/first/custom";
+        let second = "/opt/shells/second/custom";
         let inventory = inventory_from(
             vec![DetectedShell::bare("custom", first)],
             Some((second.into(), Vec::new())),
@@ -1204,16 +601,8 @@ mod tests {
 
     #[test]
     fn an_explicit_configured_path_does_not_collapse_a_bare_detected_name() {
-        let configured = if cfg!(windows) {
-            r"C:\Shells\custom.exe"
-        } else {
-            "/opt/shells/custom"
-        };
-        let detected = if cfg!(windows) {
-            "custom.exe"
-        } else {
-            "custom"
-        };
+        let configured = "/opt/shells/custom";
+        let detected = "custom";
         let inventory = inventory_from(
             vec![DetectedShell::bare("custom", detected)],
             Some((configured.into(), Vec::new())),
@@ -1226,12 +615,8 @@ mod tests {
 
     #[test]
     fn detected_label_names_the_unconfigured_platform_default() {
-        let program = if cfg!(windows) {
-            r"C:\Program Files\PowerShell\7\pwsh.exe"
-        } else {
-            "/opt/homebrew/bin/zsh"
-        };
-        let label = if cfg!(windows) { "PowerShell 7" } else { "zsh" };
+        let program = "/opt/homebrew/bin/zsh";
+        let label = "zsh";
         let inventory = inventory_from(vec![DetectedShell::bare(label, program)], None, program);
 
         assert_eq!(inventory.default_name, label);
@@ -1277,13 +662,16 @@ mod tests {
         let mut inventory = menu(&["zsh"]);
         append_custom(
             &mut inventory,
-            &[custom("Ubuntu (dev)", "wsl.exe", &["-d", "Ubuntu"])],
+            &[custom("Dev container", "docker", &["exec", "-it", "dev", "bash"])],
         );
 
         let added = inventory.shells.last().expect("the entry");
-        assert_eq!(added.label, "Ubuntu (dev)");
-        assert_eq!(added.program, "wsl.exe");
-        assert_eq!(added.args, vec!["-d".to_string(), "Ubuntu".to_string()]);
+        assert_eq!(added.label, "Dev container");
+        assert_eq!(added.program, "docker");
+        assert_eq!(
+            added.args,
+            vec!["exec".to_string(), "-it".to_string(), "dev".to_string(), "bash".to_string()]
+        );
         assert!(
             !added.args_are_tty7_defaults,
             "tty7 contributed none of this command, so none of it may be replaced as a default"

@@ -169,14 +169,6 @@ fn current_uid() -> u32 {
     unsafe { libc::getuid() }
 }
 
-/// Windows has no uid, and its port probe is a kernel table rather than a
-/// subprocess with an identity — `Row::uid` is 0 there and so is this, so the
-/// check above is a constant false.
-#[cfg(not(unix))]
-fn current_uid() -> u32 {
-    0
-}
-
 struct Row {
     ppid: u32,
     pgid: u32,
@@ -494,7 +486,6 @@ fn listening_ports(procs: &[ProcEntry]) -> (Vec<PortEntry>, PortProbe) {
 /// Compiled everywhere and used by the unix probe and by the tests, which is
 /// how a parser and a timeout that only ever run on macOS and Linux get
 /// exercised on a Windows machine.
-#[cfg_attr(not(unix), allow(dead_code))]
 enum Run {
     Finished(std::process::Output),
     TimedOut,
@@ -511,7 +502,6 @@ enum Run {
 /// reintroduce the hang this exists to prevent: a child that spawned something
 /// of its own hands the write end of the pipe on, and waiting for end-of-file
 /// then means waiting for a grandchild nobody killed.
-#[cfg_attr(not(unix), allow(dead_code))]
 fn run_bounded(
     mut cmd: std::process::Command,
     budget: std::time::Duration,
@@ -544,7 +534,6 @@ fn run_bounded(
 ///
 /// Split out from the call so the format can be tested off a Mac: this parser
 /// is the half of the probe that has no platform in it.
-#[cfg_attr(not(unix), allow(dead_code))]
 fn parse_lsof(text: &str, procs: &[ProcEntry]) -> Vec<PortEntry> {
     let by_pid: HashMap<u32, &str> = procs.iter().map(|p| (p.pid, p.name.as_str())).collect();
     let mut ports: Vec<PortEntry> = Vec::new();
@@ -595,14 +584,6 @@ fn record_listener(ports: &mut Vec<PortEntry>, name: &str, port: u16, pid: u32, 
         addr,
         name: name.to_string(),
     });
-}
-
-#[cfg(not(unix))]
-fn listening_ports(_procs: &[ProcEntry]) -> (Vec<PortEntry>, PortProbe) {
-    (
-        Vec::new(),
-        PortProbe::Unavailable("no port probe on this platform".to_string()),
-    )
 }
 
 /// The address and port `lsof -Fn` reports a listener on — `*:3000`,

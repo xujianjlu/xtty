@@ -946,9 +946,6 @@ fn preserve_mode(path: &Path, mode: Option<u32>) {
     }
 }
 
-#[cfg(not(unix))]
-fn preserve_mode(_path: &Path, _mode: Option<u32>) {}
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1351,7 +1351,6 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         }
         L10nKey::RemoteProfileMissing => "that saved SSH profile no longer exists",
         L10nKey::RemoteAliasMissing => "\"{alias}\" is no longer in ~/.ssh/config",
-        L10nKey::RemoteWslNoSsh => "a WSL workspace has no SSH connection",
         L10nKey::RemoteLocalStdioNoSsh => "a local --stdio workspace has no SSH connection",
         L10nKey::RemoteHostNotTty7 => "{machine} answered, but not as a tty7 server: {error}",
         L10nKey::RemoteWorkspaceListFailed => {

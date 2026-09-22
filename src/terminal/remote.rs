@@ -170,14 +170,13 @@ pub struct PaneWorkspace {
 
 impl PaneWorkspace {
     pub fn shares_localhost(&self) -> bool {
-        matches!(self.target, crate::core::session::RemoteTarget::Wsl { .. })
+        matches!(self.target, crate::core::session::RemoteTarget::LocalStdio { .. })
     }
 
     pub fn route_header(&self) -> anyhow::Result<crate::daemon::router::RouteHeader> {
         use crate::core::session::RemoteTarget;
         use crate::daemon::router::RouteHeader;
         let header = match (&self.target, &self.spec) {
-            (RemoteTarget::Wsl { distro }, _) => RouteHeader::wsl(distro.clone()),
             (RemoteTarget::LocalStdio { program, args }, _) => {
                 let mut argv: Vec<&str> = args.iter().map(String::as_str).collect();
                 if !argv.contains(&"--pane") {
@@ -2871,7 +2870,7 @@ mod parked_cursor_tests {
         // is never a conhost, whoever is dialling it.
         for header in [
             crate::daemon::router::RouteHeader::ssh(spec),
-            crate::daemon::router::RouteHeader::wsl("Ubuntu-22.04"),
+            crate::daemon::router::RouteHeader::local_stdio("tty7-server", &[]),
         ] {
             let route = PaneRoute::Remote {
                 header: Box::new(header),
@@ -3155,9 +3154,7 @@ mod tests {
     fn a_wsl_workspace_routes_by_distro() {
         let ws = PaneWorkspace {
             workspace: crate::core::session::WorkspaceId::new(),
-            target: crate::core::session::RemoteTarget::Wsl {
-                distro: "Ubuntu-22.04".into(),
-            },
+            target: crate::core::session::RemoteTarget::LocalStdio { program: "Ubuntu-22.04".into(), args: vec![] },
             spec: None,
             label: None,
             resize_echo: false,
@@ -4257,7 +4254,7 @@ mod tests {
         // answer rides the same gate through `local_daemon_supports`, so this
         // covers the deferral for both.
         term.route = PaneRoute::Remote {
-            header: Box::new(crate::daemon::router::RouteHeader::wsl("Ubuntu-22.04")),
+            header: Box::new(crate::daemon::router::RouteHeader::local_stdio("tty7-server", &[])),
             resize_echo: true,
         };
 
@@ -4324,7 +4321,7 @@ mod tests {
         // What `for_workspace` builds when the host's hello named no echo —
         // an older server, or a link that was down when the route was made.
         term.route = PaneRoute::Remote {
-            header: Box::new(crate::daemon::router::RouteHeader::wsl("Ubuntu-22.04")),
+            header: Box::new(crate::daemon::router::RouteHeader::local_stdio("tty7-server", &[])),
             resize_echo: false,
         };
 

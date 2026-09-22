@@ -121,7 +121,6 @@ fn live_label(cx: &App, target: &RemoteTarget) -> Option<String> {
             .iter()
             .find(|p| p.id == *id)
             .map(profile_label),
-        RemoteTarget::Wsl { .. } => None,
         RemoteTarget::Alias { .. }
         | RemoteTarget::Direct { .. }
         | RemoteTarget::LocalStdio { .. } => None,
@@ -175,7 +174,6 @@ fn local_stdio_host() -> Option<HostChoice> {
 }
 
 /// WSL distro probing removed; kept as a no-op for existing call sites.
-pub fn sweep_wsl(_cx: &mut App) {}
 
 fn endpoint_label(user: &str, host: &str, port: u16) -> String {
     let base = if user.is_empty() {
@@ -229,7 +227,6 @@ pub fn spec_for(target: &RemoteTarget, cx: &App) -> Result<NativeSshSpec, String
                 cfg.verify_host_keys,
             ))
         }
-        RemoteTarget::Wsl { .. } => Err(t(L10nKey::RemoteWslNoSsh).to_string()),
         RemoteTarget::LocalStdio { .. } => Err(t(L10nKey::RemoteLocalStdioNoSsh).to_string()),
     }
 }
@@ -240,7 +237,6 @@ pub fn control_route(target: &RemoteTarget, cx: &App) -> Result<RouteHeader, Str
             program.clone(),
             &args.iter().map(String::as_str).collect::<Vec<_>>(),
         ),
-        RemoteTarget::Wsl { distro } => RouteHeader::wsl(distro.clone()),
         _ => spec_for(target, cx).map(RouteHeader::ssh)?,
     };
     note_origin(&header.target, target);

@@ -69,7 +69,7 @@ pub fn probe(host: &dyn Host, cwd: &Path) -> Option<RepoSnapshot> {
 /// of the places these roots are later compared. See
 /// [`crate::core::path_spelling`].
 ///
-/// Asked of `host`, not of `cfg!(windows)`: the same probes run against a
+/// Asked of `host`, not of the local OS: the same probes run against a
 /// remote box, whose `/home/u/src` is native over there and goes straight
 /// back over the wire as the cwd of the next `git`. A Windows client
 /// re-spelling it would ask a Linux server about `\home\u\src`.

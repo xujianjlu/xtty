@@ -762,10 +762,7 @@ impl Default for PathStyle {
 
 impl PathStyle {
     /// The dialect the machine tty7 is running on speaks.
-    pub const NATIVE: PathStyle = match cfg!(windows) {
-        true => PathStyle::Windows,
-        false => PathStyle::Posix,
-    };
+    pub const NATIVE: PathStyle = PathStyle::Posix;
 
     /// The dialect a host that called `sample` one of its own directories
     /// speaks: a drive letter or a UNC share is a Windows host's, and anything

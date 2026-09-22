@@ -143,7 +143,6 @@ pub struct RemoteContext {
 pub enum RemoteKind {
     Ssh,
     NativeSsh,
-    Wsl,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1819,11 +1818,6 @@ mod tests {
                 kind: RemoteKind::Ssh,
                 argv: vec!["ssh".into(), "-p".into(), "2222".into(), "dev".into()],
                 target: "dev".into(),
-            })),
-            DaemonMsg::RemoteContext(Some(RemoteContext {
-                kind: RemoteKind::Wsl,
-                argv: Vec::new(),
-                target: "Ubuntu-24.04".into(),
             })),
             DaemonMsg::RemoteContext(None),
             DaemonMsg::Agent(Some(crate::core::cli_agent::CLIAgent::Claude)),

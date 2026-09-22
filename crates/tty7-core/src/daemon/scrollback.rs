@@ -211,12 +211,6 @@ fn write_private(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
     file.write_all(bytes)
 }
 
-#[cfg(not(unix))]
-fn write_private(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
-    // Windows inherits the config directory's ACL, which is already per-user.
-    std::fs::write(path, bytes)
-}
-
 pub fn load(pane_id: u64) -> Option<(Vec<Segment>, Option<String>)> {
     let raw = std::fs::read(path_for(pane_id)?).ok()?;
     match decode(&raw) {

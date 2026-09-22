@@ -16,7 +16,7 @@ use std::sync::Arc;
 use crate::core::actions::*;
 use crate::core::config::{
     Config, CursorStyle as ConfigCursorStyle, MouseZoomModifier, NewTabPosition, RightPanelTab,
-    ShellConfig, TabBarPosition, WindowBackdrop,
+    ShellConfig, TabBarPosition,
 };
 use crate::core::session::{
     Session, SessionAxis, SessionPane, SessionTab, WorkspaceId, WorkspaceStore,
@@ -1123,7 +1123,6 @@ fn clear_window_override_values(config: &mut Config, backdrop_is_local: bool) {
     config.window_opacity = None;
     config.window_blur = None;
     if backdrop_is_local {
-        config.window_backdrop = WindowBackdrop::Auto;
     }
 }
 
@@ -1203,7 +1202,6 @@ impl Tty7App {
         }
         Self::prompt_daemon_version_mismatch(window, cx);
         crate::ui::remote_connect::register(cx);
-        crate::ui::remote_connect::sweep_wsl(cx);
         Self::prompt_remote_daemon_mismatch(window, cx);
         app.reopen_remote_at_startup(cx);
         app
@@ -2521,7 +2519,7 @@ impl Tty7App {
         let theme = crate::ui::presets::by_id(cx, &crate::ui::theme::effective_preset_id(cx));
         let blur = config.window_blur.unwrap_or(theme.blur);
         config.window_opacity.or(theme.opacity).unwrap_or_else(|| {
-            crate::ui::theme::default_window_opacity(config.window_backdrop, blur)
+            crate::ui::theme::default_window_opacity()
         })
     }
 
@@ -6496,7 +6494,7 @@ impl Tty7App {
             Some(rgb)
         } else if v
             .remote_context()
-            .is_some_and(|r| r.kind != crate::daemon::protocol::RemoteKind::Wsl)
+            .is_some()
         {
             Some(0x9CA3AF)
         } else {
@@ -6628,7 +6626,7 @@ impl Tty7App {
             .focused_or_first(window, cx)?;
         let pane = pane.read(cx);
         let remote = pane.remote_context()?;
-        (remote.kind != crate::daemon::protocol::RemoteKind::Wsl).then_some((pane.pane_id, remote))
+        Some((pane.pane_id, remote))
     }
 
     pub(crate) fn active_connected_native_ssh_pane(
@@ -9559,37 +9557,6 @@ mod tests {
         // Singular is not "1 tabs".
         let one = crate::ui::i18n::t_plural(crate::ui::i18n::L10nKey::AppTabsNotRestored, 1, &[]);
         assert!(one.contains("1 tab "), "{one}");
-    }
-
-    #[test]
-    fn non_windows_reset_preserves_the_synced_windows_backdrop() {
-        let mut config = crate::core::config::Config::default();
-        config.window_opacity = Some(0.8);
-        config.window_blur = Some(true);
-        config.window_backdrop = crate::core::config::WindowBackdrop::Mica;
-
-        clear_window_override_values(&mut config, false);
-
-        assert_eq!(config.window_opacity, None);
-        assert_eq!(config.window_blur, None);
-        assert_eq!(
-            config.window_backdrop,
-            crate::core::config::WindowBackdrop::Mica,
-            "an inert synchronized backdrop is not a local override to reset"
-        );
-    }
-
-    #[test]
-    fn windows_reset_clears_the_local_backdrop_override() {
-        let mut config = crate::core::config::Config::default();
-        config.window_backdrop = crate::core::config::WindowBackdrop::Acrylic;
-
-        clear_window_override_values(&mut config, true);
-
-        assert_eq!(
-            config.window_backdrop,
-            crate::core::config::WindowBackdrop::Auto
-        );
     }
 
     #[test]

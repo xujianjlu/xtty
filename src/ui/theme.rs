@@ -6,7 +6,7 @@ use gpui_component::scroll::ScrollbarShow;
 use gpui_component::{ActiveTheme, Theme, ThemeMode};
 
 use crate::core::actions::*;
-use crate::core::config::{Config, WindowBackdrop};
+use crate::core::config::Config;
 use crate::terminal::view::{
     ClearScrollback, CopyText, CutText, FindInTerminal, FindNext, FindPrevious, PasteText,
     RedoEdit, SelectAll, UndoEdit,
@@ -282,99 +282,7 @@ pub(crate) fn effective_preset_id(cx: &App) -> String {
 /// fill would hide the material behind it.
 pub(crate) const SYSTEM_MATERIAL_OPACITY: f32 = 0.82;
 
-/// Maps the requested backdrop to the gpui window appearance, falling back
-/// down the chain when the OS build predates a material: Mica needs Windows
-/// 11 22H2 (build 22621), acrylic needs 1809 (build 17763); below that plain
-/// translucency is the best Windows can do. Pure function so the fallback
-/// table is unit-testable on every platform.
-pub(crate) fn windows_background_appearance(
-    backdrop: WindowBackdrop,
-    blur: bool,
-    build: u32,
-) -> WindowBackgroundAppearance {
-    match backdrop {
-        WindowBackdrop::Auto => {
-            if blur {
-                WindowBackgroundAppearance::Blurred
-            } else {
-                WindowBackgroundAppearance::Transparent
-            }
-        }
-        WindowBackdrop::Blur => {
-            if build >= 17_763 {
-                WindowBackgroundAppearance::Blurred
-            } else {
-                WindowBackgroundAppearance::Transparent
-            }
-        }
-        WindowBackdrop::Mica => {
-            if build >= 22_621 {
-                WindowBackgroundAppearance::MicaBackdrop
-            } else if build >= 17_763 {
-                WindowBackgroundAppearance::Blurred
-            } else {
-                WindowBackgroundAppearance::Transparent
-            }
-        }
-        WindowBackdrop::MicaAlt => {
-            if build >= 22_621 {
-                WindowBackgroundAppearance::MicaAltBackdrop
-            } else if build >= 17_763 {
-                WindowBackgroundAppearance::Blurred
-            } else {
-                WindowBackgroundAppearance::Transparent
-            }
-        }
-        WindowBackdrop::Acrylic => {
-            if build >= 22_621 {
-                // Native acrylic (DWMSBT_TRANSIENTWINDOW) on Windows 11 22H2+.
-                WindowBackgroundAppearance::AcrylicBackdrop
-            } else if build >= 17_763 {
-                // Classic WCA acrylic (ACCENT_ENABLE_ACRYLICBLURBEHIND).
-                WindowBackgroundAppearance::Blurred
-            } else {
-                WindowBackgroundAppearance::Transparent
-            }
-        }
-        WindowBackdrop::Off => WindowBackgroundAppearance::Transparent,
-    }
-}
-
-/// The backdrop presets actually worth offering on a given Windows build.
-/// Mica, Mica Alt and native acrylic all need Windows 11 22H2 (22621); below
-/// that every one of them collapses onto the same classic WCA blur that
-/// `Blur` already offers, so listing them would present several choices that
-/// render identically — hiding them beats misrepresenting them. Below 1809
-/// (17763) there is no blur API at all, so only plain translucency is left.
-/// Pure function so the table is unit-testable on every platform.
-pub(crate) fn supported_backdrops_for(build: u32) -> &'static [WindowBackdrop] {
-    if build >= 22_621 {
-        &[
-            WindowBackdrop::Auto,
-            WindowBackdrop::Blur,
-            WindowBackdrop::Mica,
-            WindowBackdrop::MicaAlt,
-            WindowBackdrop::Acrylic,
-            WindowBackdrop::Off,
-        ]
-    } else if build >= 17_763 {
-        &[
-            WindowBackdrop::Auto,
-            WindowBackdrop::Blur,
-            WindowBackdrop::Off,
-        ]
-    } else {
-        &[WindowBackdrop::Auto, WindowBackdrop::Off]
-    }
-}
-
-
-
-pub(crate) fn resolved_background_appearance(
-    backdrop: WindowBackdrop,
-    blur: bool,
-) -> WindowBackgroundAppearance {
-    let _ = backdrop;
+pub(crate) fn resolved_background_appearance(blur: bool) -> WindowBackgroundAppearance {
     if blur {
         WindowBackgroundAppearance::Blurred
     } else {
@@ -382,22 +290,15 @@ pub(crate) fn resolved_background_appearance(
     }
 }
 
-/// macOS has no Windows-style backdrop materials; the blur toggle alone decides.
-pub(crate) fn material_active(backdrop: WindowBackdrop, blur: bool) -> bool {
-    let _ = (backdrop, blur);
+/// macOS has no Windows-style backdrop materials.
+pub(crate) fn material_active() -> bool {
     false
 }
 
 /// The window's background alpha when neither the config nor the theme sets
-/// an explicit opacity: translucent enough to show an active material,
-/// fully opaque otherwise. Single source of truth for `apply_theme` and the
-/// settings slider, so the two can never drift apart.
-pub(crate) fn default_window_opacity(backdrop: WindowBackdrop, blur: bool) -> f32 {
-    if material_active(backdrop, blur) {
-        SYSTEM_MATERIAL_OPACITY
-    } else {
-        1.0
-    }
+/// an explicit opacity. Always opaque on macOS unless theme/config overrides.
+pub(crate) fn default_window_opacity() -> f32 {
+    1.0
 }
 
 /// The fill for the workspace's large translucent surfaces (file sidebar,
@@ -420,7 +321,7 @@ pub(crate) fn workspace_surface_color(cx: &App) -> Hsla {
     let config = cx.global::<Config>();
     let theme = presets::by_id(cx, &effective_preset_id(cx));
     let blur = config.window_blur.unwrap_or(theme.blur);
-    if material_active(config.window_backdrop, blur) {
+    if material_active() {
         base.alpha(0.15)
     } else {
         base
@@ -432,7 +333,7 @@ pub(crate) fn background_appearance(cx: &App) -> WindowBackgroundAppearance {
     let config = cx.global::<Config>();
     let theme = presets::by_id(cx, &effective_preset_id(cx));
     let blur = config.window_blur.unwrap_or(theme.blur);
-    resolved_background_appearance(config.window_backdrop, blur)
+    resolved_background_appearance(blur)
 }
 
 /// The appearance last handed to each live window, so `apply_theme` can skip
@@ -503,7 +404,7 @@ pub(crate) fn apply_theme(mut window: Option<&mut Window>, cx: &mut App) {
     // opacity override it defaults to SYSTEM_MATERIAL_OPACITY instead of
     // 1.0. Derived from the *resolved* appearance so old builds where
     // Blur/Acrylic fall back to plain transparency stay opaque by default.
-    let default_opacity = default_window_opacity(config.window_backdrop, blur);
+    let default_opacity = default_window_opacity();
     let opacity = config
         .window_opacity
         .or(theme.opacity)
@@ -517,11 +418,10 @@ pub(crate) fn apply_theme(mut window: Option<&mut Window>, cx: &mut App) {
     let sem = theme.semantics();
     let active = theme.active_palette(config.theme_legible_palette);
 
-    let backdrop = config.window_backdrop;
     let ui_font_family = config.ui_font_family.clone();
 
     if let Some(window) = window.as_deref_mut() {
-        let appearance = resolved_background_appearance(backdrop, blur);
+        let appearance = resolved_background_appearance(blur);
         if take_appearance_change(window, appearance, cx) {
             window.set_background_appearance(appearance);
         }
@@ -901,210 +801,3 @@ mod tests {
             assert_eq!(effective_preset_id(cx), Config::default().theme_preset);
         });
     }
-
-    #[test]
-    fn windows_background_appearance_falls_back_by_build() {
-        use crate::core::config::WindowBackdrop;
-        let a = |b: WindowBackdrop, blur: bool, build: u32| {
-            windows_background_appearance(b, blur, build)
-        };
-
-        // Auto keeps the legacy blur/translucent choice.
-        assert_eq!(
-            a(WindowBackdrop::Auto, false, 22_621),
-            WindowBackgroundAppearance::Transparent
-        );
-        assert_eq!(
-            a(WindowBackdrop::Auto, true, 17_763),
-            WindowBackgroundAppearance::Blurred
-        );
-
-        // Blur explicitly requests the classic blurred appearance from 1809
-        // on; older builds get plain translucency.
-        assert_eq!(
-            a(WindowBackdrop::Blur, false, 17_763),
-            WindowBackgroundAppearance::Blurred
-        );
-        assert_eq!(
-            a(WindowBackdrop::Blur, true, 17_762),
-            WindowBackgroundAppearance::Transparent
-        );
-
-        // Mica needs Windows 11 22H2; 1809..22H2 falls back to classic
-        // acrylic, and below 1809 there is no blur API to fall back to —
-        // asking for one there would leave an unbacked see-through window.
-        assert_eq!(
-            a(WindowBackdrop::Mica, false, 22_621),
-            WindowBackgroundAppearance::MicaBackdrop
-        );
-        assert_eq!(
-            a(WindowBackdrop::Mica, false, 22_620),
-            WindowBackgroundAppearance::Blurred
-        );
-        assert_eq!(
-            a(WindowBackdrop::Mica, false, 17_762),
-            WindowBackgroundAppearance::Transparent
-        );
-        assert_eq!(
-            a(WindowBackdrop::MicaAlt, false, 26_000),
-            WindowBackgroundAppearance::MicaAltBackdrop
-        );
-        assert_eq!(
-            a(WindowBackdrop::MicaAlt, false, 17_763),
-            WindowBackgroundAppearance::Blurred
-        );
-        assert_eq!(
-            a(WindowBackdrop::MicaAlt, false, 17_762),
-            WindowBackgroundAppearance::Transparent
-        );
-        // A failed RtlGetVersion reports build 0; every material must degrade
-        // to plain translucency there rather than request an unsupported one.
-        for backdrop in [
-            WindowBackdrop::Blur,
-            WindowBackdrop::Mica,
-            WindowBackdrop::MicaAlt,
-            WindowBackdrop::Acrylic,
-        ] {
-            assert_eq!(
-                a(backdrop, false, 0),
-                WindowBackgroundAppearance::Transparent,
-                "{backdrop:?} on an unknown build must not request a material"
-            );
-        }
-
-        // Acrylic uses the native DWMSBT_TRANSIENTWINDOW material on 22H2+,
-        // classic WCA acrylic from 1809 on, plain translucency below that.
-        assert_eq!(
-            a(WindowBackdrop::Acrylic, false, 22_621),
-            WindowBackgroundAppearance::AcrylicBackdrop
-        );
-        assert_eq!(
-            a(WindowBackdrop::Acrylic, false, 22_620),
-            WindowBackgroundAppearance::Blurred
-        );
-        assert_eq!(
-            a(WindowBackdrop::Acrylic, false, 17_763),
-            WindowBackgroundAppearance::Blurred
-        );
-        assert_eq!(
-            a(WindowBackdrop::Acrylic, false, 17_762),
-            WindowBackgroundAppearance::Transparent
-        );
-
-        // Off never requests a material.
-        assert_eq!(
-            a(WindowBackdrop::Off, false, 26_000),
-            WindowBackgroundAppearance::Transparent
-        );
-        assert_eq!(
-            a(WindowBackdrop::Off, true, 26_000),
-            WindowBackgroundAppearance::Transparent
-        );
-    }
-
-    #[test]
-    fn auto_never_counts_as_a_material() {
-        use crate::core::config::WindowBackdrop;
-        // Every config written before this setting existed carries `Auto`,
-        // and many of them carry `window_blur: true` from the old switch.
-        // Those windows were opaque, with opaque sidebars — an update must
-        // not silently turn them see-through, so `Auto` gets the plain 1.0
-        // default no matter which way the legacy toggle points.
-        for blur in [false, true] {
-            assert!(!material_active(WindowBackdrop::Auto, blur));
-            assert_eq!(default_window_opacity(WindowBackdrop::Auto, blur), 1.0);
-        }
-        // `Off` is an explicit "no material" and must behave the same.
-        assert!(!material_active(WindowBackdrop::Off, true));
-        assert_eq!(default_window_opacity(WindowBackdrop::Off, true), 1.0);
-    }
-
-
-    #[test]
-    fn non_windows_backdrop_defers_to_the_local_blur_toggle() {
-        use crate::core::config::WindowBackdrop;
-        // On non-Windows, `window_backdrop` is a Windows-only setting with
-        // no local UI to clear it; every variant must defer to the local
-        // blur toggle so the switch's checked state always matches what is
-        // actually rendered.
-        for backdrop in [
-            WindowBackdrop::Auto,
-            WindowBackdrop::Blur,
-            WindowBackdrop::Mica,
-            WindowBackdrop::MicaAlt,
-            WindowBackdrop::Acrylic,
-            WindowBackdrop::Off,
-        ] {
-            assert_eq!(
-                resolved_background_appearance(backdrop, true),
-                WindowBackgroundAppearance::Blurred,
-                "{backdrop:?} with blur on should resolve to Blurred"
-            );
-            assert_eq!(
-                resolved_background_appearance(backdrop, false),
-                WindowBackgroundAppearance::Transparent,
-                "{backdrop:?} with blur off should resolve to Transparent"
-            );
-        }
-    }
-
-    #[test]
-    fn supported_backdrops_follow_the_build() {
-        use crate::core::config::WindowBackdrop;
-        assert_eq!(
-            supported_backdrops_for(22_621),
-            &[
-                WindowBackdrop::Auto,
-                WindowBackdrop::Blur,
-                WindowBackdrop::Mica,
-                WindowBackdrop::MicaAlt,
-                WindowBackdrop::Acrylic,
-                WindowBackdrop::Off,
-            ]
-        );
-        // Pre-22H2: Mica, Mica Alt and Acrylic all collapse onto the very
-        // same classic WCA blur that `Blur` already offers, so the dropdown
-        // hides them rather than listing choices that render identically.
-        assert_eq!(
-            supported_backdrops_for(22_620),
-            &[
-                WindowBackdrop::Auto,
-                WindowBackdrop::Blur,
-                WindowBackdrop::Off,
-            ]
-        );
-        assert_eq!(
-            supported_backdrops_for(17_763),
-            &[
-                WindowBackdrop::Auto,
-                WindowBackdrop::Blur,
-                WindowBackdrop::Off,
-            ]
-        );
-        // Every offered preset must resolve to a distinct appearance, or the
-        // dropdown is promising a difference the window cannot deliver.
-        // `Auto` is exempt: it has no fixed appearance of its own, it mirrors
-        // whichever way the blur toggle happens to be set.
-        for build in [22_621, 22_620, 17_763, 17_762] {
-            let offered: Vec<_> = supported_backdrops_for(build)
-                .iter()
-                .copied()
-                .filter(|b| *b != WindowBackdrop::Auto)
-                .collect();
-            for (i, a) in offered.iter().enumerate() {
-                for b in &offered[i + 1..] {
-                    assert_ne!(
-                        windows_background_appearance(*a, false, build),
-                        windows_background_appearance(*b, false, build),
-                        "build {build}: {a:?} and {b:?} render identically"
-                    );
-                }
-            }
-        }
-        // Below 1809 there is no blur API at all; only plain translucency.
-        assert_eq!(
-            supported_backdrops_for(17_762),
-            &[WindowBackdrop::Auto, WindowBackdrop::Off]
-        );
-    }
-}

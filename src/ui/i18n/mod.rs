@@ -1092,7 +1092,6 @@ l10n_keys! {
     RemoteDaemonTooOld,
     RemoteProfileMissing,
     RemoteAliasMissing,
-    RemoteWslNoSsh,
     RemoteLocalStdioNoSsh,
     RemoteHostNotTty7,
     RemoteWorkspaceListFailed,

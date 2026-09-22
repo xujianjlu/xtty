@@ -1098,9 +1098,7 @@ mod tests {
         // The directory is a path on this computer, so a remote workspace is
         // the one restore candidate a path-carrying launch declines.
         let remote = WindowView::on_remote(RemoteRef::new(
-            RemoteTarget::Wsl {
-                distro: "Ubuntu".into(),
-            },
+            RemoteTarget::LocalStdio { program: "Ubuntu".into(), args: vec![] },
             WorkspaceId::new(),
         ));
         let remote_id = remote.id;

@@ -54,8 +54,6 @@ impl Instance {
     fn endpoint(&self) -> PathBuf {
         #[cfg(unix)]
         let name = "daemon.sock";
-        #[cfg(windows)]
-        let name = "daemon.port";
         self.dir.path().join(name)
     }
 
@@ -66,8 +64,6 @@ impl Instance {
     fn control_endpoint(&self) -> PathBuf {
         #[cfg(unix)]
         let name = "control.sock";
-        #[cfg(windows)]
-        let name = "control.port";
         self.dir.path().join(name)
     }
 
@@ -237,8 +233,6 @@ fn size() -> WinSize {
 fn interactive_shell() -> ShellSpec {
     #[cfg(unix)]
     let program = "/bin/sh";
-    #[cfg(windows)]
-    let program = "cmd.exe";
     ShellSpec {
         program: program.into(),
         args: Vec::new(),

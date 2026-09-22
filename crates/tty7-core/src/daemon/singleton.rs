@@ -77,9 +77,6 @@ fn note_held(file: &File) {
     );
 }
 
-#[cfg(not(unix))]
-fn note_held(_file: &File) {}
-
 /// Take back a seat this process never gave up.
 ///
 /// After `execve` the lock is still held — by this process, which is the same
@@ -254,19 +251,6 @@ const SEAT_RELEASE_GRACE: std::time::Duration = std::time::Duration::from_millis
 #[cfg(unix)]
 const RETRY_INTERVAL: std::time::Duration = std::time::Duration::from_millis(10);
 
-#[cfg(not(unix))]
-pub fn clear_record_if_free() {}
-
-#[cfg(not(unix))]
-pub fn holder_pid() -> Option<u32> {
-    // The Windows seat is `share_mode(0)`: while it is held the file cannot
-    // even be opened to read a pid out of. The Windows reap therefore still
-    // has only the pidfile to act on — a seat-holding survivor whose pidfile
-    // is gone stays unfindable there, so the #667 recovery is unix-only for
-    // now.
-    None
-}
-
 /// `Ok(Some(file))` when the lock is ours, `Ok(None)` when someone else holds
 /// it, `Err` when the question could not be put to the kernel at all.
 #[cfg(unix)]
@@ -297,16 +281,6 @@ fn open_exclusive(path: &std::path::Path) -> std::io::Result<Option<File>> {
             _ => return Err(e),
         }
     }
-}
-
-#[cfg(not(unix))]
-fn open_exclusive(_path: &std::path::Path) -> std::io::Result<Option<File>> {
-    // No lock primitive here. `Ok(None)` would read as "taken" and stop the
-    // server from ever starting; not being able to ask is `Unavailable`.
-    Err(std::io::Error::new(
-        std::io::ErrorKind::Unsupported,
-        "no single-server lock on this platform",
-    ))
 }
 
 #[cfg(test)]

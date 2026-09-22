@@ -35,20 +35,12 @@ impl Daemon {
     }
 
     fn pane_endpoint(&self) -> PathBuf {
-        let file = if cfg!(windows) {
-            "daemon.port"
-        } else {
-            "daemon.sock"
-        };
+        let file = "daemon.sock";
         self.dir.path().join(file)
     }
 
     fn control_endpoint(&self) -> PathBuf {
-        let file = if cfg!(windows) {
-            "control.port"
-        } else {
-            "control.sock"
-        };
+        let file = "control.sock";
         self.dir.path().join(file)
     }
 
@@ -100,35 +92,19 @@ fn size() -> WinSize {
 }
 
 fn one_shot_shell(command: &str) -> ShellSpec {
-    if cfg!(windows) {
-        ShellSpec {
-            program: "cmd.exe".into(),
-            args: vec!["/d".into(), "/c".into(), command.into()],
-            args_are_tty7_defaults: false,
-        }
-    } else {
         ShellSpec {
             program: "/bin/sh".into(),
             args: vec!["-c".into(), command.into()],
             args_are_tty7_defaults: false,
         }
-    }
 }
 
 fn interactive_shell() -> ShellSpec {
-    if cfg!(windows) {
-        ShellSpec {
-            program: "cmd.exe".into(),
-            args: vec!["/d".into()],
-            args_are_tty7_defaults: false,
-        }
-    } else {
         ShellSpec {
             program: "/bin/sh".into(),
             args: Vec::new(),
             args_are_tty7_defaults: false,
         }
-    }
 }
 
 fn seed(pane: u64) -> PaneSeed {

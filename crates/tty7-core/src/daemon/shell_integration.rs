@@ -763,7 +763,6 @@ enum ShellKind {
     Fish,
     PowerShell,
     Nushell,
-    Wsl,
 }
 
 fn shell_kind(program: Option<&str>) -> Option<ShellKind> {
@@ -775,62 +774,14 @@ fn shell_kind(program: Option<&str>) -> Option<ShellKind> {
         .file_name()?
         .to_str()?
         .to_ascii_lowercase();
-    match base.strip_suffix(".exe").unwrap_or(&base) {
+    match base.as_str() {
         "zsh" => Some(ShellKind::Zsh),
-        "bash" if cfg!(windows) && !is_msys_bash(&owned) => None,
         "bash" => Some(ShellKind::Bash),
         "fish" => Some(ShellKind::Fish),
         "powershell" | "pwsh" => Some(ShellKind::PowerShell),
         "nu" => Some(ShellKind::Nushell),
-        "wsl" => Some(ShellKind::Wsl),
         _ => None,
     }
-}
-
-pub(crate) fn wsl_distro(args: &[String]) -> Option<String> {
-    let mut it = args.iter();
-    while let Some(a) = it.next() {
-        if a == "--distribution" || a == "-d" {
-            return it.next().cloned();
-        }
-        if let Some(v) = a.strip_prefix("--distribution=") {
-            return Some(v.to_string());
-        }
-    }
-    None
-}
-
-#[cfg_attr(not(windows), allow(dead_code))]
-fn wslenv_with(existing: Option<&str>, additions: &[&str]) -> String {
-    let mut out: Vec<String> = existing
-        .unwrap_or("")
-        .split(':')
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
-        .collect();
-    for add in additions {
-        let name = add.split('/').next().unwrap_or(add);
-        if !out.iter().any(|e| e.split('/').next().unwrap_or(e) == name) {
-            out.push((*add).to_string());
-        }
-    }
-    out.join(":")
-}
-
-fn is_msys_bash(program: &str) -> bool {
-    if !cfg!(windows) {
-        return true;
-    }
-    let normalized = program.replace('/', "\\").to_ascii_lowercase();
-    let Some((dir, _)) = normalized.rsplit_once('\\') else {
-        return false;
-    };
-    let system_root = std::env::var("SystemRoot")
-        .unwrap_or_else(|_| r"C:\Windows".to_string())
-        .replace('/', "\\")
-        .to_ascii_lowercase();
-    let system_root = system_root.trim_end_matches('\\');
-    !(dir == system_root || dir.starts_with(&format!("{system_root}\\")))
 }
 
 fn throwaway_dir(prefix: &str) -> Option<PathBuf> {
@@ -1066,12 +1017,7 @@ unset __tty7_bashrc
 }
 
 fn bash_path(path: &Path) -> String {
-    let s = path.to_string_lossy().into_owned();
-    if cfg!(windows) {
-        s.replace('\\', "/")
-    } else {
-        s
-    }
+    path.to_string_lossy().into_owned()
 }
 
 fn setup_bash() -> Option<Injection> {
@@ -1087,139 +1033,21 @@ fn setup_bash() -> Option<Injection> {
     })
 }
 
-const WSL_RCFILE_ENV: &str = "TTY7_RC";
 
-/// Where the zsh redirectors landed, in the Windows spelling `WSLENV`'s `/p`
-/// translates for the distro.
-///
-/// Deliberately not `ZDOTDIR`: everything in this map is handed to *every* WSL
-/// pane, and a bash or fish distro that found a `ZDOTDIR` in its environment
-/// would carry it into any `zsh` started inside it. The bootstrap decides
-/// whether this becomes `ZDOTDIR`, and it only decides that for a zsh distro.
-const WSL_ZDOTDIR_ENV: &str = "TTY7_ZDOTDIR";
 
 /// POSIX single-quoting, for a body some other shell has to re-parse.
 fn shell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))
 }
 
-/// The bootstrap `sh` runs inside the distro. `$SHELL` is the only place the
-/// user's real shell is named, so every arm dispatches on it: bash re-execs
-/// through the rcfile written on the Windows side, zsh points `ZDOTDIR` at the
-/// redirectors written beside it, fish carries its integration inline the way
-/// `remote::bootstrap_command` does over SSH, and anything else falls back to a
-/// plain login shell.
-///
-/// Both file-backed arms ask whether what they were handed is really there
-/// before trusting it. The files live on the Windows side and reach the distro
-/// over `/mnt`, which is not a given: automount can be off, `/etc/wsl.conf` can
-/// move the root, and a distro can have no drvfs at all. Unguarded, bash is
-/// handed a `--rcfile` it cannot read — which it ignores in silence, taking the
-/// user's own `.bashrc` down with it, because tty7 starts it non-login so that
-/// `--rcfile` is honoured at all — and zsh is pointed at a `ZDOTDIR` that does
-/// not exist, which takes every startup file the user wrote with it. Guarded,
-/// such a distro gets the plain login shell it had before any of this: no
-/// integration, but the startup files a bare `wsl.exe` pane reads, which is the
-/// failure worth having.
-///
-/// `sh` parses this script, so the fish body is POSIX-quoted here — unlike the
-/// SSH path, where the far end's own login shell parses the bootstrap and
-/// `remote::fish_bootstrap` has to quote it the way fish reads quotes.
-#[cfg_attr(not(windows), allow(dead_code))]
-fn wsl_exec_script() -> String {
-    format!(
-        concat!(
-            r#"case "${{SHELL:-}}" in "#,
-            r#"*/bash) [ -r "${{TTY7_RC:-}}" ] && exec "$SHELL" --rcfile "$TTY7_RC" -i; "#,
-            r#"exec "$SHELL" -l ;; "#,
-            r#"*/zsh) [ -n "${{TTY7_ZDOTDIR:-}}" ] && [ -r "$TTY7_ZDOTDIR/.zshrc" ] "#,
-            r#"&& export ZDOTDIR="$TTY7_ZDOTDIR"; exec "$SHELL" -l ;; "#,
-            r#"*/fish) exec "$SHELL" -C {} -l ;; "#,
-            r#"*) exec "${{SHELL:-/bin/sh}}" -l ;; "#,
-            "esac"
-        ),
-        shell_quote(FISH_INTEGRATION)
-    )
-}
 
-/// The files a WSL pane needs on the Windows side, and the environment that
-/// tells the distro where they are.
-///
-/// Split out of `setup_wsl` so that everything deciding anything is compiled
-/// and tested on every platform; what stays behind the `#[cfg(windows)]` is the
-/// argv and a call to this.
-///
-/// `TTY7_USER_ZDOTDIR` is conspicuously absent, and that is the point.
-/// `real_user_zdotdir` answers from this process's own environment, and this
-/// process is on the Windows side of the boundary — the `ZDOTDIR` the user
-/// actually set lives inside the distro and is a Linux path nothing out here
-/// can name. A Windows path sent across would aim every redirector at a
-/// directory that is not there, and the user's `.zshrc` would go missing
-/// silently. Left unset, `zsh_redirectors` falls through to `${ZDOTDIR:-$HOME}`
-/// — the distro's own home — and its `.zshenv` arm recaptures a relocated
-/// `ZDOTDIR` from in there, which is the only side that ever knew it.
-#[cfg_attr(not(windows), allow(dead_code))]
-fn wsl_integration_env(dir: &Path, wslenv: Option<&str>) -> Option<HashMap<String, String>> {
-    let rcfile = dir.join("bashrc");
-    std::fs::write(&rcfile, bash_rcfile()).ok()?;
-
-    let mut env = HashMap::new();
-    let mut names = vec![format!("{WSL_RCFILE_ENV}/p")];
-    env.insert(
-        WSL_RCFILE_ENV.to_string(),
-        rcfile.to_string_lossy().into_owned(),
-    );
-
-    // The zsh half is best-effort on purpose. It is the bash rcfile that a WSL
-    // pane has depended on since this path existed, and failing the whole setup
-    // because a second set of files could not be written would take a working
-    // bash distro down with it. Nothing names the directory unless all of it
-    // landed, so a half-written one is never advertised to the distro.
-    if let Some(zdotdir) = wsl_zdotdir(dir) {
-        env.insert(WSL_ZDOTDIR_ENV.to_string(), zdotdir);
-        names.push(format!("{WSL_ZDOTDIR_ENV}/p"));
-    }
-
-    let names: Vec<&str> = names.iter().map(String::as_str).collect();
-    env.insert("WSLENV".to_string(), wslenv_with(wslenv, &names));
-    Some(env)
-}
-
-/// The zsh redirectors, under the pane's own throwaway directory so that the
-/// `remove_dir_all` closing the pane already takes them.
-#[cfg_attr(not(windows), allow(dead_code))]
-fn wsl_zdotdir(dir: &Path) -> Option<String> {
-    let zdotdir = dir.join(format!("{ZDOTDIR_PREFIX}wsl"));
-    std::fs::create_dir_all(&zdotdir).ok()?;
-    for (name, contents) in zsh_redirectors() {
-        std::fs::write(zdotdir.join(name), contents).ok()?;
-    }
-    Some(zdotdir.to_string_lossy().into_owned())
-}
-
-
-#[cfg_attr(not(windows), allow(dead_code))]
-fn wsl_cd(args: &[String]) -> Option<String> {
-    let mut it = args.iter();
-    while let Some(a) = it.next() {
-        if a == "--cd" {
-            return it.next().cloned();
-        }
-        if let Some(v) = a.strip_prefix("--cd=") {
-            return Some(v.to_string());
-        }
-    }
-    None
-}
-
-#[cfg_attr(not(windows), allow(unused_variables))]
 pub fn setup(program: Option<&str>, args: &[String], has_custom_args: bool) -> Option<Injection> {
     // Every shell defers to user-authored args, so the gate sits ahead of the
     // dispatch rather than once per arm — a shell added below inherits it
     // instead of having to remember it. Argv injection would collide with those
     // args outright, and even zsh's env-only ZDOTDIR swap changes which startup
-    // files run. Arguments tty7's own detection supplied (Git Bash's `-i -l`,
-    // a WSL row's `--distribution`) are not user-authored and never land here;
+    // files run. Arguments tty7's own detection supplied are not user-authored
+    // and never land here;
     // `daemon::pane::has_custom_args` is where that line is drawn.
     if has_custom_args {
         return None;
@@ -1230,7 +1058,6 @@ pub fn setup(program: Option<&str>, args: &[String], has_custom_args: bool) -> O
         ShellKind::Bash => setup_bash(),
         ShellKind::PowerShell => setup_powershell(),
         ShellKind::Nushell => setup_nushell(),
-        ShellKind::Wsl => None,
     }?;
 
     injection
@@ -1540,6 +1367,34 @@ mod tests {
     use super::*;
 
     #[test]
+    fn shell_kind_maps_known_basenames() {
+        assert!(matches!(shell_kind(Some("/bin/zsh")), Some(ShellKind::Zsh)));
+        assert!(matches!(shell_kind(Some("zsh")), Some(ShellKind::Zsh)));
+        assert!(matches!(
+            shell_kind(Some("/bin/bash")),
+            Some(ShellKind::Bash)
+        ));
+        assert!(matches!(
+            shell_kind(Some("/usr/local/bin/fish")),
+            Some(ShellKind::Fish)
+        ));
+        for prog in ["powershell", "pwsh", "/opt/homebrew/bin/pwsh"] {
+            assert!(
+                matches!(shell_kind(Some(prog)), Some(ShellKind::PowerShell)),
+                "{prog} should map to PowerShell"
+            );
+        }
+        for prog in ["nu", "/opt/homebrew/bin/nu"] {
+            assert!(
+                matches!(shell_kind(Some(prog)), Some(ShellKind::Nushell)),
+                "{prog} should map to Nushell"
+            );
+        }
+        assert!(shell_kind(Some("/bin/sh")).is_none());
+        assert!(shell_kind(Some("wsl")).is_none());
+    }
+
+    #[test]
     fn edit_mode_detection_survives_rebound_escape_and_inputrc() {
         assert!(
             ZSH_INTEGRATION.contains("bindkey -lL main"),
@@ -1737,8 +1592,7 @@ mod tests {
     }
 
     /// Guards the Unix half of the PowerShell integration, which had no coverage
-    /// at all until #583 — every pty round-trip here used to be `#[cfg(windows)]`,
-    /// so a script written against `$env:USERNAME` / `$env:COMPUTERNAME` /
+        /// so a script written against `$env:USERNAME` / `$env:COMPUTERNAME` /
     /// `$env:USERPROFILE` shipped for two platforms where all three are empty.
     #[cfg(unix)]
     #[test]
@@ -1794,245 +1648,6 @@ mod tests {
     }
 
     #[test]
-    fn shell_kind_maps_known_basenames() {
-        assert!(matches!(shell_kind(Some("/bin/zsh")), Some(ShellKind::Zsh)));
-        assert!(matches!(shell_kind(Some("zsh")), Some(ShellKind::Zsh)));
-        assert!(matches!(
-            shell_kind(Some("/bin/bash")),
-            Some(ShellKind::Bash)
-        ));
-        assert!(matches!(
-            shell_kind(Some("/usr/local/bin/fish")),
-            Some(ShellKind::Fish)
-        ));
-        for prog in [
-            "powershell.exe",
-            "powershell",
-            "pwsh",
-            "pwsh.exe",
-            "C:/Program Files/PowerShell/7/pwsh.exe",
-            "PowerShell.EXE",
-        ] {
-            assert!(
-                matches!(shell_kind(Some(prog)), Some(ShellKind::PowerShell)),
-                "{prog} should map to PowerShell"
-            );
-        }
-        for prog in ["nu", "nu.exe", "C:/Tools/nu.exe"] {
-            assert!(
-                matches!(shell_kind(Some(prog)), Some(ShellKind::Nushell)),
-                "{prog} should map to Nushell"
-            );
-        }
-        assert!(shell_kind(Some("/bin/sh")).is_none());
-        assert!(shell_kind(Some("cmd.exe")).is_none());
-        assert!(matches!(shell_kind(Some("wsl.exe")), Some(ShellKind::Wsl)));
-        assert!(matches!(shell_kind(Some("wsl")), Some(ShellKind::Wsl)));
-    }
-
-    #[test]
-    fn the_wsl_bootstrap_carries_integration_for_fish_not_just_bash() {
-        let script = wsl_exec_script();
-
-        assert!(script.contains(
-            r#"*/bash) [ -r "${TTY7_RC:-}" ] && exec "$SHELL" --rcfile "$TTY7_RC" -i; exec "$SHELL" -l ;;"#
-        ));
-        assert!(script.contains(&format!(
-            r#"*/fish) exec "$SHELL" -C {} -l ;;"#,
-            shell_quote(FISH_INTEGRATION)
-        )));
-
-        // `sh` parses this script, so the body is POSIX-quoted — backslashes
-        // pass through untouched. `remote::fish_quote`, which the SSH path uses
-        // because the far end's own fish parses the bootstrap there, would
-        // double every one of them and hand fish `\\e]%s\\a`.
-        assert!(script.contains(r"printf '\''\e]%s\a'\'' $argv[1]"));
-    }
-
-    #[test]
-    fn the_wsl_bootstrap_carries_integration_for_zsh_too() {
-        let script = wsl_exec_script();
-
-        assert!(
-            script
-                .contains(r#"*/zsh) [ -n "${TTY7_ZDOTDIR:-}" ] && [ -r "$TTY7_ZDOTDIR/.zshrc" ] "#)
-        );
-        assert!(script.contains(r#"&& export ZDOTDIR="$TTY7_ZDOTDIR"; exec "$SHELL" -l ;;"#));
-
-        // The redirectors read this to find the user's own startup files, and
-        // only the distro can answer it. Naming it out here would aim them at a
-        // Windows path no distro has.
-        assert!(
-            !script.contains("TTY7_USER_ZDOTDIR"),
-            "the bootstrap must not carry a ZDOTDIR this side made up"
-        );
-    }
-
-    #[test]
-    fn wsl_integration_env_writes_what_each_shell_reads_and_names_it_for_the_distro() {
-        let dir = throwaway_dir("tty7-wsltest-").expect("temp dir");
-        let env = wsl_integration_env(&dir, None).expect("integration files");
-
-        let rcfile = PathBuf::from(env.get(WSL_RCFILE_ENV).expect("TTY7_RC"));
-        assert_eq!(std::fs::read_to_string(&rcfile).unwrap(), bash_rcfile());
-
-        let zdotdir = PathBuf::from(env.get(WSL_ZDOTDIR_ENV).expect("TTY7_ZDOTDIR"));
-        for (name, contents) in zsh_redirectors() {
-            assert_eq!(
-                std::fs::read_to_string(zdotdir.join(name)).unwrap(),
-                contents
-            );
-        }
-
-        // Both are Windows paths — `/p` is what turns them into the distro's
-        // view of themselves, so neither may be pre-translated here.
-        assert_eq!(env.get("WSLENV").unwrap(), "TTY7_RC/p:TTY7_ZDOTDIR/p");
-        assert!(!env.contains_key("TTY7_USER_ZDOTDIR"));
-        assert!(!env.contains_key("ZDOTDIR"));
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// The arms are strings until something runs them. This asks a real `sh`
-    /// which one it picks, with stub shells standing in for the distro's.
-    #[cfg(unix)]
-    #[test]
-    fn the_wsl_bootstrap_picks_the_arm_that_matches_the_distro_s_shell() {
-        use std::os::unix::fs::PermissionsExt as _;
-        use std::process::Command;
-
-        let dir = throwaway_dir("tty7-wslarm-").expect("temp dir");
-        for name in ["bash", "zsh", "fish"] {
-            let stub = dir.join(name);
-            std::fs::write(
-                &stub,
-                format!("#!/bin/sh\necho {name} \"$@\"\necho ZDOTDIR=${{ZDOTDIR-unset}}\n"),
-            )
-            .unwrap();
-            std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
-        let zdotdir = dir.join("zdot");
-        std::fs::create_dir_all(&zdotdir).unwrap();
-        std::fs::write(zdotdir.join(".zshrc"), "").unwrap();
-
-        let rcfile = dir.join("bashrc");
-        std::fs::write(&rcfile, "").unwrap();
-
-        let run = |shell: &str, rc: &str, zdot: &str| {
-            let out = Command::new("sh")
-                .arg("-c")
-                .arg(wsl_exec_script())
-                .env_clear()
-                .env("SHELL", dir.join(shell).to_string_lossy().into_owned())
-                .env("TTY7_RC", rc)
-                .env("TTY7_ZDOTDIR", zdot)
-                .output()
-                .expect("run the bootstrap");
-            assert!(out.status.success(), "the bootstrap exited non-zero");
-            String::from_utf8_lossy(&out.stdout).into_owned()
-        };
-
-        let rc = rcfile.to_string_lossy().into_owned();
-        let zdot = zdotdir.to_string_lossy().into_owned();
-        assert!(run("bash", &rc, &zdot).contains("bash --rcfile"));
-        assert!(run("fish", &rc, &zdot).starts_with("fish -C"));
-
-        let zsh = run("zsh", &rc, &zdot);
-        assert!(zsh.contains("zsh -l"), "{zsh}");
-        assert!(zsh.contains(&format!("ZDOTDIR={zdot}")), "{zsh}");
-
-        // The distro that cannot see /mnt. Every arm that was handed a path has
-        // to notice, and fall back to the login shell that reads the user's own
-        // files rather than to one holding a path that is not there.
-        let missing = dir.join("not-there").to_string_lossy().into_owned();
-
-        let blind_zsh = run("zsh", &rc, &missing);
-        assert!(blind_zsh.contains("zsh -l"), "{blind_zsh}");
-        assert!(blind_zsh.contains("ZDOTDIR=unset"), "{blind_zsh}");
-
-        let blind_bash = run("bash", &missing, &zdot);
-        assert!(
-            !blind_bash.contains("--rcfile"),
-            "bash was handed an rcfile it cannot read: {blind_bash}"
-        );
-        assert!(blind_bash.contains("bash -l"), "{blind_bash}");
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// The distro runs this through `sh`, so a quoting slip is a pane that
-    /// never opens. CI's Linux and macOS legs have a real `sh` to ask.
-    #[cfg(unix)]
-    #[test]
-    fn the_wsl_bootstrap_is_valid_posix_sh() {
-        use std::io::Write as _;
-        use std::process::{Command, Stdio};
-
-        let mut child = Command::new("sh")
-            .arg("-n")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("spawn sh -n");
-        child
-            .stdin
-            .take()
-            .expect("piped stdin")
-            .write_all(wsl_exec_script().as_bytes())
-            .expect("write script");
-        let out = child.wait_with_output().expect("wait for sh -n");
-        assert!(
-            out.status.success(),
-            "sh rejected the WSL bootstrap:\n{}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-    }
-
-    #[test]
-    fn wsl_distro_and_cd_are_read_from_either_flag_spelling() {
-        let long: Vec<String> = ["--distribution", "Ubuntu-24.04", "--cd", "~"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
-        assert_eq!(wsl_distro(&long).as_deref(), Some("Ubuntu-24.04"));
-        assert_eq!(wsl_cd(&long).as_deref(), Some("~"));
-
-        let short: Vec<String> = ["-d", "Debian"].iter().map(|s| s.to_string()).collect();
-        assert_eq!(wsl_distro(&short).as_deref(), Some("Debian"));
-        assert_eq!(wsl_cd(&short), None);
-
-        let eq: Vec<String> = ["--distribution=Arch", "--cd=/tmp"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
-        assert_eq!(wsl_distro(&eq).as_deref(), Some("Arch"));
-        assert_eq!(wsl_cd(&eq).as_deref(), Some("/tmp"));
-
-        assert_eq!(wsl_distro(&[]), None);
-        assert_eq!(wsl_distro(&["--distribution".to_string()]), None);
-    }
-
-    #[test]
-    fn wslenv_preserves_the_users_own_entries() {
-        assert_eq!(
-            wslenv_with(Some("MYVAR/p:OTHER"), &["TTY7_RC/p"]),
-            "MYVAR/p:OTHER:TTY7_RC/p"
-        );
-        assert_eq!(wslenv_with(None, &["TTY7_RC/p"]), "TTY7_RC/p");
-        assert_eq!(wslenv_with(Some(""), &["TTY7_RC/p"]), "TTY7_RC/p");
-        assert_eq!(wslenv_with(Some("TTY7_RC/l"), &["TTY7_RC/p"]), "TTY7_RC/l");
-        assert_eq!(
-            wslenv_with(None, &["TTY7_RC/p", "TTY7_ZDOTDIR/p"]),
-            "TTY7_RC/p:TTY7_ZDOTDIR/p"
-        );
-        assert_eq!(
-            wslenv_with(Some("TTY7_ZDOTDIR/l"), &["TTY7_RC/p", "TTY7_ZDOTDIR/p"]),
-            "TTY7_ZDOTDIR/l:TTY7_RC/p"
-        );
-    }
-
-    #[test]
     fn shell_kind_strips_exe_for_non_powershell_shells() {
         for prog in [
             "C:/Program Files/Git/bin/bash.exe",
@@ -2043,25 +1658,16 @@ mod tests {
                 "{prog} should map to Bash"
             );
         }
-        if !cfg!(windows) {
-            for prog in ["bash.exe", "BASH.EXE", "bash"] {
-                assert!(matches!(shell_kind(Some(prog)), Some(ShellKind::Bash)));
-            }
+        for prog in ["bash"] {
+            assert!(matches!(shell_kind(Some(prog)), Some(ShellKind::Bash)));
         }
     }
 
-    #[test]
     #[test]
     fn bash_rcfile_path_uses_forward_slashes_on_windows() {
         let rendered = bash_path(Path::new(
             r"C:\Users\a\AppData\Local\Temp\tty7-bashrc-1-0\bashrc",
         ));
-        if cfg!(windows) {
-            assert_eq!(
-                rendered,
-                "C:/Users/a/AppData/Local/Temp/tty7-bashrc-1-0/bashrc"
-            );
-        }
         assert_eq!(
             bash_path(Path::new("/tmp/tty7-bashrc-1-0/bashrc")),
             "/tmp/tty7-bashrc-1-0/bashrc"
@@ -2337,23 +1943,10 @@ mod tests {
             ("C:/tmp/a%25c", "C:/tmp/a%c"),
         ] {
             let got = parse(&format!("7;file://localhost/{translated}"));
-            let want = if cfg!(windows) {
-                PathBuf::from(want)
-            } else {
-                PathBuf::from(format!("/{want}"))
-            };
+            let want = PathBuf::from(format!("/{want}"));
             assert_eq!(got, want, "payload for {translated}");
         }
 
-        if cfg!(windows) {
-            let got = parse("7;file://localhost/c/Users/thoma");
-            assert_ne!(got, PathBuf::from("C:/Users/thoma"));
-            assert!(
-                !got.is_absolute(),
-                "{got:?} is drive-relative — Windows resolves it against the \
-                 current drive, which is why it must never be emitted"
-            );
-        }
     }
 
     #[test]
@@ -2415,11 +2008,7 @@ mod tests {
 
         assert!(setup(Some("fish"), &[], true).is_none());
 
-        let bash = if cfg!(windows) {
-            "C:/Program Files/Git/bin/bash.exe"
-        } else {
-            "bash"
-        };
+        let bash = "bash";
         let inj = setup(Some(bash), &[], false).expect("bash setup");
         assert!(inj.replaces_argv);
         assert!(inj.env.contains_key("TTY7_SHELL_INTEGRATION"));
@@ -2688,14 +2277,8 @@ mod tests {
         use std::ffi::OsStr;
         // `/x` is not absolute on Windows (no prefix), so the fixtures have to
         // be shaped for the host or the rule under test is never exercised.
-        let abs_xdg = if cfg!(windows) { r"C:\xdg" } else { "/xdg" };
-        let platform = || {
-            Some(PathBuf::from(if cfg!(windows) {
-                r"C:\platform"
-            } else {
-                "/platform"
-            }))
-        };
+        let abs_xdg = "/xdg";
+        let platform = || Some(PathBuf::from("/platform"));
         let want = |base: &str| Some(PathBuf::from(base).join("nushell"));
 
         // Unset, empty, or relative: nu ignores it and takes the platform dir.

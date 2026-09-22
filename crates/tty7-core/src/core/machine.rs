@@ -1476,10 +1476,6 @@ fn legacy_data_dir() -> Option<PathBuf> {
     #[cfg(not(windows))]
     let base = env_dir("XDG_DATA_HOME")
         .or_else(|| env_dir("HOME").map(|h| h.join(".local").join("share")));
-    #[cfg(windows)]
-    let base = env_dir("LOCALAPPDATA")
-        .or_else(|| env_dir("USERPROFILE").map(|h| h.join(".local").join("share")));
-
     base.map(|b| b.join("tty7"))
 }
 

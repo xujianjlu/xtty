@@ -21,13 +21,4 @@ pub(crate) fn stream_pair() -> (
     {
         std::os::unix::net::UnixStream::pair().expect("socketpair")
     }
-    #[cfg(windows)]
-    {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
-        let addr = listener.local_addr().expect("bound addr");
-        let connecting =
-            std::thread::spawn(move || std::net::TcpStream::connect(addr).expect("connect back"));
-        let (accepted, _) = listener.accept().expect("accept");
-        (connecting.join().expect("connector thread"), accepted)
-    }
 }

@@ -894,11 +894,6 @@ impl MediumTransfer {
         })
     }
 
-    #[cfg(not(unix))]
-    pub fn resolve(&self) -> Option<Image> {
-        None
-    }
-
     /// The `offset..offset+size` slice of `buf` (or `offset..` when `size == 0`),
     /// copied out. `None` if `offset` itself falls outside the object; an `S=`
     /// that runs past the end is *truncated* to what's there rather than

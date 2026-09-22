@@ -511,10 +511,7 @@ mod tests {
     #[test]
     fn one_directory_spelled_three_ways_is_one_repository() {
         let mut cache = GitStatusCache::default();
-        let (a, b, c) = match cfg!(windows) {
-            true => (r"C:\code\repo", "C:/code/repo", r"\\?\C:\code\repo"),
-            false => ("/code/repo", "/code/repo", "/code/repo"),
-        };
+        let (a, b, c) = ("/code/repo", "/code/repo", "/code/repo");
         let (a, b, c) = (Path::new(a), Path::new(b), Path::new(c));
 
         // Probed under the resolved spelling, which is what a caller that went
@@ -587,10 +584,7 @@ mod tests {
     #[test]
     fn a_diff_read_settles_a_branch_it_learned_the_root_of_from_git() {
         let mut cache = GitStatusCache::default();
-        let (probed, from_git) = match cfg!(windows) {
-            true => (r"\\?\C:\code\repo", "C:/code/repo"),
-            false => ("/code/repo", "/code/repo"),
-        };
+        let (probed, from_git) = ("/code/repo", "/code/repo");
         cache.finish_probe(
             L,
             Path::new(probed),

@@ -194,8 +194,6 @@ pub struct Config {
     pub theme_legible_palette: bool,
     pub window_opacity: Option<f32>,
     pub window_blur: Option<bool>,
-    #[serde(default, deserialize_with = "de_lenient")]
-    pub window_backdrop: WindowBackdrop,
     #[serde(default = "default_true")]
     pub dim_inactive_panes: bool,
     pub keybindings: HashMap<String, KeybindingOverride>,
@@ -495,23 +493,6 @@ pub enum TabBarPosition {
     Left,
 }
 
-/// Native window backdrop material for the Windows GUI. Other platforms retain
-/// the value for config synchronization but do not use it for rendering.
-/// `Auto` keeps the legacy behavior where theme blur decides between blurred
-/// and plain translucent, `Blur` explicitly requests classic WCA acrylic, the
-/// material variants fall back to acrylic or plain translucency on older builds
-/// inside `src/ui/theme.rs`, and `Off` never requests a material.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum WindowBackdrop {
-    #[default]
-    Auto,
-    Blur,
-    Mica,
-    MicaAlt,
-    Acrylic,
-    Off,
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -609,14 +590,8 @@ pub fn default_font_fallbacks() -> Vec<String> {
             "PingFang SC",
             "Apple Color Emoji",
         ]
-    } else if cfg!(target_os = "windows") {
-        &[
-            "Maple Mono NF CN",
-            "Cascadia Mono",
-            "Microsoft YaHei",
-            "Segoe UI Emoji",
-        ]
     } else {
+        // Remote Linux tty7-server (and other Unix hosts).
         &[
             "Maple Mono NF CN",
             "DejaVu Sans Mono",
@@ -630,8 +605,6 @@ pub fn default_font_fallbacks() -> Vec<String> {
 pub fn platform_last_resort_fallbacks() -> &'static [&'static str] {
     if cfg!(target_os = "macos") {
         &["PingFang SC", "Apple Color Emoji"]
-    } else if cfg!(target_os = "windows") {
-        &["Microsoft YaHei", "Segoe UI Emoji"]
     } else {
         &["Noto Sans CJK SC", "Noto Color Emoji"]
     }
@@ -657,7 +630,6 @@ impl Default for Config {
             theme_legible_palette: true,
             window_opacity: None,
             window_blur: None,
-            window_backdrop: WindowBackdrop::default(),
             dim_inactive_panes: true,
             keybindings: HashMap::new(),
             keybinding_preset: default_preset(),
@@ -959,15 +931,6 @@ pub fn default_config_dir() -> Option<PathBuf> {
     Some(PathBuf::from(home).join(".config/tty7"))
 }
 
-#[cfg(windows)]
-pub fn default_config_dir() -> Option<PathBuf> {
-    if let Some(appdata) = std::env::var_os("APPDATA").filter(|d| !d.is_empty()) {
-        return Some(PathBuf::from(appdata).join("tty7"));
-    }
-    let profile = std::env::var_os("USERPROFILE").filter(|d| !d.is_empty())?;
-    Some(PathBuf::from(profile).join(".config").join("tty7"))
-}
-
 pub fn config_path(file: &str) -> Option<PathBuf> {
     Some(config_dir()?.join(file))
 }
@@ -1055,8 +1018,6 @@ fn write_atomic_mode(path: &std::path::Path, bytes: &[u8], private: bool) -> std
             use std::os::unix::fs::OpenOptionsExt as _;
             open.mode(0o600);
         }
-        #[cfg(not(unix))]
-        let _ = private;
         let mut f = open.open(&tmp)?;
         f.write_all(bytes)?;
         f.flush()?;
@@ -1775,28 +1736,6 @@ mod tests {
         assert_eq!(clamp(Some(f32::NAN)), None);
     }
 
-    #[test]
-    fn window_backdrop_defaults_and_round_trips_leniently() {
-        let cfg = Config::default();
-        assert_eq!(cfg.window_backdrop, WindowBackdrop::Auto);
-
-        let text = serde_json::to_string(&Config {
-            window_backdrop: WindowBackdrop::MicaAlt,
-            ..Config::default()
-        })
-        .unwrap();
-        assert!(text.contains("\"window_backdrop\":\"mica-alt\""));
-
-        let restored: Config = serde_json::from_str(&text).unwrap();
-        assert_eq!(restored.window_backdrop, WindowBackdrop::MicaAlt);
-
-        let blur: Config = serde_json::from_str(r#"{"window_backdrop":"blur"}"#).unwrap();
-        assert_eq!(blur.window_backdrop, WindowBackdrop::Blur);
-
-        // Unknown values fall back to Auto instead of rejecting the whole config.
-        let lenient: Config = serde_json::from_str(r#"{"window_backdrop":"nope"}"#).unwrap();
-        assert_eq!(lenient.window_backdrop, WindowBackdrop::Auto);
-    }
 
     #[test]
     fn sanitize_clamps_scrollback_into_band() {

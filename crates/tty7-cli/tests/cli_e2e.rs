@@ -172,52 +172,9 @@ mod raw_mode {
     }
 }
 
-#[cfg(windows)]
-mod raw_mode {
-    use windows_sys::Win32::Foundation::HANDLE;
-    use windows_sys::Win32::System::Console::{
-        ENABLE_ECHO_INPUT, ENABLE_LINE_INPUT, ENABLE_PROCESSED_INPUT,
-        ENABLE_VIRTUAL_TERMINAL_INPUT, GetConsoleMode, GetStdHandle, STD_INPUT_HANDLE,
-        SetConsoleMode,
-    };
-
-    pub struct Guard {
-        input: HANDLE,
-        mode: u32,
-    }
-
-    pub fn enable() -> Guard {
-        let input = unsafe { GetStdHandle(STD_INPUT_HANDLE) };
-        let mut mode = 0;
-        assert_ne!(
-            unsafe { GetConsoleMode(input, &mut mode) },
-            0,
-            "read fixture terminal mode"
-        );
-        let raw = (mode & !(ENABLE_ECHO_INPUT | ENABLE_LINE_INPUT | ENABLE_PROCESSED_INPUT))
-            | ENABLE_VIRTUAL_TERMINAL_INPUT;
-        assert_ne!(
-            unsafe { SetConsoleMode(input, raw) },
-            0,
-            "enable fixture raw mode"
-        );
-        Guard { input, mode }
-    }
-
-    impl Drop for Guard {
-        fn drop(&mut self) {
-            unsafe {
-                SetConsoleMode(self.input, self.mode);
-            }
-        }
-    }
-}
-
 struct Daemon {
     child: Child,
     dir: tempfile::TempDir,
-    #[cfg(windows)]
-    _job: job::Job,
 }
 
 impl Daemon {
@@ -241,34 +198,20 @@ impl Daemon {
             .stderr(Stdio::null())
             .spawn()
             .expect("start the in-test tty7 server");
-        #[cfg(windows)]
-        let _job = job::Job::kill_on_close(&child);
         let daemon = Daemon {
             child,
             dir,
-            #[cfg(windows)]
-            _job,
         };
         daemon.await_ready();
         daemon
     }
 
     fn control_endpoint(&self) -> PathBuf {
-        let file = if cfg!(windows) {
-            "control.port"
-        } else {
-            "control.sock"
-        };
-        self.dir.path().join(file)
+        self.dir.path().join("control.sock")
     }
 
     fn pane_endpoint(&self) -> PathBuf {
-        let file = if cfg!(windows) {
-            "daemon.port"
-        } else {
-            "daemon.sock"
-        };
-        self.dir.path().join(file)
+        self.dir.path().join("daemon.sock")
     }
 
     fn await_ready(&self) {
@@ -326,73 +269,12 @@ impl Daemon {
     }
 }
 
-impl Drop for Daemon {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
-}
-
-#[cfg(windows)]
-mod job {
-    use std::os::windows::io::AsRawHandle as _;
-    use std::process::Child;
-
-    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
-    use windows_sys::Win32::System::JobObjects::{
-        AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
-        SetInformationJobObject,
-    };
-
-    pub struct Job(HANDLE);
-
-    impl Job {
-        pub fn kill_on_close(child: &Child) -> Job {
-            unsafe {
-                let handle = CreateJobObjectW(std::ptr::null(), std::ptr::null());
-                assert!(!handle.is_null(), "CreateJobObjectW failed");
-                let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
-                info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-                assert_ne!(
-                    SetInformationJobObject(
-                        handle,
-                        JobObjectExtendedLimitInformation,
-                        (&raw const info).cast(),
-                        size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
-                    ),
-                    0,
-                    "SetInformationJobObject failed"
-                );
-                assert_ne!(
-                    AssignProcessToJobObject(handle, child.as_raw_handle()),
-                    0,
-                    "AssignProcessToJobObject failed"
-                );
-                Job(handle)
-            }
-        }
-    }
-
-    impl Drop for Job {
-        fn drop(&mut self) {
-            unsafe {
-                CloseHandle(self.0);
-            }
-        }
-    }
-}
-
 fn workdir() -> String {
     std::env::temp_dir().display().to_string()
 }
 
 fn one_shot(command: &str) -> Vec<String> {
-    if cfg!(windows) {
-        vec!["cmd.exe".into(), "/d".into(), "/c".into(), command.into()]
-    } else {
-        vec!["/bin/sh".into(), "-c".into(), command.into()]
-    }
+    vec!["/bin/sh".into(), "-c".into(), command.into()]
 }
 
 fn ls_on_an_empty_server(daemon: &Daemon) {

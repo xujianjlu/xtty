@@ -585,20 +585,6 @@ mod tests {
         );
     }
 
-    #[cfg(windows)]
-    #[test]
-    fn a_gui_path_preserves_native_windows_arguments() {
-        use std::ffi::OsString;
-        use std::os::windows::ffi::OsStringExt as _;
-
-        let native_path =
-            OsString::from_wide(&[b'C' as u16, b':' as u16, b'\\' as u16, 0xD800, b'x' as u16]);
-        let cli = Cli::try_parse_from([OsString::from("tty7"), native_path.clone()])
-            .expect("PathBuf arguments accept native Windows strings");
-
-        assert_eq!(cli.path, Some(std::path::PathBuf::from(native_path)));
-    }
-
     #[test]
     fn every_top_level_verb_parses() {
         assert!(matches!(parse(&["tty7", "ls"]).command, Some(Command::Ls)));

@@ -256,33 +256,6 @@ fn is_program(path: &Path) -> bool {
         return std::fs::metadata(path)
             .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0);
     }
-    #[cfg(not(unix))]
-    {
-        let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
-            return false;
-        };
-        matches!(
-            ext.to_ascii_lowercase().as_str(),
-            "exe"
-                | "com"
-                | "bat"
-                | "cmd"
-                | "scr"
-                | "pif"
-                | "msi"
-                | "ps1"
-                | "vbs"
-                | "js"
-                | "jse"
-                | "wsf"
-                | "wsh"
-                | "cpl"
-                | "msc"
-                | "hta"
-                | "reg"
-                | "lnk"
-        )
-    }
 }
 
 #[derive(Debug, PartialEq, Eq)]

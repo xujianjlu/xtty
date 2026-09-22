@@ -37,11 +37,6 @@ impl Sandbox for TempSandbox {
         {
             Some(std::os::unix::fs::symlink(target, link))
         }
-        #[cfg(not(unix))]
-        {
-            let _ = (target, link);
-            None
-        }
     }
 }
 

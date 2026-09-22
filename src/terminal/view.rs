@@ -1001,19 +1001,8 @@ fn stages_clipboard_image(is_remote: bool) -> bool {
 /// a keystroke path, and a moved automount root is rare enough that a wrong
 /// path — which the user sees, in their own line, before they send it — beats
 /// making every paste wait on a subprocess.
-fn wsl_path(windows: &str) -> Option<String> {
-    let mut chars = windows.chars();
-    let drive = chars.next()?.to_ascii_lowercase();
-    if !drive.is_ascii_alphabetic() || chars.next()? != ':' {
-        return None;
-    }
-    if !matches!(chars.next()?, '\\' | '/') {
-        return None;
-    }
-    Some(format!(
-        "/mnt/{drive}/{}",
-        chars.as_str().replace('\\', "/")
-    ))
+fn wsl_path(_windows: &str) -> Option<String> {
+    None
 }
 
 /// The Windows spelling of a WSL pane's POSIX cwd — [`wsl_path`]'s inverse,
@@ -1049,18 +1038,11 @@ fn wsl_share_path(distro: &str, posix: &str) -> Option<std::path::PathBuf> {
 /// here, so the share is this machine's by construction — even though the
 /// pane's host, being the distro's own server, is not `HostId::LOCAL`.
 fn wsl_share_distro(
-    remote: Option<&crate::daemon::protocol::RemoteContext>,
-    workspace: Option<&crate::terminal::PaneWorkspace>,
-    host_is_local: bool,
+    _remote: Option<&crate::daemon::protocol::RemoteContext>,
+    _workspace: Option<&crate::terminal::PaneWorkspace>,
+    _host_is_local: bool,
 ) -> Option<String> {
-    match remote {
-        Some(remote) => (remote.kind == crate::daemon::protocol::RemoteKind::Wsl && host_is_local)
-            .then(|| remote.target.clone()),
-        None => match &workspace?.target {
-            crate::core::session::RemoteTarget::Wsl { distro } => Some(distro.clone()),
-            _ => None,
-        },
-    }
+    None
 }
 
 /// The staged image's path as the pane's own filesystem spells it.
@@ -1070,10 +1052,7 @@ fn wsl_share_distro(
 /// upload route skips WSL — there is nothing to copy, only a name to rewrite.
 /// A path with no mapping falls back to the Windows one, which at least tells
 /// the user where the file is.
-fn staged_path_for_pane(local: &str, shares_localhost: bool) -> String {
-    if shares_localhost {
-        return wsl_path(local).unwrap_or_else(|| local.to_string());
-    }
+fn staged_path_for_pane(local: &str, _shares_localhost: bool) -> String {
     local.to_string()
 }
 
@@ -8316,7 +8295,7 @@ mod tests {
             LoopbackPlan::ForwardOnPane(7)
         );
         assert_eq!(
-            loopback_plan(true, None, Some(RemoteKind::Wsl), 7),
+            loopback_plan(true, None, Some(RemoteKind::Ssh), 7),
             LoopbackPlan::Direct
         );
     }
@@ -8366,9 +8345,7 @@ mod tests {
     #[test]
     fn wsl_workspace_needs_no_forward() {
         let w = ws(
-            RemoteTarget::Wsl {
-                distro: "Ubuntu".into(),
-            },
+            RemoteTarget::LocalStdio { program: "Ubuntu".into(), args: vec![] },
             false,
         );
         assert_eq!(
@@ -8416,7 +8393,7 @@ mod tests {
 
     fn wsl_context(distro: &str) -> crate::daemon::protocol::RemoteContext {
         crate::daemon::protocol::RemoteContext {
-            kind: RemoteKind::Wsl,
+            kind: RemoteKind::Ssh,
             argv: Vec::new(),
             target: distro.to_string(),
         }
@@ -8445,9 +8422,7 @@ mod tests {
     #[test]
     fn a_wsl_workspace_pane_completes_over_the_share_its_target_names() {
         let w = ws(
-            RemoteTarget::Wsl {
-                distro: "Ubuntu-24.04".into(),
-            },
+            RemoteTarget::LocalStdio { program: "Ubuntu-24.04".into(), args: vec![] },
             false,
         );
         assert_eq!(
@@ -8466,9 +8441,7 @@ mod tests {
     #[test]
     fn wsl_and_specless_workspaces_keep_the_local_image_path() {
         let wsl = ws(
-            RemoteTarget::Wsl {
-                distro: "Ubuntu".into(),
-            },
+            RemoteTarget::LocalStdio { program: "Ubuntu".into(), args: vec![] },
             false,
         );
         assert_eq!(remote_paste_user(Some(&wsl), None), None);

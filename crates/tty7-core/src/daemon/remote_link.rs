@@ -15,8 +15,6 @@ pub enum RemoteLink {
 
     SessionExec(russh::ChannelStream<russh::client::Msg>),
 
-    Wsl(ProcessStream),
-
     LocalStdio(ProcessStream),
 }
 
@@ -33,29 +31,10 @@ impl RemoteLink {
         Ok(RemoteLink::LocalStdio(spawn_stdio(program, args)?))
     }
 
-    pub fn wsl(_distro: &str, _server: &str, _channel: RouteChannel) -> io::Result<RemoteLink> {
-        Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "WSL routes are not supported in this build",
-        ))
-    }
-
-    pub fn wsl_shell(
-        _distro: &str,
-        _command: &str,
-        _channel: RouteChannel,
-    ) -> io::Result<RemoteLink> {
-        Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "WSL routes are not supported in this build",
-        ))
-    }
-
     pub fn kind_label(&self) -> &'static str {
         match self {
             RemoteLink::StreamLocal(_) => "streamlocal",
             RemoteLink::SessionExec(_) => "session-exec",
-            RemoteLink::Wsl(_) => "wsl-stdio",
             RemoteLink::LocalStdio(_) => "local-stdio",
         }
     }
@@ -63,7 +42,7 @@ impl RemoteLink {
     pub fn is_stdio_bridge(&self) -> bool {
         matches!(
             self,
-            RemoteLink::SessionExec(_) | RemoteLink::Wsl(_) | RemoteLink::LocalStdio(_)
+            RemoteLink::SessionExec(_) | RemoteLink::LocalStdio(_)
         )
     }
 
@@ -235,7 +214,7 @@ impl AsyncRead for RemoteLink {
             RemoteLink::StreamLocal(s) | RemoteLink::SessionExec(s) => {
                 Pin::new(s).poll_read(cx, buf)
             }
-            RemoteLink::Wsl(s) | RemoteLink::LocalStdio(s) => Pin::new(s).poll_read(cx, buf),
+            RemoteLink::LocalStdio(s) => Pin::new(s).poll_read(cx, buf),
         }
     }
 }
@@ -250,14 +229,14 @@ impl AsyncWrite for RemoteLink {
             RemoteLink::StreamLocal(s) | RemoteLink::SessionExec(s) => {
                 Pin::new(s).poll_write(cx, buf)
             }
-            RemoteLink::Wsl(s) | RemoteLink::LocalStdio(s) => Pin::new(s).poll_write(cx, buf),
+            RemoteLink::LocalStdio(s) => Pin::new(s).poll_write(cx, buf),
         }
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         match self.get_mut() {
             RemoteLink::StreamLocal(s) | RemoteLink::SessionExec(s) => Pin::new(s).poll_flush(cx),
-            RemoteLink::Wsl(s) | RemoteLink::LocalStdio(s) => Pin::new(s).poll_flush(cx),
+            RemoteLink::LocalStdio(s) => Pin::new(s).poll_flush(cx),
         }
     }
 
@@ -266,7 +245,7 @@ impl AsyncWrite for RemoteLink {
             RemoteLink::StreamLocal(s) | RemoteLink::SessionExec(s) => {
                 Pin::new(s).poll_shutdown(cx)
             }
-            RemoteLink::Wsl(s) | RemoteLink::LocalStdio(s) => Pin::new(s).poll_shutdown(cx),
+            RemoteLink::LocalStdio(s) => Pin::new(s).poll_shutdown(cx),
         }
     }
 }

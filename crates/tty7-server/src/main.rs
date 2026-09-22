@@ -84,15 +84,6 @@ fn run_daemon() -> ExitCode {
 }
 
 fn run_stdio(args: &[String]) -> io::Result<()> {
-    #[cfg(not(unix))]
-    {
-        let _ = args;
-        return Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "--stdio is a Unix path; a Windows server is reached over its own transport",
-        ));
-    }
-
     #[cfg(unix)]
     {
         use std::os::unix::net::UnixStream;

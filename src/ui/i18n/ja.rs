@@ -1408,7 +1408,6 @@ pub fn translate_ja(key: L10nKey) -> Option<&'static str> {
         }
         L10nKey::RemoteProfileMissing => "その保存済み SSH プロファイルはもう存在しません",
         L10nKey::RemoteAliasMissing => "`{alias}` は ~/.ssh/config にありません",
-        L10nKey::RemoteWslNoSsh => "WSL ワークスペースには SSH 接続がありません",
         L10nKey::RemoteLocalStdioNoSsh => {
             "ローカルの --stdio ワークスペースには SSH 接続がありません"
         }

@@ -41,10 +41,6 @@ pub fn end_pipelines_quietly() {
     }
 }
 
-/// No-op: Windows has no SIGPIPE, so [`out`] carries the whole contract there.
-#[cfg(not(unix))]
-pub fn end_pipelines_quietly() {}
-
 /// Write to stdout, leaving quietly if the reader has hung up.
 ///
 /// Exiting from this depth is deliberate — it is what the signal does on Unix,

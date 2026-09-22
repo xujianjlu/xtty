@@ -44,7 +44,6 @@ impl RouteChannel {
 #[serde(rename_all = "snake_case")]
 pub enum RouteTarget {
     Ssh(Box<NativeSshSpec>),
-    Wsl { distro: String },
     LocalStdio { program: String, args: Vec<String> },
 }
 
@@ -104,17 +103,6 @@ impl RouteHeader {
         self
     }
 
-    pub fn wsl(distro: impl Into<String>) -> RouteHeader {
-        RouteHeader {
-            target: RouteTarget::Wsl {
-                distro: distro.into(),
-            },
-            server_command: None,
-            channel: RouteChannel::Control,
-            action: RouteAction::Forward,
-        }
-    }
-
     pub fn local_stdio(program: impl Into<String>, args: &[&str]) -> RouteHeader {
         RouteHeader {
             target: RouteTarget::LocalStdio {
@@ -141,7 +129,6 @@ impl RouteHeader {
     pub fn describe(&self) -> String {
         match &self.target {
             RouteTarget::Ssh(spec) => format!("ssh {}@{}:{}", spec.user, spec.host, spec.port),
-            RouteTarget::Wsl { distro } => format!("wsl {distro}"),
             RouteTarget::LocalStdio { program, .. } => format!("local {program}"),
         }
     }
@@ -151,7 +138,6 @@ impl RouteTarget {
     pub fn origin_key(&self) -> String {
         match self {
             RouteTarget::Ssh(spec) => ConnectionKey::from_spec(spec).as_str().to_string(),
-            RouteTarget::Wsl { distro } => format!("wsl:{distro}"),
             RouteTarget::LocalStdio { program, .. } => format!("local-stdio:{program}"),
         }
     }
@@ -747,10 +733,6 @@ async fn restart_server(
                 .restart_remote_server(spec, setup)
                 .await
         }
-        // WSL client installs are no longer supported.
-        (RouteTarget::Wsl { .. }, _) => Err(anyhow::anyhow!(
-            "WSL routes are not supported in this build"
-        )),
         _ => Err(anyhow::anyhow!(
             "restarting tty7's server is only supported for machines it serves, not {}",
             header.describe()
@@ -769,9 +751,6 @@ async fn open_link(
                 .await?;
             Ok((link, Some(conn)))
         }
-        RouteTarget::Wsl { .. } => Err(anyhow::anyhow!(
-            "WSL routes are not supported in this build"
-        )),
         RouteTarget::LocalStdio { program, args } => {
             let args: Vec<&str> = args.iter().map(String::as_str).collect();
             Ok((RemoteLink::local_stdio(program, &args)?, None))
@@ -806,47 +785,6 @@ mod tests {
             other => panic!("wrong target: {other:?}"),
         }
         assert_eq!(back.server_command, None);
-    }
-
-    #[test]
-    fn a_wsl_header_round_trips_with_only_a_distro_name() {
-        let mut buf = Vec::new();
-        RouteHeader::wsl("Ubuntu-22.04").write(&mut buf).unwrap();
-        let (kind, payload) = protocol::read_frame(&mut buf.as_slice()).unwrap();
-        assert_eq!(kind, ROUTE_KIND);
-        let back = RouteHeader::decode(&payload).unwrap();
-        match &back.target {
-            RouteTarget::Wsl { distro } => assert_eq!(distro, "Ubuntu-22.04"),
-            other => panic!("wrong target: {other:?}"),
-        }
-        assert_eq!(back.server_command, None);
-        assert_eq!(back.describe(), "wsl Ubuntu-22.04");
-
-        let json = String::from_utf8(payload).unwrap();
-        assert!(json.contains(r#""wsl""#), "{json}");
-    }
-
-    #[tokio::test]
-    async fn a_wsl_route_refuses_a_distro_name_that_could_be_an_option() {
-        for header in [
-            RouteHeader::wsl("--shutdown"),
-            RouteHeader {
-                target: RouteTarget::Wsl {
-                    distro: "--shutdown".to_string(),
-                },
-                server_command: Some("tty7-server --stdio".to_string()),
-                channel: RouteChannel::Control,
-                action: RouteAction::Forward,
-            },
-        ] {
-            let describe = header.describe();
-            let setup = RouteSetup::unattended(header.channel);
-            let Err(err) = open_link(&header, &setup).await else {
-                panic!("a name starting with `-` must be refused ({describe})");
-            };
-            let msg = err.to_string();
-            assert!(msg.contains("leading `-`"), "{describe}: {msg}");
-        }
     }
 
     #[test]
@@ -1130,22 +1068,6 @@ mod tests {
     }
 
     #[test]
-    fn the_default_auth_responder_cancels() {
-        assert!(matches!(
-            CancelAuth.respond(
-                &RouteTarget::Wsl {
-                    distro: "Ubuntu".into()
-                },
-                &AuthPromptKind::Password {
-                    user: "u".into(),
-                    host: "h".into(),
-                }
-            ),
-            AuthResponse::Cancelled
-        ));
-    }
-
-    #[test]
     fn a_scoped_mismatch_sink_diverts_the_record() {
         let sink = Arc::new(Mutex::new(Vec::new()));
         let entry = MismatchedRemoteDaemon {
@@ -1195,7 +1117,7 @@ mod tests {
             RouteChannel::Pane
         );
 
-        let legacy = br#"{"target":{"wsl":{"distro":"Ubuntu"}}}"#;
+        let legacy = br#"{"target":{"local_stdio":{"program":"tty7-server","args":[]}}}"#;
         assert_eq!(
             RouteHeader::decode(legacy).unwrap().channel,
             RouteChannel::Control
@@ -1221,7 +1143,7 @@ mod tests {
             "the action's wire tag changed"
         );
 
-        let legacy = br#"{"target":{"wsl":{"distro":"Ubuntu"}},"channel":"pane"}"#;
+        let legacy = br#"{"target":{"local_stdio":{"program":"tty7-server","args":[]}},"channel":"pane"}"#;
         let back = RouteHeader::decode(legacy).unwrap();
         assert_eq!(back.action, RouteAction::Forward);
         assert_eq!(back.channel, RouteChannel::Pane, "and nothing else moved");
@@ -1282,6 +1204,24 @@ mod tests {
         assert!(routed.join().unwrap().is_err());
     }
 
+    
+    #[test]
+    fn the_default_auth_responder_cancels() {
+        assert!(matches!(
+            CancelAuth.respond(
+                &RouteTarget::LocalStdio {
+                    program: "tty7-server".into(),
+                    args: vec![],
+                },
+                &AuthPromptKind::Password {
+                    user: "u".into(),
+                    host: "h".into(),
+                }
+            ),
+            AuthResponse::Cancelled
+        ));
+    }
+
     #[test]
     fn the_origin_key_of_an_ssh_target_is_its_connection_key() {
         let spec: NativeSshSpec = serde_json::from_str(
@@ -1307,8 +1247,9 @@ mod tests {
         assert_eq!(control.origin_key(), pane.origin_key());
         assert_ne!(
             control.origin_key(),
-            RouteTarget::Wsl {
-                distro: "Ubuntu".into()
+            RouteTarget::LocalStdio {
+                program: "other".into(),
+                args: vec![],
             }
             .origin_key()
         );
@@ -1344,7 +1285,7 @@ mod tests {
             let _ = protocol::read_frame(&mut daemon).unwrap();
             RouteAck {
                 ok: true,
-                link: Some("wsl".into()),
+                link: Some("local-stdio".into()),
                 action: Some(RouteAction::Forward),
                 error: None,
             }
@@ -1356,14 +1297,21 @@ mod tests {
         let recorder = Arc::new(Recorder::default());
         set_route_auth_responder(recorder.clone());
         let mut client = client;
-        negotiate(&mut client, &RouteHeader::wsl("Ubuntu-22.04").for_pane()).expect("acked");
+        negotiate(
+            &mut client,
+            &RouteHeader::local_stdio("tty7-server", &["--stdio"]).for_pane(),
+        )
+        .expect("acked");
         set_route_auth_responder(Arc::new(CancelAuth));
         daemon.join().unwrap();
 
-        assert_eq!(recorder.0.lock().unwrap().as_slice(), ["wsl:Ubuntu-22.04"]);
+        assert_eq!(
+            recorder.0.lock().unwrap().as_slice(),
+            ["local-stdio:tty7-server"]
+        );
     }
 
-    #[test]
+#[test]
     fn only_the_pane_channel_changes_the_bridge_command() {
         let base = crate::daemon::remote_link::DEFAULT_REMOTE_SERVER_CMD;
         assert_eq!(RouteChannel::Control.bridge_command(base), base);

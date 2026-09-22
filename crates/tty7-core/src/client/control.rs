@@ -53,8 +53,6 @@ impl ControlClient {
         });
         #[cfg(unix)]
         let link = crate::daemon::control::ControlClient::over_unix(stream, hello, sink)?;
-        #[cfg(windows)]
-        let link = crate::daemon::control::ControlClient::over_tcp(stream, hello, sink)?;
         Ok(ControlClient {
             link,
             events: Mutex::new(events),
@@ -124,10 +122,6 @@ fn connect_local_control() -> io::Result<transport::Stream> {
     {
         let path = crate::host::server::control_socket_path()?;
         transport::connect_endpoint_at(&path)
-    }
-    #[cfg(windows)]
-    {
-        crate::host::server::connect_control()
     }
 }
 
@@ -325,7 +319,7 @@ mod tests {
             assert_eq!(kind, ROUTE_KIND, "the ROUTE frame must come first");
             let header = RouteHeader::decode(&payload).expect("decode the header");
             assert_eq!(header.channel, RouteChannel::Control);
-            assert!(matches!(header.target, RouteTarget::Wsl { ref distro } if distro == "Ubuntu"));
+            assert!(matches!(header.target, RouteTarget::LocalStdio { ref program, .. } if program == "tty7-server"));
 
             let ack = serde_json::to_vec(&RouteAck {
                 ok: true,
@@ -355,8 +349,9 @@ mod tests {
 
         let client = ControlClient::routed_over(
             client_end,
-            RouteTarget::Wsl {
-                distro: "Ubuntu".into(),
+            RouteTarget::LocalStdio {
+                program: "tty7-server".into(),
+                args: vec![],
             },
             &hello(),
         )
@@ -390,8 +385,9 @@ mod tests {
 
         let err = ControlClient::routed_over(
             client_end,
-            RouteTarget::Wsl {
-                distro: "Nowhere".into(),
+            RouteTarget::LocalStdio {
+                program: "nowhere".into(),
+                args: vec![],
             },
             &hello(),
         )

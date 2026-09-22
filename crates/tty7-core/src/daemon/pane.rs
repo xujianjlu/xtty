@@ -154,7 +154,7 @@ fn build_spawn_config(
     {
         anyhow::bail!(problem);
     }
-    let remote = wsl_remote_context(configured.as_ref());
+    let remote = None;
     // Taken before the chosen shell is consumed by the command builder: what
     // goes in the tree is what was resolved here, not the possibly-empty
     // override the caller sent.
@@ -170,31 +170,6 @@ fn build_spawn_config(
         integration_dir,
         remote,
         shell,
-    })
-}
-
-fn wsl_remote_context(shell: Option<&ChosenShell>) -> Option<RemoteContext> {
-    if !cfg!(windows) {
-        return None;
-    }
-    let chosen = shell?;
-    let base = std::path::Path::new(&chosen.program)
-        .file_name()?
-        .to_str()?
-        .to_ascii_lowercase();
-    if base.strip_suffix(".exe").unwrap_or(&base) != "wsl" {
-        return None;
-    }
-    Some(RemoteContext {
-        kind: RemoteKind::Wsl,
-        argv: Vec::new(),
-        // No `--distribution` means wsl.exe launches the default distro —
-        // name it here, so every consumer of the context (the `\\wsl$`
-        // completion route, paste-path rewriting, host labels) gets a real
-        // distro instead of an empty placeholder.
-        target: shell_integration::wsl_distro(&chosen.args)
-            .or_else(crate::core::shells::default_wsl_distro)
-            .unwrap_or_default(),
     })
 }
 
@@ -434,19 +409,13 @@ fn shell_env_path(
 const CAPABILITY_ENV: [&str; 2] = ["TERM", "COLORTERM"];
 
 fn names_capability_env(key: &str) -> bool {
-    CAPABILITY_ENV.iter().any(|cap| {
-        if cfg!(windows) {
-            key.eq_ignore_ascii_case(cap)
-        } else {
-            key == *cap
-        }
-    })
+    CAPABILITY_ENV.iter().any(|cap| key == *cap)
 }
 
 fn pane_environment(
     extra_env: &std::collections::HashMap<String, String>,
     // Only Windows has a use for it — see the `COLORFGBG` block below.
-    #[cfg_attr(not(windows), allow(unused_variables))] dark: bool,
+    dark: bool,
     pane: u64,
     workspace: Option<&str>,
     shell: &str,
@@ -487,8 +456,7 @@ fn pane_environment(
     // Resolution runs against the PATH the pane will actually inherit, so a
     // user who redirects PATH in their `env` block gets the binary that PATH
     // resolves rather than the daemon's.
-    if !cfg!(windows)
-        && let Some(path) = shell_env_path(
+    if let Some(path) = shell_env_path(
             shell,
             || {
                 extra_env
@@ -819,7 +787,6 @@ struct PtyBackend {
     /// racing the reader for ownership of the exit notification.
     master: Arc<Mutex<Option<Box<dyn MasterPty + Send>>>>,
     child: Arc<Mutex<Box<dyn Child + Send + Sync>>>,
-    #[cfg_attr(windows, allow(dead_code))]
     shell_pid: Option<u32>,
     integration_dir: Option<PathBuf>,
 }
@@ -1288,9 +1255,6 @@ pub fn restore_preamble(banner: Option<&str>) -> Vec<u8> {
         // through a one-line hole; the rest of the sequence assumes one line.
         out.extend_from_slice(banner.replace(['\r', '\n'], " ").as_bytes());
         out.extend_from_slice(b" \xe2\x94\x80\xe2\x94\x80\x1b[0m\r\n");
-    }
-    if cfg!(windows) {
-        out.extend_from_slice(SCROLL_RESTORED_AWAY);
     }
     out
 }
@@ -2972,11 +2936,6 @@ fn pty_foreground_pgid(master: &Mutex<Option<Box<dyn MasterPty + Send>>>) -> Opt
         .and_then(|m| m.as_ref().and_then(|m| m.process_group_leader()))
 }
 
-#[cfg(not(unix))]
-fn pty_foreground_pgid(_master: &Mutex<Option<Box<dyn MasterPty + Send>>>) -> Option<i32> {
-    None
-}
-
 fn is_foreground_command(fg_pgid: Option<i32>, shell_pid: Option<u32>) -> bool {
     match (fg_pgid, shell_pid) {
         (Some(pg), Some(shell)) if pg > 0 => pg as u32 != shell,
@@ -3199,12 +3158,6 @@ fn handle_osc133(shell: &mut ShellState, rest: &[u8]) -> bool {
 fn path_from_bytes(bytes: &[u8]) -> PathBuf {
     use std::os::unix::ffi::OsStrExt;
     PathBuf::from(std::ffi::OsStr::from_bytes(bytes))
-}
-
-#[cfg(not(unix))]
-fn path_from_bytes(bytes: &[u8]) -> PathBuf {
-    let s = String::from_utf8_lossy(bytes);
-    PathBuf::from(strip_uri_drive_slash(s.as_ref()))
 }
 
 #[cfg_attr(unix, allow(dead_code))]
@@ -3945,21 +3898,11 @@ mod tests {
     #[test]
     fn the_preamble_clears_the_way_for_conpty_and_only_for_conpty() {
         let text = String::from_utf8(restore_preamble(Some("this shell is new"))).unwrap();
-        if cfg!(windows) {
-            assert!(
-                text.ends_with("\x1b[2J\x1b[H"),
-                "the restored screen has to be scrolled into history and the cursor \
-                 homed *last*, after the banner: anything printed afterwards would \
-                 take back the row conhost counts from. The preamble ends {:?}",
-                &text[text.len().saturating_sub(16)..]
-            );
-        } else {
-            assert!(
-                !text.contains("\x1b[2J"),
-                "on a real pty the shell positions itself relatively, so the screen \
-                 the user asked to have back stays where they can see it"
-            );
-        }
+        assert!(
+            !text.contains("\x1b[2J"),
+            "on a real pty the shell positions itself relatively, so the screen \
+             the user asked to have back stays where they can see it"
+        );
     }
 
     #[test]

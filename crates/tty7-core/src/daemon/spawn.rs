@@ -173,11 +173,7 @@ fn strip_exe_suffix(name: &str) -> &str {
 fn exe_names_equal(a: &str, b: &str) -> bool {
     let a = strip_exe_suffix(a);
     let b = strip_exe_suffix(b);
-    if cfg!(windows) {
-        a.eq_ignore_ascii_case(b)
-    } else {
-        a == b
-    }
+    a == b
 }
 
 fn is_reapable_daemon_name(name: &str) -> bool {

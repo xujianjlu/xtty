@@ -113,9 +113,6 @@ pub enum RemoteTarget {
         #[serde(default = "default_ssh_port")]
         port: u16,
     },
-    Wsl {
-        distro: String,
-    },
     LocalStdio {
         program: String,
         args: Vec<String>,
@@ -152,7 +149,6 @@ impl RemoteTarget {
             RemoteTarget::Direct { user, host, port } => {
                 format!("ssh-direct:{user}@{}:{port}", host.to_ascii_lowercase())
             }
-            RemoteTarget::Wsl { distro } => format!("wsl:{distro}"),
             RemoteTarget::LocalStdio { program, args } => {
                 format!("local-stdio:{program} {}", args.join(" "))
             }
@@ -164,20 +160,18 @@ impl RemoteTarget {
             RemoteTarget::Profile { .. }
             | RemoteTarget::Alias { .. }
             | RemoteTarget::Direct { .. } => true,
-            RemoteTarget::Wsl { .. } | RemoteTarget::LocalStdio { .. } => false,
+            RemoteTarget::LocalStdio { .. } => false,
         }
     }
 
     /// Whether the far end is served by a tty7 daemon this computer installed
-    /// and can therefore restart. SSH machines and WSL distros both are; a
-    /// `--stdio` program is whatever the user named, and stopping it is its
-    /// workspace's business.
+    /// and can therefore restart. SSH machines are; a `--stdio` program is
+    /// whatever the user named, and stopping it is its workspace's business.
     pub fn hosts_our_server(&self) -> bool {
         match self {
             RemoteTarget::Profile { .. }
             | RemoteTarget::Alias { .. }
-            | RemoteTarget::Direct { .. }
-            | RemoteTarget::Wsl { .. } => true,
+            | RemoteTarget::Direct { .. } => true,
             RemoteTarget::LocalStdio { .. } => false,
         }
     }
@@ -195,9 +189,7 @@ impl RemoteTarget {
         match self {
             RemoteTarget::Profile { id } => profiles.iter().any(|p| p.id == *id),
             RemoteTarget::Alias { alias } => alias_known(alias),
-            RemoteTarget::Direct { .. }
-            | RemoteTarget::Wsl { .. }
-            | RemoteTarget::LocalStdio { .. } => true,
+            RemoteTarget::Direct { .. } | RemoteTarget::LocalStdio { .. } => true,
         }
     }
 
@@ -221,7 +213,6 @@ impl std::fmt::Display for RemoteTarget {
                 }
                 Ok(())
             }
-            RemoteTarget::Wsl { distro } => write!(f, "wsl:{distro}"),
             RemoteTarget::LocalStdio { program, .. } => {
                 let name = std::path::Path::new(program)
                     .file_name()
@@ -688,9 +679,6 @@ mod tests {
         // Self-contained targets never dangle.
         for target in [
             RemoteTarget::direct("me", "box.local", 22),
-            RemoteTarget::Wsl {
-                distro: "Ubuntu".into(),
-            },
             RemoteTarget::LocalStdio {
                 program: "tty7-server".into(),
                 args: vec![],
@@ -801,9 +789,6 @@ mod tests {
             "ssh-direct:me@box.local:2222"
         );
         assert_eq!(
-            RemoteTarget::Wsl {
-                distro: "Ubuntu".into()
-            }
             .connection_key(),
             "wsl:Ubuntu"
         );
@@ -825,10 +810,7 @@ mod tests {
         );
         assert!(RemoteTarget::direct("me", "box.local", 22).is_ssh());
         assert!(
-            !RemoteTarget::Wsl {
-                distro: "Ubuntu".into()
-            }
-            .is_ssh(),
+            !.is_ssh(),
             "a distribution is reached through wsl.exe, not a connection"
         );
         assert!(
@@ -857,9 +839,6 @@ mod tests {
         );
         assert!(RemoteTarget::direct("me", "box.local", 22).hosts_our_server());
         assert!(
-            RemoteTarget::Wsl {
-                distro: "Ubuntu".into()
-            }
             .hosts_our_server(),
             "a distribution's server is installed and launched from here, like an SSH one"
         );

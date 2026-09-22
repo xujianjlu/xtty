@@ -59,11 +59,7 @@ pub fn find_executable() -> Result<PathBuf> {
 }
 
 fn executable_name() -> &'static str {
-    if cfg!(windows) {
-        "tty7-app.exe"
-    } else {
-        "tty7-app"
-    }
+    "tty7-app"
 }
 
 #[cfg(test)]
@@ -72,13 +68,6 @@ mod tests {
 
     #[test]
     fn the_gui_executable_name_matches_the_platform() {
-        assert_eq!(
-            executable_name(),
-            if cfg!(windows) {
-                "tty7-app.exe"
-            } else {
-                "tty7-app"
-            }
-        );
+        assert_eq!(executable_name(), "tty7-app");
     }
 }

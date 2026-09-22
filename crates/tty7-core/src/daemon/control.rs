@@ -1400,13 +1400,6 @@ mod tests {
             use std::os::unix::ffi::OsStrExt as _;
             PathBuf::from(std::ffi::OsStr::from_bytes(b"/tmp/caf\xe9.rs"))
         }
-        #[cfg(windows)]
-        {
-            use std::os::windows::ffi::OsStringExt as _;
-            PathBuf::from(std::ffi::OsString::from_wide(&[
-                0x0043, 0x003a, 0x005c, 0xd800, 0x002e, 0x0072, 0x0073,
-            ]))
-        }
     }
 
     #[test]
