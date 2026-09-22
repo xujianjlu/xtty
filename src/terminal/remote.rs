@@ -2786,27 +2786,6 @@ mod tests {
     }
 
     #[test]
-<<<<<<< HEAD
-    fn a_wsl_workspace_routes_by_distro() {
-        let ws = PaneWorkspace {
-            workspace: crate::core::session::WorkspaceId::new(),
-            target: crate::core::session::RemoteTarget::LocalStdio {
-                program: "Ubuntu-22.04".into(),
-                args: vec![],
-            },
-            spec: None,
-            label: None,
-            resize_echo: false,
-        };
-        let route = PaneRoute::for_workspace(Some(&ws));
-        let header = route.header().expect("WSL is routed");
-        assert_eq!(header.describe(), "wsl Ubuntu-22.04");
-        assert_eq!(header.channel, crate::daemon::router::RouteChannel::Pane);
-    }
-
-    #[test]
-=======
->>>>>>> a8e5cf4 (Strip dead ConPTY/WSL client paths for macOS-only GUI)
     fn a_local_stdio_workspace_routes_to_a_child_process_on_the_pane_dialect() {
         let ws = PaneWorkspace {
             workspace: crate::core::session::WorkspaceId::new(),
