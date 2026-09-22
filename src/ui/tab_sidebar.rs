@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use crate::core::config::{Config, SidebarGrouping};
 use crate::core::group_key::{GroupKey, collapse_key};
 use crate::terminal::git_status::GitStatusCache;
-use crate::ui::app::{TITLE_BAR_HEIGHT, Tab, Tty7App};
+use crate::ui::app::{TILE_GLYPH_LINE, TILE_SIZE, TITLE_BAR_HEIGHT, Tab, Tty7App};
 use crate::ui::hints::tab_badge_label;
 use crate::ui::i18n::{L10nKey, t, t_fmt};
 use crate::ui::reorder::{self, Reorder, Surface};
@@ -1418,7 +1418,7 @@ impl Tty7App {
                     .occlude()
                     .flex_shrink_0()
                     .when(!chrome_shown, |tile| tile.invisible())
-                    .child(self.new_tab_button("sidebar-add", cx)),
+                    .child(self.new_tab_button_sized("sidebar-add", TILE_GLYPH_LINE, cx)),
             )
             .child(
                 div()
@@ -1426,9 +1426,14 @@ impl Tty7App {
                     .flex_shrink_0()
                     .when(!chrome_shown, |tile| tile.invisible())
                     .child(
-                        crate::ui::tab_strip::chrome_tile(
+                        // Same glyph step as the close / line tiles elsewhere:
+                        // at [`crate::ui::app::TILE_GLYPH`] these two read as
+                        // the smallest marks in the title bar.
+                        crate::ui::tab_strip::chrome_tile_sized(
                             Button::new("sidebar-collapse")
                                 .icon(Icon::empty().path("icons/panel-left.svg")),
+                            TILE_SIZE,
+                            TILE_GLYPH_LINE,
                             false,
                             cx,
                         )

@@ -21,7 +21,9 @@ use crate::core::config::{Config, RightPanelTab, SidebarGrouping};
 use crate::core::group_key::GroupKey;
 use crate::core::shells::DetectedShell;
 use crate::daemon::protocol::ShellSpec;
-use crate::ui::app::{SpawnWhere, TILE_GLYPH, TILE_SIZE, Tab, Tty7App, tile_trailing_inset};
+use crate::ui::app::{
+    SpawnWhere, TILE_GLYPH, TILE_GLYPH_LINE, TILE_SIZE, Tab, Tty7App, tile_trailing_inset,
+};
 use crate::ui::hints::tab_badge_label;
 use crate::ui::i18n::{L10nKey, t, t_fmt};
 use crate::ui::reorder::{self, Reorder, Surface};
@@ -1124,9 +1126,14 @@ impl Tty7App {
             .when(!cfg!(target_os = "macos"), |this| this.pr_1())
             .child(
                 div().occlude().flex_shrink_0().child(
-                    chrome_tile(
+                    // Match the sidebar's top chrome: these panel toggles sat
+                    // at [`TILE_GLYPH`] and read as ornaments next to the
+                    // title-bar text around them.
+                    chrome_tile_sized(
                         Button::new("titlebar-right-panel")
                             .icon(Icon::empty().path("icons/panel-right.svg")),
+                        TILE_SIZE,
+                        TILE_GLYPH_LINE,
                         false,
                         cx,
                     )
@@ -1484,25 +1491,43 @@ impl Tty7App {
         id: &'static str,
         cx: &Context<Self>,
     ) -> impl IntoElement + use<> {
+        self.new_tab_button_sized(id, TILE_GLYPH, cx)
+    }
+
+    /// Like [`Self::new_tab_button`], but with an explicit glyph size — the
+    /// sidebar's top chrome uses [`TILE_GLYPH_LINE`] so the `+` reads at the
+    /// same weight as the panel toggle beside it.
+    pub(crate) fn new_tab_button_sized(
+        &self,
+        id: &'static str,
+        glyph: f32,
+        cx: &Context<Self>,
+    ) -> impl IntoElement + use<> {
         let app = cx.entity().downgrade();
-        chrome_tile(Button::new(id).icon(Icon::new(IconName::Plus)), false, cx)
-            .rounded_lg()
-            // Every other tile in this row names itself on hover — Switch
-            // Workspace, More, Hide Sidebar. The three New Tab buttons that
-            // come through here were the ones left silent. The chord is worth
-            // more here than anywhere else in the row: it is the way back to
-            // opening a tab without reading a menu first.
-            .tooltip_element(chord_tooltip(t(L10nKey::AppMenuNewTab), "NewTab", cx))
-            // Built when the menu opens, not when the strip draws: this
-            // closure runs once per press, and again after each dismissal.
-            .dropdown_menu(move |menu, window, cx| {
-                let Some(this) = app.upgrade() else {
-                    return menu;
-                };
-                this.read(cx)
-                    .new_tab_menu_rows(app.clone(), cx)
-                    .build(menu, window)
-            })
+        chrome_tile_sized(
+            Button::new(id).icon(Icon::new(IconName::Plus)),
+            TILE_SIZE,
+            glyph,
+            false,
+            cx,
+        )
+        .rounded_lg()
+        // Every other tile in this row names itself on hover — Switch
+        // Workspace, More, Hide Sidebar. The three New Tab buttons that
+        // come through here were the ones left silent. The chord is worth
+        // more here than anywhere else in the row: it is the way back to
+        // opening a tab without reading a menu first.
+        .tooltip_element(chord_tooltip(t(L10nKey::AppMenuNewTab), "NewTab", cx))
+        // Built when the menu opens, not when the strip draws: this
+        // closure runs once per press, and again after each dismissal.
+        .dropdown_menu(move |menu, window, cx| {
+            let Some(this) = app.upgrade() else {
+                return menu;
+            };
+            this.read(cx)
+                .new_tab_menu_rows(app.clone(), cx)
+                .build(menu, window)
+        })
     }
 
     /// What the menu offers, read off the app as the menu opens — the builder
@@ -2138,7 +2163,11 @@ impl Tty7App {
                         .occlude()
                         .flex_shrink_0()
                         .when(!strip_chrome_shown, |tile| tile.invisible())
-                        .child(self.new_tab_button("titlebar-add-collapsed", cx)),
+                        .child(self.new_tab_button_sized(
+                            "titlebar-add-collapsed",
+                            TILE_GLYPH_LINE,
+                            cx,
+                        )),
                 )
                 .child(
                     div()
@@ -2146,9 +2175,11 @@ impl Tty7App {
                         .flex_shrink_0()
                         .when(!strip_chrome_shown, |tile| tile.invisible())
                         .child(
-                            chrome_tile(
+                            chrome_tile_sized(
                                 Button::new("titlebar-expand-sidebar")
                                     .icon(Icon::empty().path("icons/panel-left.svg")),
+                                TILE_SIZE,
+                                TILE_GLYPH_LINE,
                                 false,
                                 cx,
                             )
