@@ -8101,10 +8101,10 @@ impl Render for Tty7App {
                     this.swap_pane(false, window, cx)
                 }))
                 .on_action(
-                    cx.listener(|this, _: &NextTab, window, cx| this.tab_switch(true, window, cx)),
+                    cx.listener(|this, _: &NextTab, window, cx| this.cycle_tab(true, window, cx)),
                 )
                 .on_action(
-                    cx.listener(|this, _: &PrevTab, window, cx| this.tab_switch(false, window, cx)),
+                    cx.listener(|this, _: &PrevTab, window, cx| this.cycle_tab(false, window, cx)),
                 )
                 .on_action(cx.listener(|this, _: &ActivateTab1, window, cx| {
                     this.activate_visual(0, window, cx)
