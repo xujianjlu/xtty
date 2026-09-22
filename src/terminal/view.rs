@@ -9725,12 +9725,9 @@ mod gpui_tests {
             cx.set_global(Config::default());
         });
         let window = cx.add_window(|window, cx| {
-            let terminal = RemoteTerminal::from_stream_with(
-                client_side,
-                TermSize::new(80, 24),
-                Vec::new(),
-            )
-            .expect("socketpair-backed terminal");
+            let terminal =
+                RemoteTerminal::from_stream_with(client_side, TermSize::new(80, 24), Vec::new())
+                    .expect("socketpair-backed terminal");
             TerminalView::with_terminal(terminal, 1, window, cx)
         });
         (window, daemon_side)

@@ -723,8 +723,7 @@ impl RemoteTerminal {
             }
         };
 
-        let mut term =
-            Self::from_stream_with(stream, size, Vec::new())?;
+        let mut term = Self::from_stream_with(stream, size, Vec::new())?;
         term.route = route.clone();
         term.seed_cwd(spawned_in);
         Ok((term, pane_id))
@@ -794,8 +793,7 @@ impl RemoteTerminal {
             }
             Err(e) => return Err(e),
         };
-        let mut term =
-            Self::from_stream_parts(stream, size, buffered, true)?;
+        let mut term = Self::from_stream_parts(stream, size, buffered, true)?;
         term.route = route.clone();
         Ok(term)
     }
@@ -2682,6 +2680,17 @@ mod route_header_tests {
 /// where the application left it, because those are the modes `wheel_route`
 /// reads before it decides the pane has a scrollback to move at all.
 #[cfg(test)]
+mod replay_tests {
+    use crate::daemon::transport::Stream;
+
+    /// Shared by [`replayed_mode_tests`] (and any other test that needs a
+    /// client↔daemon socket without standing up the real daemon).
+    pub(super) fn socket_pair() -> (Stream, Stream) {
+        std::os::unix::net::UnixStream::pair().unwrap()
+    }
+}
+
+#[cfg(test)]
 mod replayed_mode_tests {
     use super::replay_tests::socket_pair;
     use super::*;
@@ -3139,12 +3148,8 @@ mod tests {
             !buffered.is_empty(),
             "the classification read the Snapshot frame; it must come back"
         );
-        let term = RemoteTerminal::from_stream_with(
-            client_side,
-            TermSize::new(80, 24),
-            buffered,
-        )
-        .unwrap();
+        let term =
+            RemoteTerminal::from_stream_with(client_side, TermSize::new(80, 24), buffered).unwrap();
 
         let mut got = String::new();
         for _ in 0..200 {
