@@ -2240,9 +2240,10 @@ impl TerminalView {
         }
 
         // History search is a window feature, not a privilege granted by the
-        // shell integration. A second ssh/su entered inside a pane cannot emit
-        // tty7's OSC prompt marks, but Cmd/Ctrl+R must still open the same
-        // history UI there. Full-screen applications keep the shortcut.
+        // shell integration. A second ssh/su/jumper entered inside a pane
+        // cannot emit tty7's OSC prompt marks, but Cmd/Ctrl+R must still open
+        // the same history UI there — and keep owning keys until the menu
+        // closes. Full-screen applications keep the shortcut.
         let history_shortcut =
             ks.key == "r" && !m.alt && ((m.control && !m.platform) || (m.platform && !m.control));
         if history_shortcut
@@ -2251,9 +2252,13 @@ impl TerminalView {
             && self.accepts_input(cx)
             && !self.on_alt_screen()
         {
-            self.start_reverse_search();
+            if self.reverse_search.is_some() {
+                self.handle_reverse_search_key(ks, cx);
+            } else {
+                self.start_reverse_search();
+                cx.notify();
+            }
             cx.stop_propagation();
-            cx.notify();
             return;
         }
 
@@ -2297,6 +2302,16 @@ impl TerminalView {
         }
 
         if !window.has_pending_keystrokes() && super::input::defer_to_ime(ks, self.key_flags()) {
+            return;
+        }
+
+        // Nested shells leave `input_active` false (no OSC 133), but an open
+        // reverse-search still has to eat typing / arrows / Enter itself —
+        // otherwise the chord falls through to the remote PTY and the menu
+        // never moves.
+        if self.reverse_search.is_some() {
+            self.handle_reverse_search_key(ks, cx);
+            cx.stop_propagation();
             return;
         }
 
@@ -4756,7 +4771,20 @@ impl TerminalView {
             reverse_search::Action::Accept(line) => {
                 self.reverse_search = None;
                 if let Some(line) = line {
-                    self.cmd.set(&line);
+                    if self.input_active() {
+                        self.cmd.set(&line);
+                    } else {
+                        // No inline editor (nested ssh/jumper/su): type into
+                        // the remote shell's own line the way a paste would.
+                        let bracketed = self
+                            .terminal
+                            .term
+                            .lock()
+                            .mode()
+                            .contains(TermMode::BRACKETED_PASTE);
+                        let framed = bracketed && !types_cleanly(&line);
+                        self.terminal.write(paste_bytes(&line, framed));
+                    }
                 }
             }
             reverse_search::Action::Run(line) => {
@@ -6925,15 +6953,17 @@ impl Render for TerminalView {
             .map(|s| self.render_search_bar(s, window, cx));
 
         let focused = self.focus_handle.is_focused(window);
-        let input_bar = self
-            .input_active()
-            .then(|| self.render_input_bar(focused, cx));
+        // Reverse-search must paint even when the inline editor is dark —
+        // nested shells never report OSC 133, so `input_active` stays false.
+        let show_prompt_overlay = self.input_active() || self.reverse_search.is_some();
+        let input_bar = show_prompt_overlay.then(|| self.render_input_bar(focused, cx));
         let completion_menu = self
             .input_active()
             .then(|| self.render_completion_menu(cx))
             .flatten();
         let reverse_search_menu = self
-            .input_active()
+            .reverse_search
+            .is_some()
             .then(|| self.render_reverse_search_menu(cx))
             .flatten();
         let integration_notice = self.render_integration_notice(cx);
@@ -12228,6 +12258,127 @@ mod gpui_tests {
                         "{shortcut} opens tty7 history even without integration"
                     );
                 }
+            })
+            .unwrap();
+    }
+
+    /// PR#1 opened the menu without OSC marks, but left key routing and the
+    /// overlay gated on `input_active`. After jumper/ssh/su the menu appeared
+    /// to "do nothing": chords fell through to the remote PTY and nothing
+    /// painted. Drive the full path through `on_key_down`.
+    #[gpui::test]
+    fn history_search_works_without_shell_integration(cx: &mut TestAppContext) {
+        crate::core::config::pin_test_config_dir();
+
+        let (window, mut daemon) = harness(cx);
+        window
+            .update(cx, |view, window, cx| {
+                assert!(!view.input_active(), "the nested shell has no OSC marks");
+                view.history = ["git status", "cargo build", "git commit -m x"]
+                    .into_iter()
+                    .map(String::from)
+                    .collect();
+                view.history_frecency = vec![0.0; view.history.len()];
+
+                view.on_key_down(
+                    &KeyDownEvent {
+                        keystroke: key("ctrl-r"),
+                        is_held: false,
+                        prefer_character_input: false,
+                    },
+                    window,
+                    cx,
+                );
+                assert!(view.reverse_search.is_some(), "Ctrl+R opens history");
+
+                // `commit_text` is the IME path and already routes into an open
+                // reverse-search before `input_active`; `type_char` covers the
+                // raw KeyDown path on non-macOS.
+                type_char(view, "g", window, cx);
+                type_char(view, "i", window, cx);
+                type_char(view, "t", window, cx);
+                assert_eq!(
+                    view.reverse_search.as_ref().map(|rs| rs.query()),
+                    Some("git"),
+                    "query keys stay in the menu, not the PTY"
+                );
+                assert_eq!(
+                    view.reverse_search
+                        .as_ref()
+                        .and_then(|rs| rs.selected_line(&view.history)),
+                    Some("git commit -m x")
+                );
+
+                view.on_key_down(
+                    &KeyDownEvent {
+                        keystroke: key("ctrl-r"),
+                        is_held: false,
+                        prefer_character_input: false,
+                    },
+                    window,
+                    cx,
+                );
+                assert_eq!(
+                    view.reverse_search
+                        .as_ref()
+                        .and_then(|rs| rs.selected_line(&view.history)),
+                    Some("git status"),
+                    "Ctrl+R while open steps matches"
+                );
+
+                view.on_key_down(
+                    &KeyDownEvent {
+                        keystroke: key("enter"),
+                        is_held: false,
+                        prefer_character_input: false,
+                    },
+                    window,
+                    cx,
+                );
+                assert!(view.reverse_search.is_none(), "Enter accepts into the PTY");
+                assert!(
+                    view.cmd.is_empty(),
+                    "without an editor the line is not parked locally"
+                );
+            })
+            .unwrap();
+        assert_eq!(
+            next_input_until_timeout(&mut daemon),
+            Some(b"git status".to_vec()),
+            "Accept types the selection into the nested shell"
+        );
+        assert!(
+            next_input_until_timeout(&mut daemon).is_none(),
+            "typed query characters must not leak to the PTY"
+        );
+    }
+
+    #[gpui::test]
+    fn history_search_overlay_renders_without_shell_integration(cx: &mut TestAppContext) {
+        crate::core::config::pin_test_config_dir();
+
+        let (window, _daemon) = harness(cx);
+        window
+            .update(cx, |view, window, cx| {
+                assert!(!view.input_active());
+                view.history = ["echo hello".into()];
+                view.history_frecency = vec![0.0];
+                view.on_key_down(
+                    &KeyDownEvent {
+                        keystroke: key("cmd-r"),
+                        is_held: false,
+                        prefer_character_input: false,
+                    },
+                    window,
+                    cx,
+                );
+                assert!(view.reverse_search.is_some());
+                // `render_reverse_search_menu` needs a cursor cell; a fresh
+                // harness pane has one at the origin even without OSC marks.
+                assert!(
+                    view.render_reverse_search_menu(cx).is_some(),
+                    "the match list paints without the inline editor"
+                );
             })
             .unwrap();
     }
