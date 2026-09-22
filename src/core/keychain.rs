@@ -1,6 +1,6 @@
 pub use tty7_core::core::keychain::{
-    CredentialKind, CredentialRef, SERVICE_KEY_PASSPHRASE, SERVICE_PASSWORD, endpoint_account,
-    key_account_from_contents,
+    CredentialKind, CredentialRef, SERVICE_KEY_PASSPHRASE, SERVICE_PASSWORD,
+    SERVICE_PASSWORD_TRIGGER, endpoint_account, key_account_from_contents,
 };
 
 #[derive(Debug)]
