@@ -5023,9 +5023,29 @@ impl TerminalView {
         .detach();
     }
 
+    /// Lines Ctrl+R ranks against for this open. The active scope is preferred;
+    /// after a nested ssh/jumper/su the scope is intentionally empty (no OSC,
+    /// no far-end history files), so fall back to stashed scopes from earlier
+    /// in the same pane — otherwise the overlay opens with zero matches and
+    /// looks like bare bash `(reverse-i-search)`.
+    fn reverse_search_corpus(&self) -> (Vec<String>, Vec<f64>) {
+        if !self.history.is_empty() {
+            let mut frecency = self.history_frecency.clone();
+            frecency.resize(self.history.len(), 0.0);
+            return (self.history.clone(), frecency);
+        }
+        let mut entries = Vec::new();
+        for (_, cached) in self.history_cache.iter().rev() {
+            entries.extend(cached.entries.iter().cloned());
+        }
+        let frecency = vec![0.0; entries.len()];
+        (entries, frecency)
+    }
+
     fn start_reverse_search(&mut self) {
         if self.reverse_search.is_none() {
-            self.reverse_search = Some(ReverseSearch::new(&self.history, &self.history_frecency));
+            let (corpus, frecency) = self.reverse_search_corpus();
+            self.reverse_search = Some(ReverseSearch::new(&corpus, &frecency));
         }
     }
 
@@ -5035,7 +5055,7 @@ impl TerminalView {
             if let Some(ch) = ks.key_char.as_deref() {
                 if !ch.is_empty() && ch.chars().all(|c| c >= '\u{20}' && c != '\u{7f}') {
                     if let Some(rs) = self.reverse_search.as_mut() {
-                        rs.push_query(ch, &self.history, &self.history_frecency);
+                        rs.push_query(ch);
                     }
                     cx.notify();
                     return;
@@ -5045,7 +5065,7 @@ impl TerminalView {
         let Some(rs) = self.reverse_search.as_mut() else {
             return;
         };
-        match rs.handle_key(ks, &self.history, &self.history_frecency) {
+        match rs.handle_key(ks) {
             reverse_search::Action::Redraw => {}
             reverse_search::Action::Cancel => self.reverse_search = None,
             reverse_search::Action::Accept(line) => {
@@ -5535,7 +5555,7 @@ impl TerminalView {
         // back to the prompt and the letters between them did not.
         self.jump_to_prompt();
         if let Some(rs) = self.reverse_search.as_mut() {
-            rs.push_query(text, &self.history, &self.history_frecency);
+            rs.push_query(text);
             self.cursor_visible = true;
             cx.notify();
             return;
@@ -6599,7 +6619,7 @@ impl TerminalView {
 
         if let Some(rs) = &self.reverse_search {
             let label = format!("(reverse-i-search)`{}': ", rs.query());
-            let matched = one_line(rs.selected_line(&self.history).unwrap_or_default());
+            let matched = one_line(rs.selected_line().unwrap_or_default());
             return div()
                 .absolute()
                 .left(cx_left)
@@ -6967,9 +6987,6 @@ impl TerminalView {
     ) -> Option<impl IntoElement + use<>> {
         let rs = self.reverse_search.as_ref()?;
         let matches = rs.matches();
-        if matches.is_empty() {
-            return None;
-        }
         let (srow, _) = self.cursor_cell()?;
 
         const MAX_ROWS: usize = 10;
@@ -6977,70 +6994,94 @@ impl TerminalView {
             let term = self.terminal.term.lock();
             (term.screen_lines(), term.columns())
         };
-        let (place_above, visible, first) =
-            menu_layout(total_rows, srow, matches.len(), rs.selected(), MAX_ROWS);
-        let hidden_above = first;
-        let hidden_below = matches.len() - first - visible;
-
         let theme = cx.theme();
         let lh = self.line_height;
         let now = unix_now();
-        let row = |i: usize| {
-            let m = &matches[i];
-            let line = self.history[m.index].as_str();
-            let selected = rs.selected() == i;
-            let base = if selected {
-                theme.foreground
+
+        // Always paint a panel while search is open. An empty match list used
+        // to return None, which after jumper (empty scoped history) left only
+        // the `(reverse-i-search)` label — visually indistinguishable from
+        // bash's native mode.
+        let (place_above, rows, hidden_above, hidden_below) = if matches.is_empty() {
+            let empty_label = if rs.corpus().is_empty() {
+                "No history in this session yet"
             } else {
-                theme.muted_foreground
+                "No matching history"
             };
-
-            let spans: Vec<gpui::AnyElement> = highlight_runs(line, &m.positions)
-                .into_iter()
-                .map(|(run, hit)| {
-                    div()
-                        .flex_none()
-                        .whitespace_nowrap()
-                        .text_color(if hit { theme.blue } else { base })
-                        .child(run)
-                        .into_any_element()
-                })
-                .collect();
-
-            let meta = self.history_meta.get(line);
-            let failed = meta.and_then(|em| em.exit).filter(|&e| e != 0);
-            let ago = meta
-                .and_then(|em| em.ts)
-                .map(|ts| super::history::format_ago(now, ts));
-
-            div()
+            let place_above = srow + 1 + 2 > total_rows && srow >= 2;
+            let row = div()
                 .h(lh)
                 .flex()
                 .items_center()
-                .gap_1p5()
                 .px_2()
-                .whitespace_nowrap()
-                .when(selected, |d| d.bg(theme.list_active))
-                .child(div().flex_1().flex().overflow_hidden().children(spans))
-                .when_some(failed, |d, code| {
-                    d.child(
-                        div()
-                            .flex_none()
-                            .text_color(theme.red)
-                            .child(format!("✗ {code}")),
-                    )
+                .text_color(theme.muted_foreground)
+                .child(empty_label)
+                .into_any_element();
+            (place_above, vec![row], 0usize, 0usize)
+        } else {
+            let (place_above, visible, first) =
+                menu_layout(total_rows, srow, matches.len(), rs.selected(), MAX_ROWS);
+            let hidden_above = first;
+            let hidden_below = matches.len() - first - visible;
+            let rows: Vec<gpui::AnyElement> = (first..first + visible)
+                .map(|i| {
+                    let m = &matches[i];
+                    let line = rs.match_line(i).unwrap_or("");
+                    let selected = rs.selected() == i;
+                    let base = if selected {
+                        theme.foreground
+                    } else {
+                        theme.muted_foreground
+                    };
+
+                    let spans: Vec<gpui::AnyElement> = highlight_runs(line, &m.positions)
+                        .into_iter()
+                        .map(|(run, hit)| {
+                            div()
+                                .flex_none()
+                                .whitespace_nowrap()
+                                .text_color(if hit { theme.blue } else { base })
+                                .child(run)
+                                .into_any_element()
+                        })
+                        .collect();
+
+                    let meta = self.history_meta.get(line);
+                    let failed = meta.and_then(|em| em.exit).filter(|&e| e != 0);
+                    let ago = meta
+                        .and_then(|em| em.ts)
+                        .map(|ts| super::history::format_ago(now, ts));
+
+                    div()
+                        .h(lh)
+                        .flex()
+                        .items_center()
+                        .gap_1p5()
+                        .px_2()
+                        .whitespace_nowrap()
+                        .when(selected, |d| d.bg(theme.list_active))
+                        .child(div().flex_1().flex().overflow_hidden().children(spans))
+                        .when_some(failed, |d, code| {
+                            d.child(
+                                div()
+                                    .flex_none()
+                                    .text_color(theme.red)
+                                    .child(format!("✗ {code}")),
+                            )
+                        })
+                        .when_some(ago, |d, ago| {
+                            d.child(
+                                div()
+                                    .flex_none()
+                                    .text_color(theme.muted_foreground)
+                                    .child(ago),
+                            )
+                        })
+                        .into_any_element()
                 })
-                .when_some(ago, |d, ago| {
-                    d.child(
-                        div()
-                            .flex_none()
-                            .text_color(theme.muted_foreground)
-                            .child(ago),
-                    )
-                })
-                .into_any_element()
+                .collect();
+            (place_above, rows, hidden_above, hidden_below)
         };
-        let rows: Vec<gpui::AnyElement> = (first..first + visible).map(row).collect();
 
         let footer = |n: usize, label: String| {
             (n > 0).then(|| {
@@ -7055,7 +7096,7 @@ impl TerminalView {
             })
         };
         let footer_lines = (hidden_above > 0) as usize + (hidden_below > 0) as usize;
-        let line_count = visible + footer_lines;
+        let line_count = rows.len() + footer_lines;
         let menu_h = lh * (line_count as f32) + px(10.);
 
         let gap = px(6.);
@@ -12607,7 +12648,7 @@ mod gpui_tests {
                 assert_eq!(
                     view.reverse_search
                         .as_ref()
-                        .and_then(|rs| rs.selected_line(&view.history)),
+                        .and_then(|rs| rs.selected_line()),
                     Some("git commit -m x")
                 );
 
@@ -12623,7 +12664,7 @@ mod gpui_tests {
                 assert_eq!(
                     view.reverse_search
                         .as_ref()
-                        .and_then(|rs| rs.selected_line(&view.history)),
+                        .and_then(|rs| rs.selected_line()),
                     Some("git status"),
                     "Ctrl+R while open steps matches"
                 );
@@ -12680,6 +12721,143 @@ mod gpui_tests {
                 assert!(
                     view.render_reverse_search_menu(cx).is_some(),
                     "the match list paints without the inline editor"
+                );
+            })
+            .unwrap();
+    }
+
+    /// After jumper/nested ssh, `follow_history_scope` clears the active list
+    /// (far host has no OSC / no readable history file). PR#11 still opened
+    /// reverse-search, but the corpus was empty so the match panel returned
+    /// None — users only saw a `(reverse-i-search)` label that looked like
+    /// bash. Fall back to stashed scopes and keep painting the panel.
+    #[gpui::test]
+    fn history_search_after_jumper_uses_stashed_scope_history(cx: &mut TestAppContext) {
+        crate::core::config::pin_test_config_dir();
+
+        let (window, mut daemon) = harness(cx);
+        window
+            .update(cx, |view, _, _| {
+                view.history = vec![
+                    "ll".to_string(),
+                    "jobs".to_string(),
+                    "vim scon_agentic.py".to_string(),
+                ];
+                view.history_frecency = vec![0.0; view.history.len()];
+                view.history_ready = true;
+            })
+            .unwrap();
+
+        DaemonMsg::RemoteContext(Some(crate::daemon::protocol::RemoteContext {
+            kind: crate::daemon::protocol::RemoteKind::Ssh,
+            argv: vec!["ssh".into(), "krsvr-gray-01".into()],
+            target: "krsvr-gray-01".into(),
+        }))
+        .encode(&mut daemon)
+        .unwrap();
+        for _ in 0..200 {
+            if window
+                .update(cx, |view, _, _| view.remote_context().is_some())
+                .unwrap()
+            {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+
+        window
+            .update(cx, |view, window, cx| {
+                view.follow_history_scope(cx);
+                assert!(
+                    view.history.is_empty(),
+                    "nested ssh scopes start with an empty active list"
+                );
+                assert!(!view.input_active(), "inner hop has no OSC marks");
+
+                view.on_key_down(
+                    &KeyDownEvent {
+                        keystroke: key("ctrl-r"),
+                        is_held: false,
+                        prefer_character_input: false,
+                    },
+                    window,
+                    cx,
+                );
+                let rs = view.reverse_search.as_ref().expect("Ctrl+R opens history");
+                assert!(
+                    !rs.matches().is_empty(),
+                    "stashed jumper/local history must still populate the menu"
+                );
+                assert_eq!(
+                    rs.selected_line(),
+                    Some("vim scon_agentic.py"),
+                    "newest stashed command is selected first"
+                );
+                assert!(
+                    view.render_reverse_search_menu(cx).is_some(),
+                    "the floating match panel must paint after jumper"
+                );
+
+                type_char(view, "j", window, cx);
+                type_char(view, "o", window, cx);
+                assert_eq!(
+                    view.reverse_search
+                        .as_ref()
+                        .and_then(|rs| rs.selected_line()),
+                    Some("jobs")
+                );
+
+                view.on_key_down(
+                    &KeyDownEvent {
+                        keystroke: key("enter"),
+                        is_held: false,
+                        prefer_character_input: false,
+                    },
+                    window,
+                    cx,
+                );
+                assert!(view.reverse_search.is_none());
+                assert!(view.cmd.is_empty(), "no inline editor after jumper");
+            })
+            .unwrap();
+        assert_eq!(
+            next_input_until_timeout(&mut daemon),
+            Some(b"jobs".to_vec()),
+            "Accept types the stashed selection into the nested PTY"
+        );
+        assert!(
+            next_input_until_timeout(&mut daemon).is_none(),
+            "query keystrokes must not leak to the nested shell"
+        );
+    }
+
+    #[gpui::test]
+    fn history_search_empty_corpus_still_paints_the_overlay(cx: &mut TestAppContext) {
+        crate::core::config::pin_test_config_dir();
+
+        let (window, _daemon) = harness(cx);
+        window
+            .update(cx, |view, window, cx| {
+                assert!(view.history.is_empty());
+                view.history_cache.clear();
+                view.on_key_down(
+                    &KeyDownEvent {
+                        keystroke: key("ctrl-r"),
+                        is_held: false,
+                        prefer_character_input: false,
+                    },
+                    window,
+                    cx,
+                );
+                assert!(view.reverse_search.is_some());
+                assert!(
+                    view.reverse_search
+                        .as_ref()
+                        .is_some_and(|rs| rs.matches().is_empty())
+                );
+                assert!(
+                    view.render_reverse_search_menu(cx).is_some(),
+                    "empty search must still show a tty7 panel, not bare bash"
                 );
             })
             .unwrap();
@@ -12972,7 +13150,7 @@ mod gpui_tests {
                 assert_eq!(
                     view.reverse_search
                         .as_ref()
-                        .and_then(|rs| rs.selected_line(&view.history)),
+                        .and_then(|rs| rs.selected_line()),
                     Some("git status")
                 );
                 view.handle_editor_key(&key("enter"), cx);
@@ -13000,14 +13178,14 @@ mod gpui_tests {
                 assert_eq!(
                     view.reverse_search
                         .as_ref()
-                        .and_then(|rs| rs.selected_line(&view.history)),
+                        .and_then(|rs| rs.selected_line()),
                     Some("git commit -m x")
                 );
                 view.handle_editor_key(&key("ctrl-r"), cx);
                 assert_eq!(
                     view.reverse_search
                         .as_ref()
-                        .and_then(|rs| rs.selected_line(&view.history)),
+                        .and_then(|rs| rs.selected_line()),
                     Some("git status")
                 );
                 view.handle_editor_key(&key("cmd-enter"), cx);

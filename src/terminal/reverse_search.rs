@@ -4,6 +4,12 @@ use std::collections::HashSet;
 const FRECENCY_WEIGHT: f64 = 2.0;
 
 pub(super) struct ReverseSearch {
+    /// Snapshot of the lines this search session ranks against. Owned so a
+    /// mid-search history-scope switch (nested ssh/jumper) cannot invalidate
+    /// match indices, and so a fallback corpus from stashed scopes can live
+    /// here without mutating the pane's active history.
+    corpus: Vec<String>,
+    frecency: Vec<f64>,
     query: String,
     matches: Vec<Match>,
     selected: usize,
@@ -23,12 +29,16 @@ pub(super) enum Action {
 
 impl ReverseSearch {
     pub(super) fn new(history: &[String], frecency: &[f64]) -> Self {
+        let mut scores = frecency.to_vec();
+        scores.resize(history.len(), 0.0);
         let mut rs = Self {
+            corpus: history.to_vec(),
+            frecency: scores,
             query: String::new(),
             matches: Vec::new(),
             selected: 0,
         };
-        rs.update(history, frecency);
+        rs.recompute();
         rs
     }
 
@@ -44,23 +54,31 @@ impl ReverseSearch {
         self.selected
     }
 
-    pub(super) fn selected_line<'a>(&self, history: &'a [String]) -> Option<&'a str> {
-        self.matches
-            .get(self.selected)
-            .map(|m| history[m.index].as_str())
+    pub(super) fn corpus(&self) -> &[String] {
+        &self.corpus
     }
 
-    fn update(&mut self, history: &[String], frecency: &[f64]) {
+    pub(super) fn selected_line(&self) -> Option<&str> {
+        self.match_line(self.selected)
+    }
+
+    pub(super) fn match_line(&self, match_idx: usize) -> Option<&str> {
+        self.matches
+            .get(match_idx)
+            .map(|m| self.corpus[m.index].as_str())
+    }
+
+    fn recompute(&mut self) {
         self.selected = 0;
         let list_all = self.query.trim().is_empty();
         let mut seen: HashSet<&str> = HashSet::new();
         let mut scored: Vec<(f64, Match)> = Vec::new();
-        for i in (0..history.len()).rev() {
-            let line = history[i].as_str();
+        for i in (0..self.corpus.len()).rev() {
+            let line = self.corpus[i].as_str();
             if !seen.insert(line) {
                 continue;
             }
-            let f = frecency.get(i).copied().unwrap_or(0.0);
+            let f = self.frecency.get(i).copied().unwrap_or(0.0);
             if list_all {
                 scored.push((
                     f,
@@ -88,17 +106,12 @@ impl ReverseSearch {
         self.selected = self.selected.saturating_add_signed(delta).min(last);
     }
 
-    pub(super) fn push_query(&mut self, text: &str, history: &[String], frecency: &[f64]) {
+    pub(super) fn push_query(&mut self, text: &str) {
         self.query.push_str(text);
-        self.update(history, frecency);
+        self.recompute();
     }
 
-    pub(super) fn handle_key(
-        &mut self,
-        ks: &gpui::Keystroke,
-        history: &[String],
-        frecency: &[f64],
-    ) -> Action {
+    pub(super) fn handle_key(&mut self, ks: &gpui::Keystroke) -> Action {
         let m = &ks.modifiers;
         let key = ks.key.as_str();
         // Cmd+R opens the same menu as Ctrl+R; once open, either chord steps.
@@ -114,14 +127,14 @@ impl ReverseSearch {
         } else if (m.control && (key == "g" || key == "c")) || key == "escape" {
             Action::Cancel
         } else if key == "enter" || (m.control && (key == "j" || key == "m")) {
-            let line = self.selected_line(history).map(str::to_string);
+            let line = self.selected_line().map(str::to_string);
             match (m.platform, line) {
                 (true, Some(line)) => Action::Run(line),
                 (_, line) => Action::Accept(line),
             }
         } else if key == "backspace" {
             self.query.pop();
-            self.update(history, frecency);
+            self.recompute();
             Action::Redraw
         } else {
             Action::Redraw
@@ -154,15 +167,15 @@ mod tests {
         let rs = ReverseSearch::new(&h, &flat(&h));
         let order: Vec<usize> = rs.matches().iter().map(|m| m.index).collect();
         assert_eq!(order, [3, 2, 1, 0]);
-        assert_eq!(rs.selected_line(&h), Some("cargo test"));
+        assert_eq!(rs.selected_line(), Some("cargo test"));
     }
 
     #[test]
     fn query_ranks_the_most_recent_equal_match_first() {
         let h = history();
         let mut rs = ReverseSearch::new(&h, &flat(&h));
-        rs.push_query("git", &h, &flat(&h));
-        assert_eq!(rs.selected_line(&h), Some("git commit -m x"));
+        rs.push_query("git");
+        assert_eq!(rs.selected_line(), Some("git commit -m x"));
         assert_eq!(rs.matches().len(), 2);
     }
 
@@ -170,8 +183,8 @@ mod tests {
     fn fuzzy_matching_spans_words() {
         let h = history();
         let mut rs = ReverseSearch::new(&h, &flat(&h));
-        rs.push_query("gst", &h, &flat(&h));
-        assert_eq!(rs.selected_line(&h), Some("git status"));
+        rs.push_query("gst");
+        assert_eq!(rs.selected_line(), Some("git status"));
         assert_eq!(rs.matches()[0].positions, vec![0, 4, 5]);
     }
 
@@ -180,8 +193,8 @@ mod tests {
         let h = history();
         let frecency = vec![5.0, 0.0, 0.0, 0.0];
         let mut rs = ReverseSearch::new(&h, &frecency);
-        rs.push_query("git", &h, &frecency);
-        assert_eq!(rs.selected_line(&h), Some("git status"));
+        rs.push_query("git");
+        assert_eq!(rs.selected_line(), Some("git status"));
     }
 
     #[test]
@@ -196,27 +209,21 @@ mod tests {
     fn ctrl_r_and_arrows_step_through_matches_and_stick_at_the_ends() {
         let h = history();
         let mut rs = ReverseSearch::new(&h, &flat(&h));
-        rs.push_query("git", &h, &flat(&h));
+        rs.push_query("git");
         assert_eq!(rs.selected(), 0);
-        assert!(matches!(
-            rs.handle_key(&key("ctrl-r"), &h, &flat(&h)),
-            Action::Redraw
-        ));
-        assert_eq!(rs.selected_line(&h), Some("git status"));
-        rs.handle_key(&key("ctrl-s"), &h, &flat(&h));
+        assert!(matches!(rs.handle_key(&key("ctrl-r")), Action::Redraw));
+        assert_eq!(rs.selected_line(), Some("git status"));
+        rs.handle_key(&key("ctrl-s"));
         assert_eq!(rs.selected(), 0);
-        assert!(matches!(
-            rs.handle_key(&key("cmd-r"), &h, &flat(&h)),
-            Action::Redraw
-        ));
+        assert!(matches!(rs.handle_key(&key("cmd-r")), Action::Redraw));
         assert_eq!(
-            rs.selected_line(&h),
+            rs.selected_line(),
             Some("git status"),
             "Cmd+R steps the same way Ctrl+R does"
         );
-        rs.handle_key(&key("up"), &h, &flat(&h));
+        rs.handle_key(&key("up"));
         assert_eq!(rs.selected(), 0);
-        rs.handle_key(&key("down"), &h, &flat(&h));
+        rs.handle_key(&key("down"));
         assert_eq!(rs.selected(), 1);
     }
 
@@ -224,39 +231,30 @@ mod tests {
     fn handle_key_cancel_keys() {
         let h = history();
         let mut rs = ReverseSearch::new(&h, &flat(&h));
-        assert!(matches!(
-            rs.handle_key(&key("ctrl-g"), &h, &flat(&h)),
-            Action::Cancel
-        ));
-        assert!(matches!(
-            rs.handle_key(&key("ctrl-c"), &h, &flat(&h)),
-            Action::Cancel
-        ));
-        assert!(matches!(
-            rs.handle_key(&key("escape"), &h, &flat(&h)),
-            Action::Cancel
-        ));
+        assert!(matches!(rs.handle_key(&key("ctrl-g")), Action::Cancel));
+        assert!(matches!(rs.handle_key(&key("ctrl-c")), Action::Cancel));
+        assert!(matches!(rs.handle_key(&key("escape")), Action::Cancel));
     }
 
     #[test]
     fn enter_accepts_and_cmd_enter_runs_the_selection() {
         let h = history();
         let mut rs = ReverseSearch::new(&h, &flat(&h));
-        rs.push_query("cargo", &h, &flat(&h));
-        match rs.handle_key(&key("enter"), &h, &flat(&h)) {
+        rs.push_query("cargo");
+        match rs.handle_key(&key("enter")) {
             Action::Accept(Some(line)) => assert_eq!(line, "cargo test"),
             _ => panic!("expected Accept(Some) with the selected line"),
         }
         let mut rs = ReverseSearch::new(&h, &flat(&h));
-        rs.push_query("cargo", &h, &flat(&h));
-        match rs.handle_key(&key("cmd-enter"), &h, &flat(&h)) {
+        rs.push_query("cargo");
+        match rs.handle_key(&key("cmd-enter")) {
             Action::Run(line) => assert_eq!(line, "cargo test"),
             _ => panic!("expected Run with the selected line"),
         }
         let mut rs = ReverseSearch::new(&h, &flat(&h));
-        rs.push_query("zzz_nope", &h, &flat(&h));
+        rs.push_query("zzz_nope");
         assert!(rs.matches().is_empty());
-        match rs.handle_key(&key("enter"), &h, &flat(&h)) {
+        match rs.handle_key(&key("enter")) {
             Action::Accept(None) => {}
             _ => panic!("expected Accept(None) with no match"),
         }
@@ -267,8 +265,8 @@ mod tests {
         let h = history();
         for chord in ["ctrl-j", "ctrl-m"] {
             let mut rs = ReverseSearch::new(&h, &flat(&h));
-            rs.push_query("cargo", &h, &flat(&h));
-            match rs.handle_key(&key(chord), &h, &flat(&h)) {
+            rs.push_query("cargo");
+            match rs.handle_key(&key(chord)) {
                 Action::Accept(Some(line)) => assert_eq!(line, "cargo test"),
                 _ => panic!("{chord} should accept the selected line"),
             }
@@ -279,23 +277,24 @@ mod tests {
     fn handle_key_backspace_pops_query_and_re_ranks() {
         let h = history();
         let mut rs = ReverseSearch::new(&h, &flat(&h));
-        rs.push_query("gitq", &h, &flat(&h));
+        rs.push_query("gitq");
         assert!(rs.matches().is_empty());
-        assert!(matches!(
-            rs.handle_key(&key("backspace"), &h, &flat(&h)),
-            Action::Redraw
-        ));
+        assert!(matches!(rs.handle_key(&key("backspace")), Action::Redraw));
         assert_eq!(rs.query(), "git");
-        assert_eq!(rs.selected_line(&h), Some("git commit -m x"));
+        assert_eq!(rs.selected_line(), Some("git commit -m x"));
     }
 
     #[test]
     fn handle_key_other_keys_are_ignored_with_redraw() {
         let h = history();
         let mut rs = ReverseSearch::new(&h, &flat(&h));
-        assert!(matches!(
-            rs.handle_key(&key("a"), &h, &flat(&h)),
-            Action::Redraw
-        ));
+        assert!(matches!(rs.handle_key(&key("a")), Action::Redraw));
+    }
+
+    #[test]
+    fn owns_its_corpus_so_callers_can_drop_the_source_slice() {
+        let rs = ReverseSearch::new(&["echo hi".into()], &[1.0]);
+        assert_eq!(rs.corpus(), &["echo hi".to_string()]);
+        assert_eq!(rs.selected_line(), Some("echo hi"));
     }
 }
