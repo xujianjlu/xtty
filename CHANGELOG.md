@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **In-pane `rz` / `sz` no longer freezes the pane.** Remote `rz` is answered with
+  ZRQINIT before the file picker opens (the old path waited for the dialog, so
+  `lrzsz` timed out while the pane stayed diverted and ate keystrokes). Stalled
+  transfers and abandoned pickers now time out and send CAN; backpressured wire
+  bytes are retained across pumps.
+
 ### Added
 
 - **Cursor blink interval is configurable.** Settings → Appearance → Cursor
