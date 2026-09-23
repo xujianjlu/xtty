@@ -1471,9 +1471,7 @@ impl DaemonMsg {
             DaemonMsg::SftpTransferProgress(jobs) => {
                 write_frame(w, kind::SFTP_TRANSFER_PROGRESS, &to_json(jobs)?)
             }
-            DaemonMsg::SshExecResult(out) => {
-                write_frame(w, kind::SSH_EXEC_RESULT, &to_json(out)?)
-            }
+            DaemonMsg::SshExecResult(out) => write_frame(w, kind::SSH_EXEC_RESULT, &to_json(out)?),
             DaemonMsg::ForwardList(list) => write_frame(w, kind::FORWARD_LIST, &to_json(list)?),
             DaemonMsg::Procs(procs) => write_frame(w, kind::PROCS, &to_json(procs)?),
             DaemonMsg::Version(version) => write_frame(w, kind::VERSION_REPLY, &to_json(version)?),

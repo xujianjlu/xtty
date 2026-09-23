@@ -16,8 +16,7 @@ const MAX_STDIN: u64 = 64 * 1024;
 
 pub fn run_agent_hook(agent: &str, event: &str) {
     detach_console();
-    if std::env::var_os(XTTY_ENV_MARKER).is_none() && std::env::var_os(TTY7_ENV_MARKER).is_none()
-    {
+    if std::env::var_os(XTTY_ENV_MARKER).is_none() && std::env::var_os(TTY7_ENV_MARKER).is_none() {
         return;
     }
     let agent = effective_agent(agent, std::env::var_os(GROK_HOOK_ENV).is_some());

@@ -4226,8 +4226,8 @@ impl TerminalView {
                 // Ctrl+R (or a nested-hop probe) owns the corpus until the PTY
                 // dump lands. Do not let a late SFTP/app-file read paint a
                 // truncated HISTFILE / OSC stash into an open overlay.
-                let probe_owns = view.terminal.history_probe_pipe().is_active()
-                    || view.reverse_search.is_some();
+                let probe_owns =
+                    view.terminal.history_probe_pipe().is_active() || view.reverse_search.is_some();
                 if !probe_owns && (view.history.is_empty() || mark_ready_without_probe) {
                     view.history = loaded.entries;
                     view.history_counts = loaded.counts;
@@ -4296,8 +4296,7 @@ impl TerminalView {
                     // Probe failed — do NOT leave OSC/app stash painted as the
                     // corpus. Empty overlay + visible reason.
                     view.history_ready = true;
-                    view.history_probe_error =
-                        Some("Could not dump shell history".to_string());
+                    view.history_probe_error = Some("Could not dump shell history".to_string());
                     if view.reverse_search.is_some() {
                         view.reverse_search = Some(ReverseSearch::new(&[], &[]));
                     }
@@ -7013,13 +7012,14 @@ impl TerminalView {
                 .push(cell(colors[i], c.text, c.width, selected, caret, false));
         }
 
-        let ghost: Option<String> = if paint_chrome && selection.is_none() && !has_marked && !is_multiline {
-            self.ghost_suggestion()
-                .map(|full| full.chars().skip(len).collect::<String>())
-                .filter(|r| !r.is_empty())
-        } else {
-            None
-        };
+        let ghost: Option<String> =
+            if paint_chrome && selection.is_none() && !has_marked && !is_multiline {
+                self.ghost_suggestion()
+                    .map(|full| full.chars().skip(len).collect::<String>())
+                    .filter(|r| !r.is_empty())
+            } else {
+                None
+            };
 
         if cursor == len {
             let last = lines.last_mut().unwrap();
@@ -13244,14 +13244,14 @@ mod gpui_tests {
         dump.extend_from_slice(b"\n  100  hostname\n  101  systemctl status nginx\n");
         dump.extend_from_slice(super::super::history_probe::END_MARK);
         dump.extend_from_slice(b"\r\n");
-        DaemonMsg::Output(dump)
-            .encode(&mut daemon)
-            .unwrap();
+        DaemonMsg::Output(dump).encode(&mut daemon).unwrap();
 
         for _ in 0..400 {
             cx.run_until_parked();
             let ready = window
-                .update(cx, |view, _, _| view.history_ready && !view.history.is_empty())
+                .update(cx, |view, _, _| {
+                    view.history_ready && !view.history.is_empty()
+                })
                 .unwrap();
             if ready {
                 break;
@@ -13421,11 +13421,9 @@ mod gpui_tests {
             .update(cx, |view, _, cx| {
                 let rs = view.reverse_search.as_ref().expect("Ctrl+R still open");
                 assert!(
-                    rs.corpus()
-                        .iter()
-                        .all(|e| e != "echo foreign"
-                            && e != "rm -rf / on-other-box"
-                            && e != "osc-only"),
+                    rs.corpus().iter().all(|e| e != "echo foreign"
+                        && e != "rm -rf / on-other-box"
+                        && e != "osc-only"),
                     "cached/OSC commands must not enter the corpus: {:?}",
                     rs.corpus()
                 );
@@ -13472,10 +13470,7 @@ mod gpui_tests {
                     window,
                     cx,
                 );
-                assert!(
-                    !view.history_ready,
-                    "Ctrl+R waits on a fresh shell dump"
-                );
+                assert!(!view.history_ready, "Ctrl+R waits on a fresh shell dump");
                 assert!(
                     view.terminal.history_probe_pipe().is_diverting(),
                     "probe armed for Native SSH / local too"
@@ -14042,7 +14037,11 @@ mod gpui_tests {
             assert_ne!(probe, vec![0x12]);
             assert_eq!(probe.first(), Some(&0x15));
         } else {
-            assert_eq!(first.first(), Some(&0x15), "expected history probe, got {first:?}");
+            assert_eq!(
+                first.first(),
+                Some(&0x15),
+                "expected history probe, got {first:?}"
+            );
         }
 
         window

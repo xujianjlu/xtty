@@ -1119,8 +1119,7 @@ mod tests {
         // occluding the terminal.
         let kinds = [
             AuthPromptKind::Banner {
-                text: "Authorized users only. All activities may be monitored and reported."
-                    .into(),
+                text: "Authorized users only. All activities may be monitored and reported.".into(),
             },
             AuthPromptKind::Banner {
                 text: String::new(),

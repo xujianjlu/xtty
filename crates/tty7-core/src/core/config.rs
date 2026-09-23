@@ -1209,11 +1209,10 @@ pub fn shell_program_is_usable(program: &str) -> bool {
         return false;
     }
     const NOT_A_PROGRAM: &[&str] = &[
-        "source", ".", "builtin", "command", "eval", "exec", "type", "hash", "alias",
-        "unalias", "export", "unset", "readonly", "local", "typeset", "set", "shift",
-        "cd", "pwd", "popd", "pushd", "dirs", "return", "exit", "logout", "times",
-        "trap", "ulimit", "umask", "wait", "jobs", "fg", "bg", ":", "break", "continue",
-        "true", "false", "test", "[",
+        "source", ".", "builtin", "command", "eval", "exec", "type", "hash", "alias", "unalias",
+        "export", "unset", "readonly", "local", "typeset", "set", "shift", "cd", "pwd", "popd",
+        "pushd", "dirs", "return", "exit", "logout", "times", "trap", "ulimit", "umask", "wait",
+        "jobs", "fg", "bg", ":", "break", "continue", "true", "false", "test", "[",
     ];
     if NOT_A_PROGRAM
         .iter()
@@ -1222,8 +1221,23 @@ pub fn shell_program_is_usable(program: &str) -> bool {
         return false;
     }
     const KNOWN_SHELLS: &[&str] = &[
-        "zsh", "bash", "fish", "sh", "dash", "ksh", "tcsh", "csh", "pwsh", "powershell",
-        "nu", "xonsh", "elvish", "cmd", "cmd.exe", "powershell.exe", "pwsh.exe",
+        "zsh",
+        "bash",
+        "fish",
+        "sh",
+        "dash",
+        "ksh",
+        "tcsh",
+        "csh",
+        "pwsh",
+        "powershell",
+        "nu",
+        "xonsh",
+        "elvish",
+        "cmd",
+        "cmd.exe",
+        "powershell.exe",
+        "pwsh.exe",
     ];
     if KNOWN_SHELLS
         .iter()
@@ -1704,7 +1718,6 @@ mod tests {
 
     #[test]
     fn sanitize_clamps_degenerate_font_metrics() {
-
         let sanitized = |font_size: f32, line_height: f32| {
             let mut cfg = Config {
                 font_size,

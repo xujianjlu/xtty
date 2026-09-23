@@ -1455,8 +1455,7 @@ fn write_appearance(path: &Path, appearance: Appearance) -> io::Result<()> {
 /// the pidfile, the lock — is already keyed by the config directory; the tree
 /// and the appearance hint were the last two files that were not.
 fn data_dir() -> io::Result<PathBuf> {
-    if let Some(explicit) = crate::core::config::env_os_prefer(DATA_DIR_ENV, DATA_DIR_ENV_LEGACY)
-    {
+    if let Some(explicit) = crate::core::config::env_os_prefer(DATA_DIR_ENV, DATA_DIR_ENV_LEGACY) {
         return Ok(PathBuf::from(explicit));
     }
     crate::core::config::config_dir_path().ok_or_else(|| {
@@ -1472,8 +1471,7 @@ fn data_dir() -> io::Result<PathBuf> {
 /// included: this answers "where would the build the user just upgraded from
 /// have put it", and that build read the environment, not the config directory.
 fn legacy_data_dir() -> Option<PathBuf> {
-    if let Some(explicit) = crate::core::config::env_os_prefer(DATA_DIR_ENV, DATA_DIR_ENV_LEGACY)
-    {
+    if let Some(explicit) = crate::core::config::env_os_prefer(DATA_DIR_ENV, DATA_DIR_ENV_LEGACY) {
         return Some(PathBuf::from(explicit));
     }
     #[cfg(unix)]

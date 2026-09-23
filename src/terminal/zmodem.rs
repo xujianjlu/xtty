@@ -1174,8 +1174,7 @@ mod tests {
             &zrinit[..zrinit.len().min(32)]
         );
 
-        let (mut session, wire) =
-            ZmodemSession::start_send_handshake(zrinit).expect("handshake");
+        let (mut session, wire) = ZmodemSession::start_send_handshake(zrinit).expect("handshake");
         use std::io::Write as _;
         port.write_all(&wire).unwrap();
 
