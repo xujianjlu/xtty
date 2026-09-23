@@ -1,8 +1,8 @@
 //! Server binaries shipped next to the client for remote install.
 //!
-//! A macOS GUI can carry Linux `tty7-server` assets under a `server/` sibling
-//! (or via `TTY7_BUNDLED_SERVER_DIR`) so the first SSH connect does not have to
-//! hit GitHub. Discovery is path-only — no WSL.
+//! A macOS GUI can carry `tty7-server` assets under a `server/` sibling (or via
+//! `TTY7_BUNDLED_SERVER_DIR`) so the first SSH connect does not have to hit
+//! GitHub. Discovery is path-only.
 
 use std::path::{Path, PathBuf};
 

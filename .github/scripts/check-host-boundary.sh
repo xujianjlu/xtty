@@ -7,7 +7,7 @@
 # fs-backed APIs quietly answer for the wrong machine:
 # `canonicalize` walks the local filesystem, `read_dir` lists the client's disk.
 # Everything that may be looking at a workspace path — including one that lives
-# on a remote Linux or macOS host — has to go through `ui::host_ops` / the `Host`
+# on a remote host — has to go through `ui::host_ops` / the `Host`
 # trait, which routes to the local disk or the far side as appropriate.
 #
 # This script enforces that. It is deliberately *not* the raw grep from the
@@ -105,6 +105,11 @@ src/ui/code_editor.rs|std::fs::metadata
 # that copy goes through `Host`, and the one `std::fs::copy` that touches a
 # destination sits inside a branch already gated on `host.id().is_local()`.
 src/ui/file_copy.rs|std::fs::
+
+# In-pane ZMODEM stages receives into this machine's ~/Downloads and sends
+# files from the native picker — always client-local. The far side is the
+# rz/sz peer on the PTY, not a workspace path on Host.
+src/terminal/zmodem.rs|std::fs::
 EOF
 )
 

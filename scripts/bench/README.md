@@ -90,8 +90,8 @@ backpressure gate (see CHANGELOG "Terminal throughput ~12× faster").
 | Memory (GUI+daemon) | 100 MB | **105 MB** | 86 MB | 112 MB | — |
 
 Kitty (0.47.4) was measured the same day at the same 155×40 grid; its memory
-run was skipped. Upstream's Kitty frame-rate dominance (Linux/Wayland) does
-not reproduce on macOS — here it lands in the same band as Alacritty/Ghostty.
+run was skipped. Kitty's published frame-rate lead does not reproduce on
+macOS — here it lands in the same band as Alacritty/Ghostty.
 
 Diagnosis notes for posterity: macOS PTYs deliver ~1 KiB per read. Before the
 fix, every read into a full 8 MiB `Vec` ring memmoved the whole ring

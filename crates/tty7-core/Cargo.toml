@@ -8,9 +8,9 @@ license = "Apache-2.0"
 publish = false
 
 # The whole point of this crate is that it does *not* depend on gpui. Everything
-# here has to compile and run on a headless Linux box (that is what
-# `tty7-server` is), so nothing windowing-, rendering- or GUI-shaped belongs in
-# these dependencies.
+# here has to compile and run headless (that is what `tty7-server` is on a
+# remote Mac), so nothing windowing-, rendering- or GUI-shaped belongs in these
+# dependencies.
 [dependencies]
 anyhow.workspace = true
 log.workspace = true
@@ -78,7 +78,7 @@ portable-pty = "0.8"
 # reuses the `rustls`/`http` versions already in the tree. `gzip` is off: the
 # assets are already-compressed binaries.
 #
-# Optional, and off by default, so the static musl `tty7-server` never links a
+# Optional, and off by default, so a headless `tty7-server` never links a
 # TLS stack for a code path it cannot take — it *is* the binary being
 # downloaded. The GUI package turns the feature on (see the root `Cargo.toml`).
 ureq = { version = "3", default-features = false, features = [
@@ -163,10 +163,10 @@ tokio = { version = "1", features = ["test-util", "macros", "rt"] }
 # Off by default, and the `tty7` GUI turns it on, so the GUI's behavior is
 # unchanged. It has to be optional because `libgssapi` binds the *system* MIT /
 # Heimdal krb5 through bindgen: a machine without krb5 headers cannot build it
-# at all, and a static musl `tty7-server` — the binary remote workspaces push
-# onto arbitrary hosts (decision D10) — cannot link it under any
-# circumstances. Without the feature, `SshAuthMode::Gssapi` reports that the
-# method is unavailable in this build and the other auth families are untouched.
+# at all, and a remote `tty7-server` pushed onto someone else's Mac (decision
+# D10) must not link Heimdal either — `assert-macho.sh` refuses stray deps.
+# Without the feature, `SshAuthMode::Gssapi` reports that the method is
+# unavailable in this build and the other auth families are untouched.
 #
 # **Test coverage.** Everything in `daemon::ssh::auth` that can be tested without
 # krb5 — the service-host list — is gated on `unix` alone, so a plain

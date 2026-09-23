@@ -22,10 +22,10 @@ required-features = ["updater"]
 # The framework-free half of tty7: wire protocol, session daemon, PTY, the
 # native SSH engine, and the domain model the headless `tty7-server` shares with
 # this GUI. Everything that does *not* need gpui lives there.
-# `gssapi` is off in tty7-core's defaults (a static musl `tty7-server` cannot
-# link the system krb5 it binds); the GUI, which builds against a real desktop
-# toolchain, turns it on so managed SSH connections keep offering
-# `gssapi-with-mic` exactly as before.
+# `gssapi` is off in tty7-core's defaults (a headless `tty7-server` pushed to a
+# remote Mac should not link the system krb5 it binds); the GUI, which builds
+# against a real desktop toolchain, turns it on so managed SSH connections keep
+# offering `gssapi-with-mic` exactly as before.
 #
 # `remote-install` is off there for the same shape of reason: it pulls an HTTPS
 # client used only to *download* a `tty7-server` onto a remote machine
