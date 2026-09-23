@@ -7610,9 +7610,9 @@ impl Tty7App {
                             )))
                             .child(
                                 Link::new("about-github")
-                                    .href("https://github.com/l0ng-ai/tty7")
+                                    .href("https://github.com/xujianjlu/tty7")
                                     .text_sm()
-                                    .child("github.com/l0ng-ai/tty7"),
+                                    .child("github.com/xujianjlu/tty7"),
                             ),
                     ),
             )
