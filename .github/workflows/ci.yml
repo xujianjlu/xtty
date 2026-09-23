@@ -114,7 +114,7 @@ jobs:
 
       - name: Test desktop updater
         timeout-minutes: 10
-        run: cargo test --locked --features updater --bin tty7-updater --target ${{ matrix.target }}
+        run: cargo test --locked --features updater --bin xtty-updater --target ${{ matrix.target }}
 
       # There is deliberately no post-mortem step here, and that is worth
       # recording, because an earlier version of this file had one: on failure it

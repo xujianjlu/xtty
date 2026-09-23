@@ -110,7 +110,7 @@ jobs:
         run: |
           cargo build --release --target "${{ matrix.target }}"
           cargo build --release --features updater \
-            --bin tty7-updater --target "${{ matrix.target }}"
+            --bin xtty-updater --target "${{ matrix.target }}"
 
       - name: Bundle macOS DMG
         if: matrix.os == 'macos'

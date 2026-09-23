@@ -54,7 +54,7 @@ jobs:
         run: |
           cargo build --release --locked --target "${{ matrix.target }}"
           cargo build --release --locked --features updater \
-            --bin tty7-updater --target "${{ matrix.target }}"
+            --bin xtty-updater --target "${{ matrix.target }}"
 
       # ---- Packaging ------------------------------------------------------------
       # macOS gets a signed + notarized drag-to-Applications DMG. Fonts are
