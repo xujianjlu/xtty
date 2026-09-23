@@ -468,6 +468,10 @@ pub struct TerminalView {
     /// Whether the current scope's list is a finished load rather than the
     /// empty placeholder one starts as. Only a finished one is worth stashing.
     history_ready: bool,
+    /// Why the last Ctrl+R PTY history dump failed (timeout / empty divert).
+    /// When set, the overlay stays empty with this reason — never falls back to
+    /// the OSC/app-tracked stash that looks like a working corpus.
+    history_probe_error: Option<String>,
     ranked_cwd: Option<std::path::PathBuf>,
     history_nav: Option<usize>,
     history_stash: String,
@@ -1574,6 +1578,7 @@ impl TerminalView {
             history_scope: super::history::Scope::Local,
             history_cache: Vec::new(),
             history_ready: true,
+            history_probe_error: None,
             ranked_cwd: None,
             history_nav: None,
             history_stash: String::new(),
@@ -4169,6 +4174,7 @@ impl TerminalView {
         // Drop any in-flight dump for the previous hop so its bytes cannot
         // land on this scope.
         self.terminal.history_probe_pipe().cancel();
+        self.history_probe_error = None;
         let ranked_cwd = self.ranked_cwd.clone();
         self.rerank_history(ranked_cwd.as_deref());
         cx.notify();
@@ -4179,10 +4185,9 @@ impl TerminalView {
             && self
                 .remote_context()
                 .is_some_and(|c| c.kind == crate::daemon::protocol::RemoteKind::Ssh);
-        // Nested process-table ssh: keep the overlay in "Loading host history…"
-        // until the PTY dump lands (or times out). Do not mark ready from an
-        // empty SFTP pass — that painted "No history" while `history` still
-        // worked on the far host.
+        // Nested process-table ssh: keep loading until the PTY dump lands (or
+        // times out). Do not mark ready from an empty SFTP pass — that painted
+        // "No history" while `history` still worked on the far host.
         if needs_pty_probe {
             self.history_ready = false;
         }
@@ -4207,23 +4212,25 @@ impl TerminalView {
                 if view.history_scope != scope {
                     return;
                 }
-                // Prefer keeping a live PTY dump if it already landed; otherwise
-                // seed from Host files / app-owned scope file.
-                if view.history.is_empty() || mark_ready_without_probe {
+                // Ctrl+R (or a nested-hop probe) owns the corpus until the PTY
+                // dump lands. Do not let a late SFTP/app-file read paint a
+                // truncated HISTFILE / OSC stash into an open overlay.
+                let probe_owns = view.terminal.history_probe_pipe().is_active()
+                    || view.reverse_search.is_some();
+                if !probe_owns && (view.history.is_empty() || mark_ready_without_probe) {
                     view.history = loaded.entries;
                     view.history_counts = loaded.counts;
                     view.history_cwds = loaded.cwds;
                     view.history_meta = loaded.meta;
                 }
-                if mark_ready_without_probe {
+                if mark_ready_without_probe && !probe_owns {
                     view.history_ready = true;
                 }
                 let cwd = view.ranked_cwd.clone();
                 view.rerank_history(cwd.as_deref());
                 // Ctrl+R may have opened while the host files were still
-                // loading; refresh the open search so the corpus is this
-                // machine's shell history, not an empty snapshot.
-                if view.reverse_search.is_some() && view.history_ready {
+                // loading; refresh only when the shell dump (not SFTP) owns ready.
+                if view.reverse_search.is_some() && view.history_ready && !probe_owns {
                     let (corpus, frecency) = view.reverse_search_corpus();
                     view.reverse_search = Some(ReverseSearch::new(&corpus, &frecency));
                 }
@@ -4237,22 +4244,25 @@ impl TerminalView {
         }
     }
 
-    /// When Host SFTP cannot reach the nested hop, dump that shell's own
-    /// `history`/`fc` over the PTY and divert the reply into the active scope.
+    /// Dump this session's shell `history`/`fc` over the PTY and divert the
+    /// reply into the active scope. Used for nested hops (no SFTP) and for
+    /// every Ctrl+R open so the overlay matches what `history` would show —
+    /// not the OSC/app-tracked stash.
     fn start_pty_history_probe(&mut self, cx: &mut Context<Self>) {
         let pipe = self.terminal.history_probe_pipe();
-        if pipe.is_active() {
-            return;
-        }
+        // Always re-arm: a stuck divert or a stale in-flight dump from an
+        // earlier hop must not block Ctrl+R from getting a fresh corpus.
+        pipe.cancel();
         let scope = self.history_scope.clone();
         pipe.arm();
         self.history_ready = false;
+        self.history_probe_error = None;
         self.terminal
             .write(super::history_probe::probe_command_bytes());
         cx.notify();
         cx.spawn(async move |this, cx| {
             cx.background_executor()
-                .timer(std::time::Duration::from_secs(4))
+                .timer(std::time::Duration::from_secs(8))
                 .await;
             let _ = this.update(cx, |view, cx| {
                 if view.history_scope != scope {
@@ -4263,10 +4273,13 @@ impl TerminalView {
                     pipe.cancel();
                 }
                 if !view.history_ready {
+                    // Probe failed — do NOT leave OSC/app stash painted as the
+                    // corpus. Empty overlay + visible reason.
                     view.history_ready = true;
+                    view.history_probe_error =
+                        Some("Could not dump shell history".to_string());
                     if view.reverse_search.is_some() {
-                        let (corpus, frecency) = view.reverse_search_corpus();
-                        view.reverse_search = Some(ReverseSearch::new(&corpus, &frecency));
+                        view.reverse_search = Some(ReverseSearch::new(&[], &[]));
                     }
                     cx.notify();
                 }
@@ -4281,8 +4294,8 @@ impl TerminalView {
             return;
         };
         let cmds = super::history_probe::parse_history_builtin_dump(&dump);
-        // Host in-memory history is the source of truth for this hop — replace
-        // the empty/loading active list. Do not pull stash from earlier hops.
+        // Live shell history is the source of truth for Ctrl+R — replace any
+        // OSC/app-tracked or SFTP-seeded list. Do not pull stash from earlier hops.
         self.history = cmds;
         self.history_counts.clear();
         self.history_cwds.clear();
@@ -4291,6 +4304,7 @@ impl TerminalView {
             *self.history_counts.entry(cmd.clone()).or_insert(0) += 1;
         }
         self.history_ready = true;
+        self.history_probe_error = None;
         let cwd = self.ranked_cwd.clone();
         self.rerank_history(cwd.as_deref());
         if self.reverse_search.is_some() {
@@ -5196,11 +5210,13 @@ impl TerminalView {
         .detach();
     }
 
-    /// Lines Ctrl+R ranks against for this open — only the **active** host
-    /// scope. Do not pull earlier hops or Mac-local stash into the corpus:
-    /// an empty/loading remote scope must show empty, not another machine's
-    /// commands disguised as the current host's history.
+    /// Lines Ctrl+R ranks against. Only a completed shell dump (PTY `history`/
+    /// `fc`) — never the OSC/app-tracked stash while loading or after a failed
+    /// probe (that tiny list is exactly what looked "working" with the wrong corpus).
     fn reverse_search_corpus(&self) -> (Vec<String>, Vec<f64>) {
+        if !self.history_ready || self.history_probe_error.is_some() {
+            return (Vec::new(), Vec::new());
+        }
         let mut frecency = self.history_frecency.clone();
         frecency.resize(self.history.len(), 0.0);
         (self.history.clone(), frecency)
@@ -5208,18 +5224,13 @@ impl TerminalView {
 
     fn start_reverse_search(&mut self, cx: &mut Context<Self>) {
         if self.reverse_search.is_none() {
-            let (corpus, frecency) = self.reverse_search_corpus();
-            self.reverse_search = Some(ReverseSearch::new(&corpus, &frecency));
-            // Ctrl+R after jumper before follow_history_scope's probe finished,
-            // or if scope was restored empty: ensure a dump is in flight.
-            if !self.history_ready
-                && self.history.is_empty()
-                && self
-                    .remote_context()
-                    .is_some_and(|c| c.kind == crate::daemon::protocol::RemoteKind::Ssh)
-            {
-                self.start_pty_history_probe(cx);
-            }
+            // Always open empty and dump live shell history for this session.
+            // Painting OSC/SFTP stash first made Native SSH look "working" with
+            // a handful of recent cmds while `history | grep …` had hundreds.
+            self.history_probe_error = None;
+            self.history_ready = false;
+            self.reverse_search = Some(ReverseSearch::new(&[], &[]));
+            self.start_pty_history_probe(cx);
         }
     }
 
@@ -7177,12 +7188,16 @@ impl TerminalView {
         // the `(reverse-i-search)` label — visually indistinguishable from
         // bash's native mode.
         let (place_above, rows, hidden_above, hidden_below) = if matches.is_empty() {
+            let probe_err = self.history_probe_error.clone();
+            let corpus_empty = rs.corpus().is_empty();
             let empty_label = if !self.history_ready {
-                "Loading host history…"
-            } else if rs.corpus().is_empty() {
-                "No history yet"
+                "Loading shell history…".to_string()
+            } else if let Some(reason) = probe_err {
+                reason
+            } else if corpus_empty {
+                "No history yet".to_string()
             } else {
-                "No matching history"
+                "No matching history".to_string()
             };
             let place_above = srow + 1 + 2 > total_rows && srow >= 2;
             let row = div()
@@ -10302,6 +10317,51 @@ mod gpui_tests {
         (window, daemon_side)
     }
 
+    /// Simulate the diverted `history`/`fc` dump arriving on the PTY after Ctrl+R.
+    fn inject_pty_history_dump(daemon: &mut Stream, cmds: &[&str]) {
+        let mut dump = Vec::new();
+        dump.extend_from_slice(super::super::history_probe::BEGIN_MARK);
+        dump.push(b'\n');
+        for (i, cmd) in cmds.iter().enumerate() {
+            dump.extend_from_slice(format!("  {}  {cmd}\n", i + 1).as_bytes());
+        }
+        dump.extend_from_slice(super::super::history_probe::END_MARK);
+        dump.extend_from_slice(b"\r\n");
+        DaemonMsg::Output(dump).encode(daemon).unwrap();
+    }
+
+    fn wait_history_probe_ready(
+        window: &gpui::WindowHandle<TerminalView>,
+        cx: &mut TestAppContext,
+    ) {
+        for _ in 0..400 {
+            cx.run_until_parked();
+            let ready = window
+                .update(cx, |view, _, _| {
+                    view.history_ready && view.history_probe_error.is_none()
+                })
+                .unwrap();
+            if ready {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
+    /// Ctrl+R writes a probe line (^U + dump command); drain it before asserting
+    /// later PTY writes (Accept / Cmd+Enter).
+    fn drain_history_probe_write(daemon: &mut Stream) {
+        let Some(bytes) = next_input_until_timeout(daemon) else {
+            return;
+        };
+        assert_eq!(bytes.first(), Some(&0x15), "probe clears the current line");
+        assert!(
+            String::from_utf8_lossy(&bytes).contains("TTY7_HIST"),
+            "probe command written to PTY: {:?}",
+            String::from_utf8_lossy(&bytes)
+        );
+    }
+
     /// The same pane, but hung under a `gpui_component::Root` the way the real
     /// window hangs it.
     ///
@@ -12810,12 +12870,6 @@ mod gpui_tests {
         window
             .update(cx, |view, window, cx| {
                 assert!(!view.input_active(), "the nested shell has no OSC marks");
-                view.history = ["git status", "cargo build", "git commit -m x"]
-                    .into_iter()
-                    .map(String::from)
-                    .collect();
-                view.history_frecency = vec![0.0; view.history.len()];
-
                 view.on_key_down(
                     &KeyDownEvent {
                         keystroke: key("ctrl-r"),
@@ -12826,7 +12880,24 @@ mod gpui_tests {
                     cx,
                 );
                 assert!(view.reverse_search.is_some(), "Ctrl+R opens history");
+                assert!(
+                    view.reverse_search
+                        .as_ref()
+                        .is_some_and(|rs| rs.corpus().is_empty()),
+                    "opens empty until the PTY dump lands — not OSC stash"
+                );
+            })
+            .unwrap();
 
+        drain_history_probe_write(&mut daemon);
+        inject_pty_history_dump(
+            &mut daemon,
+            &["git status", "cargo build", "git commit -m x"],
+        );
+        wait_history_probe_ready(&window, cx);
+
+        window
+            .update(cx, |view, window, cx| {
                 // `commit_text` is the IME path and already routes into an open
                 // reverse-search before `input_active`; `type_char` covers the
                 // raw KeyDown path on non-macOS.
@@ -12893,12 +12964,10 @@ mod gpui_tests {
     fn history_search_overlay_renders_without_shell_integration(cx: &mut TestAppContext) {
         crate::core::config::pin_test_config_dir();
 
-        let (window, _daemon) = harness(cx);
+        let (window, mut daemon) = harness(cx);
         window
             .update(cx, |view, window, cx| {
                 assert!(!view.input_active());
-                view.history = vec!["echo hello".to_string()];
-                view.history_frecency = vec![0.0];
                 view.on_key_down(
                     &KeyDownEvent {
                         keystroke: key("cmd-r"),
@@ -12909,12 +12978,26 @@ mod gpui_tests {
                     cx,
                 );
                 assert!(view.reverse_search.is_some());
-                // `render_reverse_search_menu` needs a cursor cell; a fresh
-                // harness pane has one at the origin even without OSC marks.
+                // Loading / empty still paints — `render_reverse_search_menu`
+                // needs a cursor cell; a fresh harness pane has one at origin.
                 assert!(
                     view.render_reverse_search_menu(cx).is_some(),
                     "the match list paints without the inline editor"
                 );
+            })
+            .unwrap();
+        drain_history_probe_write(&mut daemon);
+        inject_pty_history_dump(&mut daemon, &["echo hello"]);
+        wait_history_probe_ready(&window, cx);
+        window
+            .update(cx, |view, _, cx| {
+                assert!(
+                    view.reverse_search
+                        .as_ref()
+                        .is_some_and(|rs| rs.corpus().iter().any(|c| c == "echo hello")),
+                    "dump seeds the open overlay"
+                );
+                assert!(view.render_reverse_search_menu(cx).is_some());
             })
             .unwrap();
     }
@@ -13049,7 +13132,7 @@ mod gpui_tests {
                 );
                 assert!(
                     view.render_reverse_search_menu(cx).is_some(),
-                    "overlay paints while Loading host history…"
+                    "overlay paints while Loading shell history…"
                 );
             })
             .unwrap();
@@ -13100,13 +13183,13 @@ mod gpui_tests {
             .unwrap();
     }
 
-    /// Active-scope history is what Ctrl+R lists. A foreign corpus parked in
-    /// `history_cache` (previous hop / local) must not leak into the overlay.
+    /// Active-scope history is what Ctrl+R lists after the PTY dump. A foreign
+    /// corpus parked in `history_cache` (previous hop / local) must not leak.
     #[gpui::test]
     fn history_search_uses_active_host_history_not_cache(cx: &mut TestAppContext) {
         crate::core::config::pin_test_config_dir();
 
-        let (window, _daemon) = harness(cx);
+        let (window, mut daemon) = harness(cx);
         window
             .update(cx, |view, window, cx| {
                 view.history_cache.push((
@@ -13121,12 +13204,9 @@ mod gpui_tests {
                         meta: Default::default(),
                     },
                 ));
-                view.history = vec![
-                    "hostname".to_string(),
-                    "uptime".to_string(),
-                    "echo this-host".to_string(),
-                ];
-                view.history_frecency = vec![0.0; view.history.len()];
+                // OSC/app stash on this pane — must NOT paint before the dump.
+                view.history = vec!["osc-only".to_string()];
+                view.history_frecency = vec![0.0];
                 view.history_ready = true;
 
                 view.on_key_down(
@@ -13140,10 +13220,26 @@ mod gpui_tests {
                 );
                 let rs = view.reverse_search.as_ref().expect("Ctrl+R opens");
                 assert!(
+                    rs.corpus().is_empty(),
+                    "must not paint OSC stash or cache before the shell dump"
+                );
+            })
+            .unwrap();
+
+        drain_history_probe_write(&mut daemon);
+        inject_pty_history_dump(&mut daemon, &["hostname", "uptime", "echo this-host"]);
+        wait_history_probe_ready(&window, cx);
+
+        window
+            .update(cx, |view, _, cx| {
+                let rs = view.reverse_search.as_ref().expect("Ctrl+R still open");
+                assert!(
                     rs.corpus()
                         .iter()
-                        .all(|e| e != "echo foreign" && e != "rm -rf / on-other-box"),
-                    "cached other-host commands must not enter the corpus: {:?}",
+                        .all(|e| e != "echo foreign"
+                            && e != "rm -rf / on-other-box"
+                            && e != "osc-only"),
+                    "cached/OSC commands must not enter the corpus: {:?}",
                     rs.corpus()
                 );
                 assert_eq!(
@@ -13153,7 +13249,7 @@ mod gpui_tests {
                         "uptime".to_string(),
                         "echo this-host".to_string()
                     ],
-                    "corpus is the active host list only"
+                    "corpus is the PTY shell dump only"
                 );
                 assert_eq!(rs.selected_line(), Some("echo this-host"));
                 assert!(view.render_reverse_search_menu(cx).is_some());
@@ -13161,15 +13257,128 @@ mod gpui_tests {
             .unwrap();
     }
 
+    /// Native SSH / local: OSC has a few recent cmds; shell `history` has many.
+    /// Ctrl+R must not look "working" on the tiny OSC list.
+    #[gpui::test]
+    fn history_search_ignores_osc_stash_until_pty_dump(cx: &mut TestAppContext) {
+        crate::core::config::pin_test_config_dir();
+
+        let (window, mut daemon) = harness(cx);
+        window
+            .update(cx, |view, window, cx| {
+                view.history = vec![
+                    "sh self_test/scripts/run_module_ut.sh".to_string(),
+                    "git diff self_test/scripts/run_module_ut.sh".to_string(),
+                    "git co -- self_test/scripts/run_module_ut.sh".to_string(),
+                ];
+                view.history_frecency = vec![0.0; view.history.len()];
+                view.history_ready = true;
+                // No RemoteKind::Ssh — same path as Native SSH / direct host.
+                assert!(view.remote_context().is_none());
+
+                view.on_key_down(
+                    &KeyDownEvent {
+                        keystroke: key("ctrl-r"),
+                        is_held: false,
+                        prefer_character_input: false,
+                    },
+                    window,
+                    cx,
+                );
+                assert!(
+                    !view.history_ready,
+                    "Ctrl+R waits on a fresh shell dump"
+                );
+                assert!(
+                    view.terminal.history_probe_pipe().is_diverting(),
+                    "probe armed for Native SSH / local too"
+                );
+                assert!(
+                    view.reverse_search
+                        .as_ref()
+                        .is_some_and(|rs| rs.corpus().is_empty()),
+                    "OSC stash must not fill the overlay"
+                );
+            })
+            .unwrap();
+
+        drain_history_probe_write(&mut daemon);
+        inject_pty_history_dump(
+            &mut daemon,
+            &[
+                "git push origin fix_common -f",
+                "git push origin add_ut -f",
+                "history | grep push",
+                "sh self_test/scripts/run_module_ut.sh",
+            ],
+        );
+        wait_history_probe_ready(&window, cx);
+
+        window
+            .update(cx, |view, _, cx| {
+                let rs = view.reverse_search.as_ref().expect("still open");
+                assert!(
+                    rs.corpus().iter().any(|c| c.contains("git push")),
+                    "shell history dump includes push cmds: {:?}",
+                    rs.corpus()
+                );
+                assert!(
+                    rs.corpus().len() >= 4,
+                    "corpus volume matches the dump, not the 3 OSC lines"
+                );
+                assert!(view.history_probe_error.is_none());
+                assert!(view.render_reverse_search_menu(cx).is_some());
+            })
+            .unwrap();
+    }
+
+    /// Probe timeout / cancel must leave the overlay empty with a reason —
+    /// never fall back to the OSC stash.
+    #[gpui::test]
+    fn history_search_probe_failure_stays_empty_not_osc_stash(cx: &mut TestAppContext) {
+        crate::core::config::pin_test_config_dir();
+
+        let (window, mut daemon) = harness(cx);
+        window
+            .update(cx, |view, window, cx| {
+                view.history = vec!["osc-recent-only".to_string()];
+                view.history_frecency = vec![0.0];
+                view.history_ready = true;
+                view.on_key_down(
+                    &KeyDownEvent {
+                        keystroke: key("ctrl-r"),
+                        is_held: false,
+                        prefer_character_input: false,
+                    },
+                    window,
+                    cx,
+                );
+                assert!(view.reverse_search.as_ref().unwrap().corpus().is_empty());
+                // Simulate the timeout path without waiting 8s.
+                view.terminal.history_probe_pipe().cancel();
+                view.history_ready = true;
+                view.history_probe_error = Some("Could not dump shell history".to_string());
+                view.reverse_search = Some(ReverseSearch::new(&[], &[]));
+                let rs = view.reverse_search.as_ref().unwrap();
+                assert!(rs.corpus().is_empty());
+                assert!(!rs.corpus().iter().any(|c| c == "osc-recent-only"));
+                assert_eq!(
+                    view.history_probe_error.as_deref(),
+                    Some("Could not dump shell history")
+                );
+                assert!(view.render_reverse_search_menu(cx).is_some());
+            })
+            .unwrap();
+        let _ = next_input_until_timeout(&mut daemon); // probe write
+    }
+
     #[gpui::test]
     fn history_search_empty_corpus_still_paints_the_overlay(cx: &mut TestAppContext) {
         crate::core::config::pin_test_config_dir();
 
-        let (window, _daemon) = harness(cx);
+        let (window, mut daemon) = harness(cx);
         window
             .update(cx, |view, window, cx| {
-                // Harness panes may already have seeded shell history; force
-                // an empty corpus so this covers the empty-state panel path.
                 view.history.clear();
                 view.history_frecency.clear();
                 view.history_cache.clear();
@@ -13193,6 +13402,19 @@ mod gpui_tests {
                     view.render_reverse_search_menu(cx).is_some(),
                     "empty search must still show a tty7 panel, not bare bash"
                 );
+            })
+            .unwrap();
+        drain_history_probe_write(&mut daemon);
+        inject_pty_history_dump(&mut daemon, &[]);
+        wait_history_probe_ready(&window, cx);
+        window
+            .update(cx, |view, _, cx| {
+                assert!(
+                    view.reverse_search
+                        .as_ref()
+                        .is_some_and(|rs| rs.corpus().is_empty())
+                );
+                assert!(view.render_reverse_search_menu(cx).is_some());
             })
             .unwrap();
     }
@@ -13472,14 +13694,24 @@ mod gpui_tests {
         window
             .update(cx, |view, _, cx| {
                 assert!(view.input_active(), "the editor owns an idle prompt");
-                view.history = ["git status", "cargo build", "git commit -m x"]
-                    .into_iter()
-                    .map(String::from)
-                    .collect();
-                view.history_frecency = vec![0.0; view.history.len()];
-
                 view.handle_editor_key(&key("ctrl-r"), cx);
                 assert!(view.reverse_search.is_some(), "Ctrl+R opens the search");
+                assert!(
+                    view.reverse_search
+                        .as_ref()
+                        .is_some_and(|rs| rs.corpus().is_empty()),
+                    "waits for shell dump"
+                );
+            })
+            .unwrap();
+        drain_history_probe_write(&mut daemon);
+        inject_pty_history_dump(
+            &mut daemon,
+            &["git status", "cargo build", "git commit -m x"],
+        );
+        wait_history_probe_ready(&window, cx);
+        window
+            .update(cx, |view, _, cx| {
                 view.commit_text("gst", cx);
                 assert_eq!(
                     view.reverse_search
@@ -13501,13 +13733,18 @@ mod gpui_tests {
         let (window, mut daemon) = harness(cx);
         window
             .update(cx, |view, _, cx| {
-                view.history = ["git status", "cargo build", "git commit -m x"]
-                    .into_iter()
-                    .map(String::from)
-                    .collect();
-                view.history_frecency = vec![0.0; view.history.len()];
-
                 view.handle_editor_key(&key("ctrl-r"), cx);
+                assert!(view.reverse_search.is_some());
+            })
+            .unwrap();
+        drain_history_probe_write(&mut daemon);
+        inject_pty_history_dump(
+            &mut daemon,
+            &["git status", "cargo build", "git commit -m x"],
+        );
+        wait_history_probe_ready(&window, cx);
+        window
+            .update(cx, |view, _, cx| {
                 view.commit_text("git", cx);
                 assert_eq!(
                     view.reverse_search

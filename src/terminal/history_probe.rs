@@ -98,16 +98,19 @@ impl HistoryProbePipe {
 
 /// Bytes written to the PTY to dump the remote shell's in-memory history.
 ///
-/// Clears the current line (`^U`), prints begin/end markers around `history`
-/// (bash) or `fc -ln` (zsh), and avoids recording the probe itself when the
-/// shell honors `set +o history` / `setopt HIST_NO_STORE`.
+/// Clears the current line (`^U`), prints begin/end markers around a plain
+/// `fc -ln` / `HISTTIMEFORMAT= history` dump (bash + zsh), and avoids recording
+/// the probe itself when the shell honors `set +o history` / `setopt HIST_NO_STORE`.
+///
+/// Prefer `fc -ln` so Ctrl+R sees the same commands `history` would list, without
+/// HISTTIMEFORMAT decoration that would otherwise pollute the corpus.
 pub(crate) fn probe_command_bytes() -> Vec<u8> {
-    // One line, portable enough for bash/zsh login shells behind a jumper.
+    // One line, portable enough for bash/zsh behind jumper / Native SSH / local.
     // Markers use octal \036 so the shell emits the same RS bytes we scan for.
     let body = concat!(
         "set +o history 2>/dev/null || setopt HIST_NO_STORE 2>/dev/null; ",
         "printf '\\036TTY7_HIST_BEGIN\\036\\n'; ",
-        "{ history 2>/dev/null || fc -ln 1 2>/dev/null || true; }; ",
+        "{ fc -ln 1 2>/dev/null || HISTTIMEFORMAT= history 2>/dev/null || history 2>/dev/null || true; }; ",
         "printf '\\036TTY7_HIST_END\\036\\n'\r"
     );
     let mut out = Vec::with_capacity(1 + body.len());
@@ -136,7 +139,7 @@ pub(crate) fn parse_history_builtin_dump(bytes: &[u8]) -> Vec<String> {
         if line.is_empty() || line.contains("TTY7_HIST") {
             continue;
         }
-        if let Some(cmd) = strip_history_number(line) {
+        if let Some(cmd) = strip_history_prefix(line) {
             let cmd = cmd.trim();
             if !cmd.is_empty() && !cmd.contains("TTY7_HIST") && cmd != "\u{1e}" {
                 out.push(cmd.to_string());
@@ -149,6 +152,13 @@ pub(crate) fn parse_history_builtin_dump(bytes: &[u8]) -> Vec<String> {
         out.drain(..out.len() - MAX);
     }
     out
+}
+
+/// `  512  ls -la` / `512* cmd` / HISTTIMEFORMAT lines → `ls -la`.
+/// Bare `fc -ln` lines pass through.
+fn strip_history_prefix(line: &str) -> Option<&str> {
+    let after_number = strip_history_number(line)?;
+    Some(strip_optional_histtime(after_number))
 }
 
 /// `  512  ls -la` / `512* cmd` → `ls -la`; bare `fc -ln` lines pass through.
@@ -180,6 +190,44 @@ fn strip_history_number(line: &str) -> Option<&str> {
     }
     // Entire line was digits.
     None
+}
+
+/// Drop a leading HISTTIMEFORMAT-style timestamp when `history` still printed one.
+/// Examples: `2024-01-15 10:30:00 git push`, `10/15/24 10:30:00 ls`.
+fn strip_optional_histtime(cmd: &str) -> &str {
+    let s = cmd.trim_start();
+    let bytes = s.as_bytes();
+    // YYYY-MM-DD[ T]HH:MM[:SS][ ...]cmd
+    if bytes.len() >= 16
+        && bytes[0].is_ascii_digit()
+        && bytes[1].is_ascii_digit()
+        && bytes[2].is_ascii_digit()
+        && bytes[3].is_ascii_digit()
+        && (bytes[4] == b'-' || bytes[4] == b'/')
+        && bytes[5].is_ascii_digit()
+        && bytes[6].is_ascii_digit()
+        && (bytes[7] == b'-' || bytes[7] == b'/')
+        && bytes[8].is_ascii_digit()
+        && bytes[9].is_ascii_digit()
+        && (bytes[10] == b' ' || bytes[10] == b'T')
+        && bytes[11].is_ascii_digit()
+        && bytes[12].is_ascii_digit()
+        && bytes[13] == b':'
+        && bytes[14].is_ascii_digit()
+        && bytes[15].is_ascii_digit()
+    {
+        let mut i = 16;
+        if bytes.len() > i + 2 && bytes[i] == b':' && bytes[i + 1].is_ascii_digit() {
+            i += 3; // :SS
+        }
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if i < bytes.len() {
+            return &s[i..];
+        }
+    }
+    s
 }
 
 fn find_subslice(hay: &[u8], needle: &[u8]) -> Option<usize> {
@@ -231,6 +279,23 @@ mod tests {
     }
 
     #[test]
+    fn parse_strips_histtimeformat_prefix() {
+        let dump = concat!(
+            "\x1eTTY7_HIST_BEGIN\x1e\n",
+            "  15  2024-01-15 10:30:00 git push origin fix_common -f\n",
+            "  187  2024-03-01 09:00:01 git push origin add_ut -f\n",
+            "\x1eTTY7_HIST_END\x1e"
+        );
+        assert_eq!(
+            parse_history_builtin_dump(dump.as_bytes()),
+            vec![
+                "git push origin fix_common -f".to_string(),
+                "git push origin add_ut -f".to_string(),
+            ]
+        );
+    }
+
+    #[test]
     fn pipe_diverts_until_end_then_passes_tail() {
         let pipe = HistoryProbePipe::new();
         pipe.arm();
@@ -256,7 +321,7 @@ mod tests {
         let s = String::from_utf8_lossy(&cmd);
         assert!(s.contains("TTY7_HIST_BEGIN"));
         assert!(s.contains("TTY7_HIST_END"));
-        assert!(s.contains("history"));
-        assert!(s.contains("fc -ln"));
+        assert!(s.contains("HISTTIMEFORMAT="));
+        assert!(s.contains("fc -ln 1"));
     }
 }
