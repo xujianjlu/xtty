@@ -1,0 +1,23 @@
+[package]
+authors = ["Jarkko Sakkinen <jarkko.sakkinen@iki.fi>"]
+description = "ZMODEM file transfer protocol (tty7 vendored: ESCCTL-safe escaping)"
+edition = "2021"
+homepage = "https://codeberg.org/jarkko/zmodem2"
+license = "MIT OR Apache-2.0"
+name = "zmodem2"
+repository = "https://codeberg.org/jarkko/zmodem2.git"
+rust-version = "1.81"
+version = "0.6.0"
+build = "build.rs"
+publish = false
+
+[features]
+default = ["std"]
+std = []
+embedded-io = ["dep:embedded-io"]
+
+[dependencies]
+bitflags = "2.4"
+embedded-io = { version = "0.6", default-features = false, optional = true }
+hex = "0.4.3"
+thiserror = "1.0"
