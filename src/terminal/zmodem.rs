@@ -22,6 +22,14 @@ const TRANSFER_IDLE: Duration = Duration::from_secs(45);
 /// How long the native file picker may stay open before we abort `rz`.
 const PICKER_IDLE: Duration = Duration::from_secs(120);
 
+#[cfg(test)]
+thread_local! {
+    /// Test-only download root. Must not touch process `HOME` — that leaks into
+    /// parallel tests (e.g. ssh_connect key paths) when the temp dir is removed.
+    static DOWNLOAD_DIR_OVERRIDE: std::cell::RefCell<Option<PathBuf>> =
+        const { std::cell::RefCell::new(None) };
+}
+
 /// Hex ZRQINIT / ZRINIT open with `**\x18B` then two hex digits for the frame.
 const HEX_PREFIX: &[u8] = &[b'*', b'*', 0x18, b'B'];
 /// Binary headers open with `*\x18` then encoding then frame type.
@@ -207,6 +215,12 @@ pub(crate) fn cancel_sequence() -> Vec<u8> {
 }
 
 fn download_dir() -> PathBuf {
+    #[cfg(test)]
+    {
+        if let Some(dir) = DOWNLOAD_DIR_OVERRIDE.with(|slot| slot.borrow().clone()) {
+            return dir;
+        }
+    }
     std::env::var_os("HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."))
@@ -814,12 +828,25 @@ mod tests {
 
     #[test]
     fn receive_roundtrip_small_file() {
-        let dir = std::env::temp_dir().join(format!("tty7-zmodem-test-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        // Point Downloads at the temp dir via HOME.
-        // SAFETY: single-threaded test process.
-        unsafe { std::env::set_var("HOME", &dir) };
+        let dir = std::env::temp_dir().join(format!(
+            "tty7-zmodem-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let downloads = dir.join("Downloads");
+        std::fs::create_dir_all(&downloads).unwrap();
+
+        struct OverrideGuard;
+        impl Drop for OverrideGuard {
+            fn drop(&mut self) {
+                DOWNLOAD_DIR_OVERRIDE.with(|slot| *slot.borrow_mut() = None);
+            }
+        }
+        DOWNLOAD_DIR_OVERRIDE.with(|slot| *slot.borrow_mut() = Some(downloads.clone()));
+        let _guard = OverrideGuard;
 
         let mut remote = Sender::new().expect("sender");
         remote.advance_outgoing(remote.drain_outgoing().len());
@@ -874,8 +901,9 @@ mod tests {
             }
         }
         assert!(done, "receive roundtrip should complete");
-        let saved = dir.join("Downloads").join("note.txt");
+        let saved = downloads.join("note.txt");
         assert_eq!(std::fs::read(&saved).unwrap(), payload);
+        drop(_guard);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
