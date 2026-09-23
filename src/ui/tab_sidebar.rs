@@ -1464,13 +1464,23 @@ impl Tty7App {
             .child(self.workspace_head(cx));
 
         let chip_inset = crate::ui::app::CONTENT_INSET - 7. + 4.;
-        let top_bar = h_flex()
-            .flex_shrink_0()
+        let (_, chrome_fill) = crate::ui::presets::sidebar_chrome_fill(cx);
+        // Fill first (a hairline alone is not enough to lift the box off the
+        // rail), then a faint edge so the field still reads as a box when the
+        // fill is close to the sidebar — the same family as the selected tab,
+        // one step quieter.
+        let search = h_flex()
+            .flex_1()
+            .min_w_0()
             .items_center()
             .gap(px(6.))
-            .h(px(44.))
-            .pl(px(chip_inset))
-            .pr(px(crate::ui::app::CONTENT_INSET))
+            .h(px(30.))
+            .pl(px(4.))
+            .pr(px(6.))
+            .rounded_lg()
+            .bg(chrome_fill)
+            .border_1()
+            .border_color(cx.theme().sidebar_border)
             .child(
                 div()
                     .flex_shrink_0()
@@ -1490,6 +1500,13 @@ impl Tty7App {
                     .min_w_0()
                     .child(Input::new(&self.sidebar_search).appearance(false).pl_0()),
             );
+        let top_bar = h_flex()
+            .flex_shrink_0()
+            .items_center()
+            .h(px(38.))
+            .pl(px(chip_inset - 4.))
+            .pr(px(crate::ui::app::CONTENT_INSET - 7.))
+            .child(search);
 
         let container: Rc<Cell<Option<Bounds<Pixels>>>> = Rc::new(Cell::new(None));
         // Read while there is still a `cx` to read it from: the drag handler
