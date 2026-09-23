@@ -2524,6 +2524,9 @@ impl TerminalView {
 
         match action {
             ZmodemUiAction::Done { detail } => {
+                // Remote `sz` still emits "OO" after ZFIN; swallow it so the
+                // shell prompt is not polluted (looks like a failed transfer).
+                pipe.arm_oo_discard();
                 log::info!("zmodem: {detail}");
                 cx.notify();
             }

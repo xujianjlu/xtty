@@ -102,7 +102,8 @@ image = "0.25"
 
 # In-pane ZMODEM for remote `rz`/`sz` (`terminal::zmodem`). Caller-driven
 # state machine; we own the file dialogs and the PTY wire.
-zmodem2 = "0.6"
+# Vendored 0.6.0 with ESCCTL-safe ZDLE escaping (stock crate breaks `rz -be`).
+zmodem2 = { path = "crates/zmodem2" }
 
 # HTTP client for the startup update check (`core::update`): one GET to the
 # GitHub releases API to see if a newer version has shipped. `reqwest_client`
@@ -188,7 +189,7 @@ edition = "2024"
 # they must never drift apart. This is the line a release bump edits (and the
 # one nightly's `awk '/^version = /'` stamps: it is the first such line in the
 # file, since the package entries above are all `version.workspace = true`).
-version = "26.9.4"
+version = "26.9.5"
 
 [workspace.dependencies]
 # Our fork's `tty7` branch carries the local customizations tty7 relies on:
