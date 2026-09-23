@@ -161,7 +161,7 @@ mod tests {
         log::set_max_level(LevelFilter::Info);
         logger.log(
             &Record::builder()
-                .args(format_args!("remote build-box: installed tty7-server"))
+                .args(format_args!("remote build-box: installed xtty-server"))
                 .level(Level::Info)
                 .target("tty7_core::daemon::install")
                 .build(),
@@ -169,7 +169,7 @@ mod tests {
         let written = std::fs::read_to_string(&path).unwrap();
         assert!(written.contains("daemon"), "{written}");
         assert!(written.contains("tty7_core::daemon::install"), "{written}");
-        assert!(written.contains("installed tty7-server"), "{written}");
+        assert!(written.contains("installed xtty-server"), "{written}");
         assert!(written.contains("INFO"), "{written}");
         let _ = std::fs::remove_file(&path);
     }

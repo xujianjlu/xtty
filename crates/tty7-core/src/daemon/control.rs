@@ -2775,7 +2775,7 @@ mod tests {
         for other in [
             "Connection refused (os error 61)",
             "ssh: handshake failed: no matching key exchange method",
-            "the remote tty7-server did not start: exit status 127",
+            "the remote xtty-server did not start: exit status 127",
             "could not resolve the remote home directory: Permission denied",
             "control peer answered the handshake with Bye instead of HELLO_OK",
         ] {
