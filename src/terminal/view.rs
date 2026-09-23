@@ -2232,6 +2232,7 @@ impl TerminalView {
             AlacEvent::Wakeup => {
                 self.poll_password_triggers(cx);
                 self.poll_zmodem(cx);
+                self.poll_history_probe(cx);
                 self.sync_identity_with_remote(cx);
                 // The grid moved under whatever the search bar last measured.
                 self.note_output_under_search(cx);
@@ -2594,7 +2595,7 @@ impl TerminalView {
             if self.reverse_search.is_some() {
                 self.handle_reverse_search_key(ks, cx);
             } else {
-                self.start_reverse_search();
+                self.start_reverse_search(cx);
                 cx.notify();
             }
             cx.stop_propagation();
@@ -2950,7 +2951,7 @@ impl TerminalView {
                 self.handoff_line_to_shell(&[0x12], cx);
                 return;
             }
-            if self.apply_readline_ctrl(key) {
+            if self.apply_readline_ctrl(key, cx) {
                 cx.notify();
             } else if let Some(bytes) = super::input::keystroke_to_bytes(ks, self.key_flags()) {
                 self.handoff_line_to_shell(&bytes, cx);
@@ -3080,9 +3081,9 @@ impl TerminalView {
         cx.notify();
     }
 
-    fn apply_readline_ctrl(&mut self, key: &str) -> bool {
+    fn apply_readline_ctrl(&mut self, key: &str, cx: &mut Context<Self>) -> bool {
         match key {
-            "r" => self.start_reverse_search(),
+            "r" => self.start_reverse_search(cx),
             "a" => {
                 self.cmd.clear_selection();
                 self.cmd.move_home();
@@ -4165,12 +4166,28 @@ impl TerminalView {
         self.history_frecency.clear();
         self.history_nav = None;
         self.reverse_search = None;
+        // Drop any in-flight dump for the previous hop so its bytes cannot
+        // land on this scope.
+        self.terminal.history_probe_pipe().cancel();
         let ranked_cwd = self.ranked_cwd.clone();
         self.rerank_history(ranked_cwd.as_deref());
         cx.notify();
 
         let shell_files = self.remote_shell_history_sources(cx);
+        let needs_pty_probe = !self.history_ready
+            && shell_files.is_empty()
+            && self
+                .remote_context()
+                .is_some_and(|c| c.kind == crate::daemon::protocol::RemoteKind::Ssh);
+        // Nested process-table ssh: keep the overlay in "Loading host history…"
+        // until the PTY dump lands (or times out). Do not mark ready from an
+        // empty SFTP pass — that painted "No history" while `history` still
+        // worked on the far host.
+        if needs_pty_probe {
+            self.history_ready = false;
+        }
         let loading = scope.clone();
+        let mark_ready_without_probe = !needs_pty_probe;
         cx.spawn(async move |this, cx| {
             let loaded = cx
                 .background_spawn(async move {
@@ -4190,17 +4207,23 @@ impl TerminalView {
                 if view.history_scope != scope {
                     return;
                 }
-                view.history = loaded.entries;
-                view.history_counts = loaded.counts;
-                view.history_cwds = loaded.cwds;
-                view.history_meta = loaded.meta;
-                view.history_ready = true;
+                // Prefer keeping a live PTY dump if it already landed; otherwise
+                // seed from Host files / app-owned scope file.
+                if view.history.is_empty() || mark_ready_without_probe {
+                    view.history = loaded.entries;
+                    view.history_counts = loaded.counts;
+                    view.history_cwds = loaded.cwds;
+                    view.history_meta = loaded.meta;
+                }
+                if mark_ready_without_probe {
+                    view.history_ready = true;
+                }
                 let cwd = view.ranked_cwd.clone();
                 view.rerank_history(cwd.as_deref());
                 // Ctrl+R may have opened while the host files were still
                 // loading; refresh the open search so the corpus is this
                 // machine's shell history, not an empty snapshot.
-                if view.reverse_search.is_some() {
+                if view.reverse_search.is_some() && view.history_ready {
                     let (corpus, frecency) = view.reverse_search_corpus();
                     view.reverse_search = Some(ReverseSearch::new(&corpus, &frecency));
                 }
@@ -4209,6 +4232,72 @@ impl TerminalView {
             .ok();
         })
         .detach();
+        if needs_pty_probe {
+            self.start_pty_history_probe(cx);
+        }
+    }
+
+    /// When Host SFTP cannot reach the nested hop, dump that shell's own
+    /// `history`/`fc` over the PTY and divert the reply into the active scope.
+    fn start_pty_history_probe(&mut self, cx: &mut Context<Self>) {
+        let pipe = self.terminal.history_probe_pipe();
+        if pipe.is_active() {
+            return;
+        }
+        let scope = self.history_scope.clone();
+        pipe.arm();
+        self.history_ready = false;
+        self.terminal
+            .write(super::history_probe::probe_command_bytes());
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(std::time::Duration::from_secs(4))
+                .await;
+            let _ = this.update(cx, |view, cx| {
+                if view.history_scope != scope {
+                    return;
+                }
+                let pipe = view.terminal.history_probe_pipe();
+                if pipe.is_diverting() {
+                    pipe.cancel();
+                }
+                if !view.history_ready {
+                    view.history_ready = true;
+                    if view.reverse_search.is_some() {
+                        let (corpus, frecency) = view.reverse_search_corpus();
+                        view.reverse_search = Some(ReverseSearch::new(&corpus, &frecency));
+                    }
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn poll_history_probe(&mut self, cx: &mut Context<Self>) {
+        let pipe = self.terminal.history_probe_pipe();
+        let Some(dump) = pipe.take_if_complete() else {
+            return;
+        };
+        let cmds = super::history_probe::parse_history_builtin_dump(&dump);
+        // Host in-memory history is the source of truth for this hop — replace
+        // the empty/loading active list. Do not pull stash from earlier hops.
+        self.history = cmds;
+        self.history_counts.clear();
+        self.history_cwds.clear();
+        self.history_meta.clear();
+        for cmd in &self.history {
+            *self.history_counts.entry(cmd.clone()).or_insert(0) += 1;
+        }
+        self.history_ready = true;
+        let cwd = self.ranked_cwd.clone();
+        self.rerank_history(cwd.as_deref());
+        if self.reverse_search.is_some() {
+            let (corpus, frecency) = self.reverse_search_corpus();
+            self.reverse_search = Some(ReverseSearch::new(&corpus, &frecency));
+        }
+        cx.notify();
     }
 
     fn remote_shell_history_sources(
@@ -5117,10 +5206,20 @@ impl TerminalView {
         (self.history.clone(), frecency)
     }
 
-    fn start_reverse_search(&mut self) {
+    fn start_reverse_search(&mut self, cx: &mut Context<Self>) {
         if self.reverse_search.is_none() {
             let (corpus, frecency) = self.reverse_search_corpus();
             self.reverse_search = Some(ReverseSearch::new(&corpus, &frecency));
+            // Ctrl+R after jumper before follow_history_scope's probe finished,
+            // or if scope was restored empty: ensure a dump is in flight.
+            if !self.history_ready
+                && self.history.is_empty()
+                && self
+                    .remote_context()
+                    .is_some_and(|c| c.kind == crate::daemon::protocol::RemoteKind::Ssh)
+            {
+                self.start_pty_history_probe(cx);
+            }
         }
     }
 
@@ -7079,9 +7178,9 @@ impl TerminalView {
         // bash's native mode.
         let (place_above, rows, hidden_above, hidden_below) = if matches.is_empty() {
             let empty_label = if !self.history_ready {
-                "Loading history…"
+                "Loading host history…"
             } else if rs.corpus().is_empty() {
-                "No history on this host yet"
+                "No history yet"
             } else {
                 "No matching history"
             };
@@ -12894,6 +12993,113 @@ mod gpui_tests {
             .unwrap();
     }
 
+    /// Nested ssh cannot SFTP the inner host, so follow_history_scope dumps
+    /// that shell's `history` over the PTY. Diverted output becomes the
+    /// Ctrl+R corpus — not the previous hop's stash.
+    #[gpui::test]
+    fn history_search_after_jumper_uses_pty_history_dump(cx: &mut TestAppContext) {
+        crate::core::config::pin_test_config_dir();
+
+        let (window, mut daemon) = harness(cx);
+        window
+            .update(cx, |view, _, _| {
+                view.history = vec!["from-jumper-only".to_string()];
+                view.history_frecency = vec![0.0];
+                view.history_ready = true;
+            })
+            .unwrap();
+
+        DaemonMsg::RemoteContext(Some(crate::daemon::protocol::RemoteContext {
+            kind: crate::daemon::protocol::RemoteKind::Ssh,
+            argv: vec!["ssh".into(), "krsvr-gray-01".into()],
+            target: "krsvr-gray-01".into(),
+        }))
+        .encode(&mut daemon)
+        .unwrap();
+        for _ in 0..200 {
+            if window
+                .update(cx, |view, _, _| view.remote_context().is_some())
+                .unwrap()
+            {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+
+        window
+            .update(cx, |view, window, cx| {
+                view.follow_history_scope(cx);
+                assert!(
+                    view.history.is_empty() && !view.history_ready,
+                    "nested scope waits on the PTY dump"
+                );
+                assert!(
+                    view.terminal.history_probe_pipe().is_diverting(),
+                    "probe arms and diverts before the dump returns"
+                );
+
+                view.on_key_down(
+                    &KeyDownEvent {
+                        keystroke: key("ctrl-r"),
+                        is_held: false,
+                        prefer_character_input: false,
+                    },
+                    window,
+                    cx,
+                );
+                assert!(
+                    view.render_reverse_search_menu(cx).is_some(),
+                    "overlay paints while Loading host history…"
+                );
+            })
+            .unwrap();
+
+        // Simulate the remote shell's diverted dump arriving on the PTY.
+        let mut dump = Vec::new();
+        dump.extend_from_slice(super::super::history_probe::BEGIN_MARK);
+        dump.extend_from_slice(b"\n  100  hostname\n  101  systemctl status nginx\n");
+        dump.extend_from_slice(super::super::history_probe::END_MARK);
+        dump.extend_from_slice(b"\r\n");
+        DaemonMsg::Output(dump)
+            .encode(&mut daemon)
+            .unwrap();
+
+        for _ in 0..400 {
+            cx.run_until_parked();
+            let ready = window
+                .update(cx, |view, _, _| view.history_ready && !view.history.is_empty())
+                .unwrap();
+            if ready {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+
+        window
+            .update(cx, |view, _, cx| {
+                assert!(
+                    view.history.iter().any(|c| c == "hostname"),
+                    "PTY dump seeded active history: {:?}",
+                    view.history
+                );
+                assert!(
+                    view.history.iter().any(|c| c == "systemctl status nginx"),
+                    "PTY dump includes far-host commands"
+                );
+                assert!(
+                    !view.history.iter().any(|c| c == "from-jumper-only"),
+                    "must not resurrect jumper stash"
+                );
+                let rs = view.reverse_search.as_ref().expect("Ctrl+R still open");
+                assert!(
+                    rs.corpus().iter().any(|c| c == "hostname"),
+                    "open search refreshed onto host history"
+                );
+                assert!(view.render_reverse_search_menu(cx).is_some());
+            })
+            .unwrap();
+    }
+
     /// Active-scope history is what Ctrl+R lists. A foreign corpus parked in
     /// `history_cache` (previous hop / local) must not leak into the overlay.
     #[gpui::test]
@@ -16299,7 +16505,7 @@ mod gpui_tests {
                 view.focus_handle.focus(window, cx);
                 view.history = vec!["echo one".to_string(), "echo two".to_string()];
                 view.history_frecency = vec![1.0, 1.0];
-                view.start_reverse_search();
+                view.start_reverse_search(cx);
                 cx.notify();
             })
             .unwrap();
