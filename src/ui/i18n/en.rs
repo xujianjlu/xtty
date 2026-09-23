@@ -73,6 +73,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::SettingsNavTerminal => "Terminal",
         L10nKey::SettingsNavInput => "Input",
         L10nKey::SettingsNavSsh => "SSH",
+        L10nKey::SettingsNavPasswordTriggers => "Password triggers",
         L10nKey::SettingsNavAgents => "Agents",
         L10nKey::SettingsNavWindowTabs => "Window & Tabs",
         L10nKey::SettingsNavKeybindings => "Keybindings",
@@ -856,6 +857,70 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::SettingsSearchPortForwardingKeywords => {
             "ssh tunnel local remote dynamic socks forward rule"
         }
+        L10nKey::SettingsSearchPasswordTriggersKeywords => {
+            "password trigger autofill keychain credential prompt su sudo send enter"
+        }
+        L10nKey::SettingsSearchPasswordTriggerSendEnterKeywords => {
+            "send enter return autofill password trigger 自动回车"
+        }
+        L10nKey::SettingsPasswordTriggersIntro => "Password triggers",
+        L10nKey::SettingsPasswordTriggersIntroDesc => {
+            "When terminal output matches a rule, tty7 sends the matching secret from the system keychain. Secrets never go in the config file."
+        }
+        L10nKey::SettingsPasswordTriggerPattern => "Pattern",
+        L10nKey::SettingsPasswordTriggerPatternDesc => {
+            "Literal text or a regular expression matched against live PTY output."
+        }
+        L10nKey::SettingsPasswordTriggerPatternHint => "Password:",
+        L10nKey::SettingsPasswordTriggerPatternRequired => "Enter a pattern to match.",
+        L10nKey::SettingsPasswordTriggerRegex => "Regular expression",
+        L10nKey::SettingsPasswordTriggerRegexDesc => {
+            "Treat the pattern as a regex. Off matches the text literally."
+        }
+        L10nKey::SettingsPasswordTriggerLiteral => "Literal",
+        L10nKey::SettingsPasswordTriggerCredential => "Credential",
+        L10nKey::SettingsPasswordTriggerCredentialDesc => {
+            "Keychain account name in the tty7-password-trigger service."
+        }
+        L10nKey::SettingsPasswordTriggerCredentialHint => "su-search",
+        L10nKey::SettingsPasswordTriggerCredentialRequired => "Enter a keychain credential name.",
+        L10nKey::SettingsPasswordTriggerSendEnter => "Send Enter / 自动回车",
+        L10nKey::SettingsPasswordTriggerSendEnterDesc => {
+            "After the secret, also send Enter (CR). Turn off if the prompt waits for something else."
+        }
+        L10nKey::SettingsPasswordTriggerSendEnterShort => "Send Enter",
+        L10nKey::SettingsPasswordTriggerEnabled => "Enabled",
+        L10nKey::SettingsPasswordTriggerCooldown => "Cooldown (ms)",
+        L10nKey::SettingsPasswordTriggerCooldownDesc => {
+            "Minimum time between two fires of this rule."
+        }
+        L10nKey::SettingsPasswordTriggerEmpty => {
+            "No password triggers yet. Add a rule to autofill matching prompts."
+        }
+        L10nKey::SettingsPasswordTriggerBadRegex => {
+            "That pattern is not a valid regular expression."
+        }
+        L10nKey::SettingsPasswordTriggerBadCooldown => "Cooldown must be a number of milliseconds.",
+        L10nKey::SettingsPasswordTriggerSecretRequired => {
+            "Enter the secret to store in the keychain."
+        }
+        L10nKey::SettingsPasswordTriggerSecretKept => {
+            "Kept in the system keychain. Leave blank to keep the current secret."
+        }
+        L10nKey::SettingsPasswordTriggerSecretNeeded => {
+            "Stored in the system keychain as this credential — never in the config file."
+        }
+        L10nKey::SettingsPasswordTriggerSecretHintKeep => "Leave blank to keep",
+        L10nKey::SettingsPasswordTriggerSecretHintNew => "Secret to store",
+        L10nKey::SettingsPasswordTriggerDeleteTitle => "Delete “{name}”?",
+        L10nKey::SettingsPasswordTriggerDeleteBody => {
+            "The rule is removed from settings. Its keychain entry is deleted only if no other rule uses the same credential."
+        }
+        L10nKey::SettingsCouldntSaveTriggerSecret => {
+            "Could not save the secret for {account}: {error}"
+        }
+        L10nKey::SettingsNewPasswordTrigger => "New password trigger",
+        L10nKey::SettingsEditPasswordTrigger => "Edit password trigger",
         L10nKey::SettingsSearchProgramKeywords => {
             "shell binary zsh bash fish nu nushell pwsh powershell executable launch"
         }

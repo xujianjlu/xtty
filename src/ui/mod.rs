@@ -22,6 +22,7 @@ pub mod notice;
 pub mod palette;
 pub mod pane;
 pub mod pane_drag;
+pub mod password_triggers_settings;
 pub mod path_display;
 pub mod pending_pane;
 pub mod perf;

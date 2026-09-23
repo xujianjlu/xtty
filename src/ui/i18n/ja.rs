@@ -77,6 +77,7 @@ pub fn translate_ja(key: L10nKey) -> Option<&'static str> {
         L10nKey::SettingsNavTerminal => "ターミナル",
         L10nKey::SettingsNavInput => "入力",
         L10nKey::SettingsNavSsh => "SSH",
+        L10nKey::SettingsNavPasswordTriggers => "パスワード自動入力",
         L10nKey::SettingsNavAgents => "エージェント",
         L10nKey::SettingsNavWindowTabs => "ウィンドウとタブ",
         L10nKey::SettingsNavKeybindings => "キーバインド",
@@ -913,6 +914,66 @@ pub fn translate_ja(key: L10nKey) -> Option<&'static str> {
         L10nKey::SettingsSearchPortForwardingKeywords => {
             "ssh トンネル ローカル リモート ダイナミック socks フォワード ルール port forwarding ssh tunnel local remote dynamic forward rule"
         }
+        L10nKey::SettingsSearchPasswordTriggersKeywords => {
+            "パスワード 自動入力 トリガー キーチェーン credential prompt su sudo password trigger autofill keychain send enter"
+        }
+        L10nKey::SettingsSearchPasswordTriggerSendEnterKeywords => {
+            "Enter 送信 自動 Enter send enter password trigger"
+        }
+        L10nKey::SettingsPasswordTriggersIntro => "パスワード自動入力",
+        L10nKey::SettingsPasswordTriggersIntroDesc => {
+            "ターミナル出力がルールに一致すると、システムキーチェーンの秘密を送信します。秘密自体は設定ファイルに書きません。"
+        }
+        L10nKey::SettingsPasswordTriggerPattern => "パターン",
+        L10nKey::SettingsPasswordTriggerPatternDesc => {
+            "ライブ PTY 出力に対して照合するリテラル文字列または正規表現。"
+        }
+        L10nKey::SettingsPasswordTriggerPatternHint => "Password:",
+        L10nKey::SettingsPasswordTriggerPatternRequired => "照合するパターンを入力してください。",
+        L10nKey::SettingsPasswordTriggerRegex => "正規表現",
+        L10nKey::SettingsPasswordTriggerRegexDesc => "オンで正規表現、オフでリテラル照合。",
+        L10nKey::SettingsPasswordTriggerLiteral => "リテラル",
+        L10nKey::SettingsPasswordTriggerCredential => "資格情報名",
+        L10nKey::SettingsPasswordTriggerCredentialDesc => {
+            "キーチェーンの tty7-password-trigger サービス内のアカウント名。"
+        }
+        L10nKey::SettingsPasswordTriggerCredentialHint => "su-search",
+        L10nKey::SettingsPasswordTriggerCredentialRequired => {
+            "キーチェーンの資格情報名を入力してください。"
+        }
+        L10nKey::SettingsPasswordTriggerSendEnter => "Enter を送信 / Send Enter",
+        L10nKey::SettingsPasswordTriggerSendEnterDesc => {
+            "秘密のあとに Enter（CR）も送ります。別の入力を待つ場合はオフにしてください。"
+        }
+        L10nKey::SettingsPasswordTriggerSendEnterShort => "Enter 送信",
+        L10nKey::SettingsPasswordTriggerEnabled => "有効",
+        L10nKey::SettingsPasswordTriggerCooldown => "クールダウン（ms）",
+        L10nKey::SettingsPasswordTriggerCooldownDesc => {
+            "同じルールが連続して発火するまでの最短間隔。"
+        }
+        L10nKey::SettingsPasswordTriggerEmpty => {
+            "パスワードトリガーはまだありません。ルールを追加すると一致するプロンプトを自動入力します。"
+        }
+        L10nKey::SettingsPasswordTriggerBadRegex => "そのパターンは有効な正規表現ではありません。",
+        L10nKey::SettingsPasswordTriggerBadCooldown => "クールダウンはミリ秒の数値にしてください。",
+        L10nKey::SettingsPasswordTriggerSecretRequired => {
+            "キーチェーンに保存する秘密を入力してください。"
+        }
+        L10nKey::SettingsPasswordTriggerSecretKept => {
+            "システムキーチェーンに保存済みです。空欄のままにすると現在の秘密を維持します。"
+        }
+        L10nKey::SettingsPasswordTriggerSecretNeeded => {
+            "この資格情報名でシステムキーチェーンに保存します。設定ファイルには書きません。"
+        }
+        L10nKey::SettingsPasswordTriggerSecretHintKeep => "空欄で維持",
+        L10nKey::SettingsPasswordTriggerSecretHintNew => "保存する秘密",
+        L10nKey::SettingsPasswordTriggerDeleteTitle => "「{name}」を削除しますか？",
+        L10nKey::SettingsPasswordTriggerDeleteBody => {
+            "ルールは設定から削除されます。同じ資格情報を使う他のルールがない場合のみ、キーチェーン項目も削除します。"
+        }
+        L10nKey::SettingsCouldntSaveTriggerSecret => "{account} の秘密を保存できません: {error}",
+        L10nKey::SettingsNewPasswordTrigger => "新しいパスワードトリガー",
+        L10nKey::SettingsEditPasswordTrigger => "パスワードトリガーを編集",
         L10nKey::SettingsSearchProgramKeywords => {
             "シェル バイナリ zsh bash fish nu nushell pwsh powershell 実行可能 起動 program shell binary executable launch"
         }

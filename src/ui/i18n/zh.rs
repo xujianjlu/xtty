@@ -69,6 +69,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::SettingsNavTerminal => "终端",
         L10nKey::SettingsNavInput => "输入",
         L10nKey::SettingsNavSsh => "SSH",
+        L10nKey::SettingsNavPasswordTriggers => "密码自动填入",
         L10nKey::SettingsNavAgents => "Agents",
         L10nKey::SettingsNavWindowTabs => "窗口与标签页",
         L10nKey::SettingsNavKeybindings => "按键绑定",
@@ -810,6 +811,58 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::SettingsSearchPortForwardingKeywords => {
             "端口转发 SSH 隧道 本地 远程 动态 SOCKS 转发 port forwarding ssh tunnel local remote"
         }
+        L10nKey::SettingsSearchPasswordTriggersKeywords => {
+            "密码 自动填入 触发 钥匙串 credential prompt su sudo password trigger autofill keychain send enter 自动回车"
+        }
+        L10nKey::SettingsSearchPasswordTriggerSendEnterKeywords => {
+            "自动回车 回车 Enter send enter password trigger"
+        }
+        L10nKey::SettingsPasswordTriggersIntro => "密码自动填入",
+        L10nKey::SettingsPasswordTriggersIntroDesc => {
+            "终端输出匹配规则时，tty7 会从系统钥匙串取出对应密钥并发送。密钥本身不会写入配置文件。"
+        }
+        L10nKey::SettingsPasswordTriggerPattern => "匹配模式",
+        L10nKey::SettingsPasswordTriggerPatternDesc => {
+            "在实时 PTY 输出中匹配的字面文本或正则表达式。"
+        }
+        L10nKey::SettingsPasswordTriggerPatternHint => "Password:",
+        L10nKey::SettingsPasswordTriggerPatternRequired => "请填写匹配模式。",
+        L10nKey::SettingsPasswordTriggerRegex => "正则表达式",
+        L10nKey::SettingsPasswordTriggerRegexDesc => "开启后按正则匹配；关闭则按字面文本匹配。",
+        L10nKey::SettingsPasswordTriggerLiteral => "字面",
+        L10nKey::SettingsPasswordTriggerCredential => "凭证名",
+        L10nKey::SettingsPasswordTriggerCredentialDesc => {
+            "钥匙串服务 tty7-password-trigger 下的账户名。"
+        }
+        L10nKey::SettingsPasswordTriggerCredentialHint => "su-search",
+        L10nKey::SettingsPasswordTriggerCredentialRequired => "请填写钥匙串凭证名。",
+        L10nKey::SettingsPasswordTriggerSendEnter => "自动回车 / Send Enter",
+        L10nKey::SettingsPasswordTriggerSendEnterDesc => {
+            "发送密钥后再发送回车（CR）。若提示符需要其它输入，请关闭。"
+        }
+        L10nKey::SettingsPasswordTriggerSendEnterShort => "自动回车",
+        L10nKey::SettingsPasswordTriggerEnabled => "启用",
+        L10nKey::SettingsPasswordTriggerCooldown => "冷却时间（毫秒）",
+        L10nKey::SettingsPasswordTriggerCooldownDesc => "同一规则两次触发之间的最短间隔。",
+        L10nKey::SettingsPasswordTriggerEmpty => {
+            "还没有密码触发规则。添加一条即可在匹配提示时自动填入。"
+        }
+        L10nKey::SettingsPasswordTriggerBadRegex => "该模式不是有效的正则表达式。",
+        L10nKey::SettingsPasswordTriggerBadCooldown => "冷却时间必须是毫秒数。",
+        L10nKey::SettingsPasswordTriggerSecretRequired => "请输入要存入钥匙串的密钥。",
+        L10nKey::SettingsPasswordTriggerSecretKept => "已保存在系统钥匙串。留空则保留现有密钥。",
+        L10nKey::SettingsPasswordTriggerSecretNeeded => {
+            "存入系统钥匙串（凭证名如上），不会写入配置文件。"
+        }
+        L10nKey::SettingsPasswordTriggerSecretHintKeep => "留空则保留",
+        L10nKey::SettingsPasswordTriggerSecretHintNew => "要保存的密钥",
+        L10nKey::SettingsPasswordTriggerDeleteTitle => "删除“{name}”？",
+        L10nKey::SettingsPasswordTriggerDeleteBody => {
+            "规则将从设置中移除。仅当没有其它规则使用同一凭证时，才会删除钥匙串条目。"
+        }
+        L10nKey::SettingsCouldntSaveTriggerSecret => "无法保存 {account} 的密钥：{error}",
+        L10nKey::SettingsNewPasswordTrigger => "新建密码触发规则",
+        L10nKey::SettingsEditPasswordTrigger => "编辑密码触发规则",
         L10nKey::SettingsSearchProgramKeywords => {
             "程序 shell 二进制 zsh bash fish nu nushell pwsh powershell 可执行文件 启动 program shell binary launch"
         }

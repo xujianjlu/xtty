@@ -5674,6 +5674,7 @@ impl Tty7App {
             ssh_filter,
             ssh_collapsed_groups: std::collections::HashSet::new(),
             ssh_quick_connect,
+            password_trigger_form: None,
             agent_hooks_host: crate::ui::host_ops::HostId::LOCAL,
             agent_hooks_states: crate::ui::settings::AgentHooksView::Loading,
             agent_hooks_seq: 0,
