@@ -12838,7 +12838,10 @@ mod gpui_tests {
         let (window, _daemon) = harness(cx);
         window
             .update(cx, |view, window, cx| {
-                assert!(view.history.is_empty());
+                // Harness panes may already have seeded shell history; force
+                // an empty corpus so this covers the empty-state panel path.
+                view.history.clear();
+                view.history_frecency.clear();
                 view.history_cache.clear();
                 view.on_key_down(
                     &KeyDownEvent {
@@ -12853,7 +12856,7 @@ mod gpui_tests {
                 assert!(
                     view.reverse_search
                         .as_ref()
-                        .is_some_and(|rs| rs.matches().is_empty())
+                        .is_some_and(|rs| rs.matches().is_empty() && rs.corpus().is_empty())
                 );
                 assert!(
                     view.render_reverse_search_menu(cx).is_some(),
