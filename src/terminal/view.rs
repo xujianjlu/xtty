@@ -4165,6 +4165,13 @@ impl TerminalView {
                 view.history_ready = true;
                 let cwd = view.ranked_cwd.clone();
                 view.rerank_history(cwd.as_deref());
+                // Ctrl+R may have opened while the host files were still
+                // loading; refresh the open search so the corpus is this
+                // machine's shell history, not an empty snapshot.
+                if view.reverse_search.is_some() {
+                    let (corpus, frecency) = view.reverse_search_corpus();
+                    view.reverse_search = Some(ReverseSearch::new(&corpus, &frecency));
+                }
                 cx.notify();
             })
             .ok();
@@ -4179,13 +4186,14 @@ impl TerminalView {
         if self.history_scope.is_local() || self.host_id.is_local() {
             return Vec::new();
         }
-        // The Host reaches the workspace machine's home directory and nothing
-        // beyond it. A pane that has ssh'ed onward from there (remote_context)
-        // is scoped to the *inner* target, and seeding that scope from the
-        // workspace host's ~/.zsh_history would offer commands from the wrong
-        // box — the exact confusion scoping exists to prevent. Those panes
-        // start from what tty7 recorded for the inner target, like bare ssh.
-        if self.remote_context().is_some() {
+        // Nested process-table `ssh`/`su` (RemoteKind::Ssh): Host SFTP still
+        // reaches only the workspace machine. Seeding the inner scope from
+        // that home would list the wrong box's commands. NativeSsh keeps Host
+        // on the dialled machine — read that machine's shell history files.
+        if self
+            .remote_context()
+            .is_some_and(|c| c.kind == crate::daemon::protocol::RemoteKind::Ssh)
+        {
             return Vec::new();
         }
         let Some(host) = self.host(cx) else {
@@ -5067,23 +5075,14 @@ impl TerminalView {
         .detach();
     }
 
-    /// Lines Ctrl+R ranks against for this open. The active scope is preferred;
-    /// after a nested ssh/jumper/su the scope is intentionally empty (no OSC,
-    /// no far-end history files), so fall back to stashed scopes from earlier
-    /// in the same pane — otherwise the overlay opens with zero matches and
-    /// looks like bare bash `(reverse-i-search)`.
+    /// Lines Ctrl+R ranks against for this open — only the **active** host
+    /// scope. Do not pull earlier hops or Mac-local stash into the corpus:
+    /// an empty/loading remote scope must show empty, not another machine's
+    /// commands disguised as the current host's history.
     fn reverse_search_corpus(&self) -> (Vec<String>, Vec<f64>) {
-        if !self.history.is_empty() {
-            let mut frecency = self.history_frecency.clone();
-            frecency.resize(self.history.len(), 0.0);
-            return (self.history.clone(), frecency);
-        }
-        let mut entries = Vec::new();
-        for (_, cached) in self.history_cache.iter().rev() {
-            entries.extend(cached.entries.iter().cloned());
-        }
-        let frecency = vec![0.0; entries.len()];
-        (entries, frecency)
+        let mut frecency = self.history_frecency.clone();
+        frecency.resize(self.history.len(), 0.0);
+        (self.history.clone(), frecency)
     }
 
     fn start_reverse_search(&mut self) {
@@ -7047,8 +7046,10 @@ impl TerminalView {
         // the `(reverse-i-search)` label — visually indistinguishable from
         // bash's native mode.
         let (place_above, rows, hidden_above, hidden_below) = if matches.is_empty() {
-            let empty_label = if rs.corpus().is_empty() {
-                "No history in this session yet"
+            let empty_label = if !self.history_ready {
+                "Loading history…"
+            } else if rs.corpus().is_empty() {
+                "No history on this host yet"
             } else {
                 "No matching history"
             };
@@ -12771,12 +12772,12 @@ mod gpui_tests {
     }
 
     /// After jumper/nested ssh, `follow_history_scope` clears the active list
-    /// (far host has no OSC / no readable history file). PR#11 still opened
-    /// reverse-search, but the corpus was empty so the match panel returned
-    /// None — users only saw a `(reverse-i-search)` label that looked like
-    /// bash. Fall back to stashed scopes and keep painting the panel.
+    /// (far host has no OSC / no readable history file through workspace
+    /// SFTP). Ctrl+R must still open and paint a tty7 panel — but must **not**
+    /// silently list earlier-hop / Mac-local stash as if it were this host's
+    /// shell history.
     #[gpui::test]
-    fn history_search_after_jumper_uses_stashed_scope_history(cx: &mut TestAppContext) {
+    fn history_search_after_jumper_does_not_use_stashed_scope_history(cx: &mut TestAppContext) {
         crate::core::config::pin_test_config_dir();
 
         let (window, mut daemon) = harness(cx);
@@ -12816,6 +12817,10 @@ mod gpui_tests {
                     view.history.is_empty(),
                     "nested ssh scopes start with an empty active list"
                 );
+                assert!(
+                    !view.history_cache.is_empty(),
+                    "previous hop was stashed for when we return — not for Ctrl+R"
+                );
                 assert!(!view.input_active(), "inner hop has no OSC marks");
 
                 view.on_key_down(
@@ -12829,50 +12834,76 @@ mod gpui_tests {
                 );
                 let rs = view.reverse_search.as_ref().expect("Ctrl+R opens history");
                 assert!(
-                    !rs.matches().is_empty(),
-                    "stashed jumper/local history must still populate the menu"
-                );
-                assert_eq!(
-                    rs.selected_line(),
-                    Some("vim scon_agentic.py"),
-                    "newest stashed command is selected first"
+                    rs.corpus().is_empty() && rs.matches().is_empty(),
+                    "must not surface stashed jumper/local history on the nested host"
                 );
                 assert!(
                     view.render_reverse_search_menu(cx).is_some(),
-                    "the floating match panel must paint after jumper"
+                    "empty search must still paint a tty7 panel after jumper"
                 );
+            })
+            .unwrap();
+    }
 
-                type_char(view, "j", window, cx);
-                type_char(view, "o", window, cx);
-                assert_eq!(
-                    view.reverse_search
-                        .as_ref()
-                        .and_then(|rs| rs.selected_line()),
-                    Some("jobs")
-                );
+    /// Active-scope history is what Ctrl+R lists. A foreign corpus parked in
+    /// `history_cache` (previous hop / local) must not leak into the overlay.
+    #[gpui::test]
+    fn history_search_uses_active_host_history_not_cache(cx: &mut TestAppContext) {
+        crate::core::config::pin_test_config_dir();
+
+        let (window, _daemon) = harness(cx);
+        window
+            .update(cx, |view, window, cx| {
+                view.history_cache.push((
+                    super::super::history::Scope::remote("other-box"),
+                    super::super::history::History {
+                        entries: vec![
+                            "rm -rf / on-other-box".to_string(),
+                            "echo foreign".to_string(),
+                        ],
+                        counts: Default::default(),
+                        cwds: Default::default(),
+                        meta: Default::default(),
+                    },
+                ));
+                view.history = vec![
+                    "hostname".to_string(),
+                    "uptime".to_string(),
+                    "echo this-host".to_string(),
+                ];
+                view.history_frecency = vec![0.0; view.history.len()];
+                view.history_ready = true;
 
                 view.on_key_down(
                     &KeyDownEvent {
-                        keystroke: key("enter"),
+                        keystroke: key("ctrl-r"),
                         is_held: false,
                         prefer_character_input: false,
                     },
                     window,
                     cx,
                 );
-                assert!(view.reverse_search.is_none());
-                assert!(view.cmd.is_empty(), "no inline editor after jumper");
+                let rs = view.reverse_search.as_ref().expect("Ctrl+R opens");
+                assert!(
+                    rs.corpus()
+                        .iter()
+                        .all(|e| e != "echo foreign" && e != "rm -rf / on-other-box"),
+                    "cached other-host commands must not enter the corpus: {:?}",
+                    rs.corpus()
+                );
+                assert_eq!(
+                    rs.corpus(),
+                    &[
+                        "hostname".to_string(),
+                        "uptime".to_string(),
+                        "echo this-host".to_string()
+                    ],
+                    "corpus is the active host list only"
+                );
+                assert_eq!(rs.selected_line(), Some("echo this-host"));
+                assert!(view.render_reverse_search_menu(cx).is_some());
             })
             .unwrap();
-        assert_eq!(
-            next_input_until_timeout(&mut daemon),
-            Some(b"jobs".to_vec()),
-            "Accept types the stashed selection into the nested PTY"
-        );
-        assert!(
-            next_input_until_timeout(&mut daemon).is_none(),
-            "query keystrokes must not leak to the nested shell"
-        );
     }
 
     #[gpui::test]
@@ -12887,6 +12918,7 @@ mod gpui_tests {
                 view.history.clear();
                 view.history_frecency.clear();
                 view.history_cache.clear();
+                view.history_ready = true;
                 view.on_key_down(
                     &KeyDownEvent {
                         keystroke: key("ctrl-r"),
