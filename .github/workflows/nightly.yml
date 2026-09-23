@@ -138,7 +138,7 @@ jobs:
           mkdir -p "$VERIFY_ROOT"
           /usr/bin/ditto -x -k "$ZIP" "$VERIFY_ROOT"
           APP="$VERIFY_ROOT/tty7.app"
-          test -x "$APP/Contents/MacOS/tty7-updater"
+          test -x "$APP/Contents/MacOS/xtty-updater"
           ACTUAL_VERSION="$(/usr/libexec/PlistBuddy \
             -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")"
           test "$ACTUAL_VERSION" = "$VERSION"
