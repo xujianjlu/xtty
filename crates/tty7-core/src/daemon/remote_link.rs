@@ -158,10 +158,10 @@ pub fn remote_control_socket(env: &RemoteEnv) -> Option<String> {
     }
 
     // The remote server is launched with `--stdio` and no `--config-dir`, so it
-    // opens its control socket in the config dir — `$TTY7_CONFIG_DIR` if the
-    // remote sets one, otherwise `$HOME/.config/xtty`. This has to mirror
-    // `host::server::control_socket_path` exactly: it is the same rule applied
-    // to an environment we probed instead of our own.
+    // opens its control socket in the config dir — `$XTTY_CONFIG_DIR` (legacy
+    // `$TTY7_CONFIG_DIR`) if the remote sets one, otherwise `$HOME/.config/xtty`.
+    // This has to mirror `host::server::control_socket_path` exactly: it is the
+    // same rule applied to an environment we probed instead of our own.
     let dir = match env.config_dir.as_deref().filter(|d| !d.is_empty()) {
         Some(cfg) => cfg.to_string(),
         None => {
@@ -262,7 +262,7 @@ mod tests {
 
     #[test]
     fn pane_channel_marks_the_bridge_command() {
-        let base = "/home/me/.local/share/tty7/bin/tty7-server";
+        let base = "/home/me/.local/share/xtty/bin/xtty-server";
         assert_eq!(RouteChannel::Control.bridge_command(base), base);
         assert_eq!(
             RouteChannel::Pane.bridge_command(base),
@@ -382,7 +382,7 @@ mod tests {
         assert_eq!(
             remote_control_socket(&explicit_cfg).as_deref(),
             Some("/home/me/.config/tty7/control.sock"),
-            "an explicit $TTY7_CONFIG_DIR names the directory"
+            "an explicit $TTY7_CONFIG_DIR / $XTTY_CONFIG_DIR names the directory"
         );
 
         let trailing = RemoteEnv {
@@ -400,8 +400,8 @@ mod tests {
         };
         assert_eq!(
             remote_control_socket(&home_only).as_deref(),
-            Some("/home/me/.config/tty7/control.sock"),
-            "with no $TTY7_CONFIG_DIR the remote server uses $HOME/.config/tty7"
+            Some("/home/me/.config/xtty/control.sock"),
+            "with no $XTTY_CONFIG_DIR / $TTY7_CONFIG_DIR the remote server uses $HOME/.config/xtty"
         );
 
         assert_eq!(remote_control_socket(&RemoteEnv::default()), None);

@@ -878,7 +878,7 @@ mod tests {
             version: "26.7.5".into(),
             asset: crate::daemon::install::asset::ASSET_LINUX_AARCH64,
             source_url: "https://example.invalid/tty7-server".into(),
-            remote_path: "/home/me/.local/share/tty7/bin/tty7-server-26.7.5".into(),
+            remote_path: "/home/me/.local/share/xtty/bin/xtty-server-26.7.5".into(),
             size_bytes: 12_345_678,
             sha256: "abc123".into(),
         }

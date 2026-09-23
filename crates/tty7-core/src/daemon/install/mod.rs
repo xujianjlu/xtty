@@ -535,15 +535,15 @@ impl std::fmt::Display for InstallError {
             ),
             Self::Declined { host, path } => write!(
                 f,
-                "installing tty7-server at {path} on {host} was not confirmed; nothing was written"
+                "installing xtty-server at {path} on {host} was not confirmed; nothing was written"
             ),
             Self::Write { path, reason } => {
                 write!(f, "could not write {path} on the remote machine: {reason}")
             }
-            Self::Launch { reason } => write!(f, "the remote tty7-server did not start: {reason}"),
+            Self::Launch { reason } => write!(f, "the remote xtty-server did not start: {reason}"),
             Self::NoServerToRestart { host, path } => write!(
                 f,
-                "{host} has no tty7-server at {path} for this build to start, so nothing was \
+                "{host} has no xtty-server at {path} for this build to start, so nothing was \
                  stopped; install the matching server there and it will be started as part of that"
             ),
             Self::DialectMismatch {
@@ -557,7 +557,7 @@ impl std::fmt::Display for InstallError {
                 };
                 write!(
                     f,
-                    "this build needs a tty7-server speaking control v{} and protocol v{}, \
+                    "this build needs an xtty-server speaking control v{} and protocol v{}, \
                      but {origin} speaks {spoken}; nothing was installed. \
                      Point {} at a directory holding a matching server binary.",
                     wanted.control,
@@ -935,16 +935,17 @@ impl<'a> Installer<'a> {
         ReleaseDownload { fetch }.load_with_progress(&self.version, asset, &on_progress)
     }
 
-    /// Whether this machine has never had a tty7 server on it — the question
-    /// the consent prompt turns on.
+    /// Whether this machine has never had an xtty/tty7 server on it — the
+    /// question the consent prompt turns on.
     ///
-    /// A launch leaves `tty7-server-c8p6.startup.log` and `.startup.exit`
-    /// beside the binary, and both begin the same way it does. Counting one as
-    /// a server would let someone who deleted the binary to uninstall tty7 get
-    /// a new one downloaded and written without ever being asked.
+    /// A launch leaves `xtty-server-c8p6.startup.log` (or a legacy
+    /// `tty7-server-…` name) and `.startup.exit` beside the binary, and both
+    /// begin the same way the binary does. Counting one as a server would let
+    /// someone who deleted the binary to uninstall get a new one downloaded
+    /// and written without ever being asked.
     fn is_first_install(&self, paths: &RemotePaths) -> bool {
         let a_server = |name: &String| {
-            name.starts_with("tty7-server-")
+            (name.starts_with("xtty-server-") || name.starts_with("tty7-server-"))
                 && !name.ends_with(STARTUP_LOG_SUFFIX)
                 && !name.ends_with(STARTUP_EXIT_SUFFIX)
         };
@@ -1423,7 +1424,7 @@ pub fn ensure_remote_server_labeled(conn: &Arc<SshConnection>, host: &str) -> io
     let mut slot = conn.proved_server();
     if let Some(known) = slot.as_ref() {
         log::debug!(
-            "remote {host}: tty7-server was already proved at {} on this connection",
+            "remote {host}: xtty-server was already proved at {} on this connection",
             known.binary,
         );
     }
@@ -1436,9 +1437,9 @@ pub fn ensure_remote_server_labeled(conn: &Arc<SshConnection>, host: &str) -> io
         log::info!(
             "remote {host}: {} at {} ({}{})",
             if report.installed {
-                "installed tty7-server"
+                "installed xtty-server"
             } else {
-                "tty7-server already present"
+                "xtty-server already present"
             },
             report.paths.binary,
             if report.launched {
