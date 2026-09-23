@@ -8484,7 +8484,7 @@ mod tests {
 
         // Nothing has spoken — this is the pane a directory stands in for.
         assert_eq!(stated_title("xtty"), None);
-        assert_eq!(stated_title("  tty7  "), None);
+        assert_eq!(stated_title("  xtty  "), None);
         assert_eq!(stated_title("   "), None);
 
         // A title from the program running in it.
@@ -8497,8 +8497,8 @@ mod tests {
         assert_eq!(stated_title("prod-web"), Some("prod-web"));
         // So does the state a finished pane is left showing.
         assert_eq!(
-            stated_title("tty7 — process exited"),
-            Some("tty7 — process exited")
+            stated_title("xtty — process exited"),
+            Some("xtty — process exited")
         );
     }
 
@@ -8636,15 +8636,15 @@ mod tests {
 
     #[test]
     fn a_notification_title_keeps_at_most_two_segments() {
-        let ws = || Some("tty7".to_string());
+        let ws = || Some("xtty".to_string());
         assert_eq!(
             compose_notification_title(None, Some("build-box".into()), ws()),
-            "build-box · tty7"
+            "build-box · xtty"
         );
         // An agent takes the machine's place rather than adding a third part.
         assert_eq!(
             compose_notification_title(Some("Claude".into()), Some("build-box".into()), ws()),
-            "Claude · tty7"
+            "Claude · xtty"
         );
         // A local pane has no machine label; a nameless workspace has no name.
         assert_eq!(compose_notification_title(None, None, ws()), "xtty");
@@ -14250,11 +14250,20 @@ mod gpui_tests {
         window
             .update(cx, |view, _, cx| {
                 assert!(view.input_active(), "prompt report engages the editor");
-                view.history = ["git status", "cargo build --release", "echo hello"]
-                    .into_iter()
-                    .map(String::from)
-                    .collect();
-                view.history_frecency = vec![0.0; view.history.len()];
+                view.handle_editor_key(&key("ctrl-r"), cx);
+                assert!(view.reverse_search.is_some(), "Ctrl+R opens history");
+            })
+            .unwrap();
+
+        drain_history_probe_write(&mut daemon);
+        inject_pty_history_dump(
+            &mut daemon,
+            &["git status", "cargo build --release", "echo hello"],
+        );
+        wait_history_probe_ready(&window, cx);
+
+        window
+            .update(cx, |view, _, cx| {
                 view.history_meta.insert(
                     "cargo build --release".into(),
                     super::super::history::EntryMeta {
@@ -14262,7 +14271,6 @@ mod gpui_tests {
                         exit: Some(1),
                     },
                 );
-                view.handle_editor_key(&key("ctrl-r"), cx);
                 view.commit_text("c", cx);
                 assert!(
                     view.reverse_search
@@ -15362,11 +15370,11 @@ mod gpui_tests {
             .update(cx, |view, _, cx| {
                 bind_to_a_disconnected_remote_workspace(view, cx);
                 view.handle_event(AlacEvent::Exit, cx);
-                assert_eq!(view.title, "tty7 — disconnected");
+                assert_eq!(view.title, "xtty — disconnected");
 
                 view.set_workspace(None);
                 view.handle_event(AlacEvent::Exit, cx);
-                assert_eq!(view.title, "tty7 — process exited");
+                assert_eq!(view.title, "xtty — process exited");
             })
             .unwrap();
     }
@@ -16056,7 +16064,7 @@ mod gpui_tests {
             .update(cx, |view, _, cx| {
                 view.handle_event(AlacEvent::Exit, cx);
                 assert!(view.terminal.exited);
-                assert_eq!(view.title, "tty7 — process exited");
+                assert_eq!(view.title, "xtty — process exited");
             })
             .unwrap();
     }
