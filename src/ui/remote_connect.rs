@@ -786,9 +786,9 @@ mod tests {
         InstallRequest {
             host: "me@build-box:22".into(),
             version: "0.9.1".into(),
-            asset: "tty7-server-linux-x86_64-musl",
-            source_url: "https://example.invalid/v0.9.1/tty7-server".into(),
-            remote_path: "/home/me/.local/share/tty7/bin/tty7-server-0.9.1".into(),
+            asset: "xtty-server-linux-x86_64-musl",
+            source_url: "https://example.invalid/v0.9.1/xtty-server".into(),
+            remote_path: "/home/me/.local/share/xtty/bin/xtty-server-0.9.1".into(),
             size_bytes: 9_437_184,
             sha256: "abc123".into(),
         }
@@ -1062,7 +1062,7 @@ mod tests {
         let m = MismatchedRemoteDaemon {
             host: "me@build-box:22".into(),
             running_version: Some("0.8.0".into()),
-            running_exe: Some("/home/me/.local/share/tty7/bin/tty7-server-0.8.0".into()),
+            running_exe: Some("/home/me/.local/share/xtty/bin/xtty-server-0.8.0".into()),
             wanted_version: "0.9.1".into(),
         };
         let detail = mismatch_detail(&m);

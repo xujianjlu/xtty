@@ -130,7 +130,7 @@ fn a_seat_holder_with_no_pidfile_is_still_found_and_reaped() {
     let dir = pinned_dir();
     clear_stale_files(dir);
 
-    let child = spawn_daemon_from(Path::new(env!("CARGO_BIN_EXE_tty7-server")), dir);
+    let child = spawn_daemon_from(Path::new(env!("CARGO_BIN_EXE_xtty-server")), dir);
     let pid = child.id();
     await_ready(dir);
     assert_eq!(
@@ -157,7 +157,7 @@ fn a_seat_holder_with_no_pidfile_is_still_found_and_reaped() {
 
     // The user-visible acceptance: the next launch gets the seat instead of
     // standing down and timing out red.
-    let second = spawn_daemon_from(Path::new(env!("CARGO_BIN_EXE_tty7-server")), dir);
+    let second = spawn_daemon_from(Path::new(env!("CARGO_BIN_EXE_xtty-server")), dir);
     let second_pid = second.id();
     await_ready(dir);
     let waiter = collect_on_exit(second);
@@ -175,7 +175,7 @@ fn reap_stranded_clears_a_seat_holder_with_no_pidfile() {
     let dir = pinned_dir();
     clear_stale_files(dir);
 
-    let child = spawn_daemon_from(Path::new(env!("CARGO_BIN_EXE_tty7-server")), dir);
+    let child = spawn_daemon_from(Path::new(env!("CARGO_BIN_EXE_xtty-server")), dir);
     let pid = child.id();
     await_ready(dir);
     let waiter = collect_on_exit(child);
@@ -207,7 +207,7 @@ fn a_holder_that_answers_the_handshake_is_left_alone() {
     let dir = pinned_dir();
     clear_stale_files(dir);
 
-    let child = spawn_daemon_from(Path::new(env!("CARGO_BIN_EXE_tty7-server")), dir);
+    let child = spawn_daemon_from(Path::new(env!("CARGO_BIN_EXE_xtty-server")), dir);
     let pid = child.id();
     await_ready(dir);
     let waiter = collect_on_exit(child);
@@ -238,7 +238,7 @@ fn a_connectable_holder_that_answers_nothing_is_still_reaped() {
     let dir = pinned_dir();
     clear_stale_files(dir);
 
-    let child = spawn_daemon_from(Path::new(env!("CARGO_BIN_EXE_tty7-server")), dir);
+    let child = spawn_daemon_from(Path::new(env!("CARGO_BIN_EXE_xtty-server")), dir);
     let pid = child.id();
     await_ready(dir);
     let waiter = collect_on_exit(child);
@@ -279,7 +279,7 @@ fn a_daemon_running_from_a_deleted_executable_is_still_ours_to_reap() {
     let bin_dir = dir.join("bin");
     std::fs::create_dir_all(&bin_dir).unwrap();
     let copied = bin_dir.join("tty7-server");
-    std::fs::copy(env!("CARGO_BIN_EXE_tty7-server"), &copied).unwrap();
+    std::fs::copy(env!("CARGO_BIN_EXE_xtty-server"), &copied).unwrap();
 
     let child = spawn_daemon_from(&copied, dir);
     let pid = child.id();

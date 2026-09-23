@@ -2466,7 +2466,7 @@ mod tests {
                 cx,
                 host,
                 &target,
-                Err("the remote tty7-server did not start".into()),
+                Err("the remote xtty-server did not start".into()),
             );
 
             assert!(

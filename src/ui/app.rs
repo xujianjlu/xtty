@@ -260,9 +260,9 @@ pub(crate) const TILE_GLYPH_LINE: f32 = 16.;
 pub(crate) const TILE_PAD: f32 = (TILE_SIZE - TILE_GLYPH) / 2.;
 pub(crate) const TILE_PAD_SM: f32 = (TILE_SIZE_SM - TILE_GLYPH_SM) / 2.;
 
-const DOCS_URL: &str = "https://github.com/xujianjlu/tty7#readme";
+const DOCS_URL: &str = "https://github.com/xujianjlu/xtty#readme";
 const DISCORD_URL: &str = "https://discord.gg/s3dethqz2V";
-const ISSUES_URL: &str = "https://github.com/xujianjlu/tty7/issues/new";
+const ISSUES_URL: &str = "https://github.com/xujianjlu/xtty/issues/new";
 
 pub(crate) const CONTENT_INSET: f32 = 12.;
 
@@ -3424,7 +3424,7 @@ impl Tty7App {
             .get(self.workspace)
             .filter(|w| crate::ui::machine_mirror::pane_count(cx, w).unwrap_or(0) > 0)
             .and_then(|w| crate::ui::machine_mirror::display_name(cx, w))
-            .unwrap_or_else(|| "tty7".to_string());
+            .unwrap_or_else(|| "xtty".to_string());
         if *self.window_title.borrow() == title {
             return;
         }
@@ -5500,7 +5500,7 @@ impl Tty7App {
 
     fn deliver_agent_prompt(&mut self, prompt: &str, window: &mut Window, cx: &mut Context<Self>) {
         let Some(target) = self.agent_target_leaf(cx) else {
-            crate::terminal::notify_desktop(Some("tty7"), t(L10nKey::AppNoRunningCodingAgent));
+            crate::terminal::notify_desktop(Some("xtty"), t(L10nKey::AppNoRunningCodingAgent));
             return;
         };
         target.read(cx).send_agent_prompt(prompt);
@@ -5523,7 +5523,7 @@ impl Tty7App {
             None => (None, None),
         };
         let Some(selection) = selection else {
-            crate::terminal::notify_desktop(Some("tty7"), t(L10nKey::AppNothingSelected));
+            crate::terminal::notify_desktop(Some("xtty"), t(L10nKey::AppNothingSelected));
             return;
         };
         let cwd = cwd.map(|c| c.to_string_lossy().into_owned());
@@ -5544,7 +5544,7 @@ impl Tty7App {
             Some((view.host(cx)?, view.host_cwd()?))
         });
         let Some((host, cwd)) = target else {
-            crate::terminal::notify_desktop(Some("tty7"), t(L10nKey::AppPaneNoKnownDirectory));
+            crate::terminal::notify_desktop(Some("xtty"), t(L10nKey::AppPaneNoKnownDirectory));
             return;
         };
         crate::ui::host_ops::HostOps::run_in(
@@ -5566,7 +5566,7 @@ impl Tty7App {
                 match crate::core::agent_prompt::build_diff_review_prompt(&diff, Some(&cwd_s)) {
                     Some(prompt) => this.deliver_agent_prompt(&prompt, window, cx),
                     None => crate::terminal::notify_desktop(
-                        Some("tty7"),
+                        Some("xtty"),
                         &t_fmt(L10nKey::AppNoUncommittedChanges, &[("cwd", &cwd_s)]),
                     ),
                 }
@@ -5674,6 +5674,7 @@ impl Tty7App {
             ssh_filter,
             ssh_collapsed_groups: std::collections::HashSet::new(),
             ssh_quick_connect,
+            password_trigger_form: None,
             agent_hooks_host: crate::ui::host_ops::HostId::LOCAL,
             agent_hooks_states: crate::ui::settings::AgentHooksView::Loading,
             agent_hooks_seq: 0,
@@ -6431,6 +6432,12 @@ impl Tty7App {
         };
         let shell = if program.is_empty() {
             None
+        } else if !tty7_core::core::config::shell_program_is_usable(&program) {
+            // Refuse to persist a Program the daemon cannot exec — the home
+            // page then sticks on "Unable to spawn … not found in PATH".
+            log::warn!("refusing to save shell program {program:?}: not a spawnable binary");
+            cx.notify();
+            return;
         } else {
             Some(ShellConfig { program, args })
         };

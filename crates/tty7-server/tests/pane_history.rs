@@ -41,7 +41,7 @@ impl Daemon {
         std::fs::write(dir.path().join(".bashrc"), bashrc).unwrap();
         std::fs::write(dir.path().join(".bash_history"), history).unwrap();
 
-        let child = Command::new(env!("CARGO_BIN_EXE_tty7-server"))
+        let child = Command::new(env!("CARGO_BIN_EXE_xtty-server"))
             .arg("--daemon")
             .arg("--config-dir")
             .arg(dir.path())

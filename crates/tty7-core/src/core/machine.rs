@@ -14,7 +14,8 @@ pub const MACHINE_FILE: &str = "machine.json";
 
 pub const APPEARANCE_FILE: &str = "appearance.json";
 
-pub const DATA_DIR_ENV: &str = "TTY7_DATA_DIR";
+pub const DATA_DIR_ENV: &str = "XTTY_DATA_DIR";
+pub const DATA_DIR_ENV_LEGACY: &str = "TTY7_DATA_DIR";
 
 pub const MAX_WORKSPACES: usize = 1024;
 
@@ -1454,7 +1455,7 @@ fn write_appearance(path: &Path, appearance: Appearance) -> io::Result<()> {
 /// the pidfile, the lock — is already keyed by the config directory; the tree
 /// and the appearance hint were the last two files that were not.
 fn data_dir() -> io::Result<PathBuf> {
-    if let Some(explicit) = std::env::var_os(DATA_DIR_ENV).filter(|v| !v.is_empty()) {
+    if let Some(explicit) = crate::core::config::env_os_prefer(DATA_DIR_ENV, DATA_DIR_ENV_LEGACY) {
         return Ok(PathBuf::from(explicit));
     }
     crate::core::config::config_dir_path().ok_or_else(|| {
@@ -1466,11 +1467,11 @@ fn data_dir() -> io::Result<PathBuf> {
 
 /// Where [`data_dir`] pointed before it followed the config directory.
 ///
-/// Deliberately still resolved the old way, `TTY7_DATA_DIR` included: this
-/// answers "where would the build the user just upgraded from have put it",
-/// and that build read the environment, not the config directory.
+/// Deliberately still resolved the old way, `XTTY_DATA_DIR` / `TTY7_DATA_DIR`
+/// included: this answers "where would the build the user just upgraded from
+/// have put it", and that build read the environment, not the config directory.
 fn legacy_data_dir() -> Option<PathBuf> {
-    if let Some(explicit) = std::env::var_os(DATA_DIR_ENV).filter(|v| !v.is_empty()) {
+    if let Some(explicit) = crate::core::config::env_os_prefer(DATA_DIR_ENV, DATA_DIR_ENV_LEGACY) {
         return Some(PathBuf::from(explicit));
     }
     #[cfg(unix)]
@@ -2395,7 +2396,7 @@ mod tests {
     /// later.
     #[test]
     fn only_the_machines_own_instance_inherits_the_legacy_tree() {
-        let machines = PathBuf::from("/home/u/.config/tty7");
+        let machines = PathBuf::from("/home/u/.config/xtty");
         assert!(is_the_machines_instance(
             Some(&machines),
             Some(&machines.clone())

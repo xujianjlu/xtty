@@ -110,7 +110,7 @@ jobs:
         run: |
           cargo build --release --target "${{ matrix.target }}"
           cargo build --release --features updater \
-            --bin tty7-updater --target "${{ matrix.target }}"
+            --bin xtty-updater --target "${{ matrix.target }}"
 
       - name: Bundle macOS DMG
         if: matrix.os == 'macos'
@@ -138,7 +138,7 @@ jobs:
           mkdir -p "$VERIFY_ROOT"
           /usr/bin/ditto -x -k "$ZIP" "$VERIFY_ROOT"
           APP="$VERIFY_ROOT/tty7.app"
-          test -x "$APP/Contents/MacOS/tty7-updater"
+          test -x "$APP/Contents/MacOS/xtty-updater"
           ACTUAL_VERSION="$(/usr/libexec/PlistBuddy \
             -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")"
           test "$ACTUAL_VERSION" = "$VERSION"
@@ -221,14 +221,14 @@ jobs:
       - name: Ad-hoc sign the binary
         if: steps.probe.outputs.present == 'true'
         working-directory: tty7
-        run: codesign --force --sign - "target/${{ matrix.target }}/release/tty7-server"
+        run: codesign --force --sign - "target/${{ matrix.target }}/release/xtty-server"
 
       - name: Assert the binary is self-contained
         if: steps.probe.outputs.present == 'true'
         working-directory: tty7
         run: |
           bash .github/scripts/assert-macho.sh \
-            "target/${{ matrix.target }}/release/tty7-server" "${{ matrix.arch }}"
+            "target/${{ matrix.target }}/release/xtty-server" "${{ matrix.arch }}"
 
       - name: Stage the asset
         if: steps.probe.outputs.present == 'true'
@@ -236,7 +236,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          cp "target/${{ matrix.target }}/release/tty7-server" \
+          cp "target/${{ matrix.target }}/release/xtty-server" \
              "dist/${{ matrix.asset }}"
           chmod +x "dist/${{ matrix.asset }}"
 

@@ -143,6 +143,16 @@ impl SftpRoute {
             Err(e) => Err(e.to_string()),
         }
     }
+
+    /// Run a command on this route's SSH connection (not through the PTY).
+    pub(crate) fn exec(&self, command: &str) -> Result<tty7_core::host::Output, String> {
+        // Workspace panes already have a RemoteHost for git; this path is for
+        // standalone native-SSH panes whose only far-side channel is this one.
+        if self.workspace.is_some() {
+            return Err("ssh exec over a workspace SFTP route is not used".into());
+        }
+        RemoteTerminal::ssh_exec(self.pane_id, command)
+    }
 }
 
 pub(crate) struct SftpPanelState {
@@ -150,6 +160,9 @@ pub(crate) struct SftpPanelState {
     pub(crate) open_workspace: Option<crate::terminal::PaneWorkspace>,
     pub(crate) cwd: String,
     pub(crate) cwds: std::collections::HashMap<u64, String>,
+    /// When true, the browser tracks the pane's shell cwd (OSC 7) after `cd`.
+    /// Cleared when the user browses elsewhere; restored by "Go to Shell Directory".
+    pub(crate) follow_shell: bool,
     pub(crate) entries: Vec<SftpEntry>,
     pub(crate) filter_input: gpui::Entity<InputState>,
     pub(crate) error: Option<String>,
@@ -201,6 +214,7 @@ impl SftpPanelState {
             open_workspace: None,
             cwd: "/".to_string(),
             cwds: std::collections::HashMap::new(),
+            follow_shell: true,
             entries: Vec::new(),
             filter_input,
             error: None,
@@ -386,6 +400,12 @@ impl Tty7App {
         };
         if self.sftp_panel.open_pane_id != Some(pane_id) {
             self.sftp_open_at(pane_id, window, cx);
+        } else if self.sftp_panel.follow_shell
+            && !self.sftp_panel.loading
+            && let Some(shell_cwd) = self.pane_shell_cwd(pane_id, window, cx)
+            && shell_cwd != self.sftp_panel.cwd
+        {
+            self.sftp_navigate_following(shell_cwd, cx);
         }
         true
     }
@@ -441,17 +461,17 @@ impl Tty7App {
         self.sftp_panel.editing_path = None;
         self.sftp_panel.editing_path_sub.clear();
         self.sftp_panel.show_history = false;
+        self.sftp_panel.follow_shell = true;
         self.sftp_poll_jobs(cx);
         self.sftp_start_polling(cx);
 
+        // Prefer the live shell cwd over a cached browse position so opening
+        // the Files tab after `cd` lands on the project, not last week's home.
         if let Some(start) = self
-            .sftp_panel
-            .cwds
-            .get(&pane_id)
-            .cloned()
-            .or_else(|| self.pane_shell_cwd(pane_id, window, cx))
+            .pane_shell_cwd(pane_id, window, cx)
+            .or_else(|| self.sftp_panel.cwds.get(&pane_id).cloned())
         {
-            self.sftp_navigate(start, cx);
+            self.sftp_navigate_following(start, cx);
             return;
         }
         self.sftp_navigate_login_dir(pane_id, cx);
@@ -472,7 +492,7 @@ impl Tty7App {
                     SftpOpResult::Link(path) if path.starts_with('/') => path,
                     _ => "/".to_string(),
                 };
-                this.sftp_navigate(home, cx);
+                this.sftp_navigate_following(home, cx);
             });
         })
         .detach();
@@ -494,6 +514,18 @@ impl Tty7App {
     }
 
     pub(crate) fn sftp_navigate(&mut self, path: String, cx: &mut Context<Self>) {
+        // A manual browse (breadcrumb, open folder, …) stops tracking the shell
+        // until the user asks to follow again.
+        self.sftp_panel.follow_shell = false;
+        self.sftp_navigate_inner(path, cx);
+    }
+
+    fn sftp_navigate_following(&mut self, path: String, cx: &mut Context<Self>) {
+        self.sftp_panel.follow_shell = true;
+        self.sftp_navigate_inner(path, cx);
+    }
+
+    fn sftp_navigate_inner(&mut self, path: String, cx: &mut Context<Self>) {
         let Some(pane_id) = self.sftp_panel.open_pane_id else {
             return;
         };
@@ -1322,7 +1354,7 @@ impl Tty7App {
                 if let Some(pane_id) = self.sftp_panel.open_pane_id
                     && let Some(cwd) = self.pane_shell_cwd(pane_id, window, cx)
                 {
-                    self.sftp_navigate(cwd, cx);
+                    self.sftp_navigate_following(cwd, cx);
                 }
             }
             SftpMenuAction::ToggleHistory => self.sftp_toggle_history(cx),

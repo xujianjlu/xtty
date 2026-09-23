@@ -12,7 +12,7 @@
   "logo": {
     "light": "/logo/logo.svg",
     "dark": "/logo/logo.svg",
-    "href": "https://github.com/xujianjlu/tty7"
+    "href": "https://github.com/xujianjlu/xtty"
   },
   "navigation": {
     "tabs": [
@@ -120,7 +120,7 @@
     "links": [
       {
         "label": "GitHub",
-        "href": "https://github.com/xujianjlu/tty7"
+        "href": "https://github.com/xujianjlu/xtty"
       },
       {
         "label": "Discord",
@@ -130,12 +130,12 @@
     "primary": {
       "type": "button",
       "label": "Download",
-      "href": "https://github.com/xujianjlu/tty7/releases"
+      "href": "https://github.com/xujianjlu/xtty/releases"
     }
   },
   "footer": {
     "socials": {
-      "github": "https://github.com/xujianjlu/tty7",
+      "github": "https://github.com/xujianjlu/xtty",
       "discord": "https://discord.gg/s3dethqz2V"
     }
   }

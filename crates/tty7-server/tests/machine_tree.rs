@@ -67,7 +67,7 @@ impl Client {
 }
 
 fn connect(data_dir: &Path, token: &str) -> Client {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_tty7-server"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_xtty-server"))
         .args(["--stdio", "--serve"])
         .env("TTY7_DATA_DIR", data_dir)
         .stdin(Stdio::piped())
@@ -474,7 +474,7 @@ fn attachment_rides_the_tree_when_no_record_store_is_served() {
 /// this test is about has already run by then, and the process leaves rather
 /// than serving nothing.
 fn started_once(home: &Path, extra: &[&str]) {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_tty7-server"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_xtty-server"))
         .args(["--stdio", "--serve"])
         .args(extra)
         .env("HOME", home)
@@ -520,7 +520,7 @@ fn a_server_started_after_the_upgrade_carries_the_legacy_tree_in() {
     started_once(home.path(), &[]);
 
     assert!(
-        home.path().join(".config/tty7").join(MACHINE_FILE).exists(),
+        home.path().join(".config/xtty").join(MACHINE_FILE).exists(),
         "the tree must arrive beside the rest of the config directory"
     );
     assert!(
@@ -556,7 +556,7 @@ fn a_config_dir_of_its_own_leaves_the_machines_tree_alone() {
 
 fn bridged(sock: &Path, token: &str) -> Client {
     let hello = ControlHello::host_rpc(token, token);
-    let mut child = Command::new(env!("CARGO_BIN_EXE_tty7-server"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_xtty-server"))
         .args(["--stdio", "--bridge", "--control-sock"])
         .arg(sock)
         .stdin(Stdio::piped())

@@ -20,7 +20,7 @@ use tty7_core::host::remote::RemoteHost;
 #[cfg(unix)]
 use tty7_core::host::server;
 
-const EXE: &str = env!("CARGO_BIN_EXE_tty7-server");
+const EXE: &str = env!("CARGO_BIN_EXE_xtty-server");
 
 #[cfg(unix)]
 struct ServerProcess(Mutex<Option<Child>>);
@@ -161,7 +161,7 @@ fn agent_hook_without_arguments_still_succeeds() {
 fn version_and_help_report_on_stdout() {
     let v = Command::new(EXE).arg("--version").output().unwrap();
     assert!(v.status.success());
-    assert!(String::from_utf8_lossy(&v.stdout).starts_with("tty7-server "));
+    assert!(String::from_utf8_lossy(&v.stdout).starts_with("xtty-server "));
 
     let h = Command::new(EXE).arg("--help").output().unwrap();
     assert!(h.status.success());

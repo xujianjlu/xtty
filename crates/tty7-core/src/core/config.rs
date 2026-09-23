@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 
@@ -773,7 +774,14 @@ impl Config {
         };
         match serde_json::from_str::<Config>(strip_bom(&text)) {
             Ok(mut cfg) => {
+                let shell_before = cfg.shell.clone();
+                let custom_before = cfg.custom_shells.clone();
                 cfg.sanitize();
+                // Persist a healed shell so the next daemon restart does not
+                // re-read a Program that cannot be spawned.
+                if cfg.shell != shell_before || cfg.custom_shells != custom_before {
+                    cfg.save();
+                }
                 (cfg, LoadOutcome::Parsed)
             }
             Err(e) => {
@@ -897,6 +905,30 @@ impl Config {
         if !SUPPORTED_GUI_LANGUAGES.contains(&self.gui_language.as_str()) {
             self.gui_language = default_gui_language();
         }
+        // A mistyped Program (e.g. the shell builtin `source`) survives into
+        // every new tab as "Unable to spawn … not found in PATH". Drop it so
+        // panes fall back to the login shell instead of an empty home screen.
+        if let Some(shell) = &self.shell
+            && !shell_program_is_usable(&shell.program)
+        {
+            log::warn!(
+                "configured shell program {:?} is not a spawnable binary; \
+                 clearing it so new tabs use the login shell",
+                shell.program
+            );
+            self.shell = None;
+        }
+        self.custom_shells.retain(|entry| {
+            let ok = shell_program_is_usable(&entry.program);
+            if !ok {
+                log::warn!(
+                    "dropping custom shell {:?}: program {:?} is not spawnable",
+                    entry.label,
+                    entry.program
+                );
+            }
+            ok
+        });
     }
 
     pub fn save(&self) {
@@ -931,6 +963,13 @@ impl Config {
 
 static CONFIG_DIR_OVERRIDE: OnceLock<PathBuf> = OnceLock::new();
 
+/// Prefer the post-rebrand env name, then the legacy `TTY7_*` name.
+pub fn env_os_prefer(new: &str, legacy: &str) -> Option<OsString> {
+    std::env::var_os(new)
+        .filter(|v| !v.is_empty())
+        .or_else(|| std::env::var_os(legacy).filter(|v| !v.is_empty()))
+}
+
 pub fn set_config_dir(dir: PathBuf) {
     let _ = CONFIG_DIR_OVERRIDE.set(dir);
 }
@@ -943,16 +982,16 @@ fn config_dir() -> Option<PathBuf> {
 }
 
 /// The config directory this machine resolves to when no single invocation
-/// redirects it — `$TTY7_CONFIG_DIR` where the box names one, the default under
-/// `$HOME` otherwise.
+/// redirects it — `$XTTY_CONFIG_DIR` (legacy `$TTY7_CONFIG_DIR`) where the box
+/// names one, the default under `$HOME` otherwise.
 ///
 /// [`config_dir`] with the `--config-dir` override left off, which is the
-/// question "is this the machine's tty7 or a second one somebody pointed
+/// question "is this the machine's xtty or a second one somebody pointed
 /// elsewhere" (see `machine::adopt_legacy_data_dir`). It cannot be answered by
 /// whether the override is set: `daemon::spawn` passes `--config-dir` to every
 /// daemon it starts, the ordinary install's included.
 pub fn machine_config_dir() -> Option<PathBuf> {
-    if let Some(dir) = std::env::var_os("TTY7_CONFIG_DIR").filter(|d| !d.is_empty()) {
+    if let Some(dir) = env_os_prefer("XTTY_CONFIG_DIR", "TTY7_CONFIG_DIR") {
         return Some(PathBuf::from(dir));
     }
     default_config_dir()
@@ -961,7 +1000,92 @@ pub fn machine_config_dir() -> Option<PathBuf> {
 #[cfg(unix)]
 pub fn default_config_dir() -> Option<PathBuf> {
     let home = std::env::var_os("HOME").filter(|h| !h.is_empty())?;
+    Some(PathBuf::from(home).join(".config/xtty"))
+}
+
+/// Previous default before the tty7 → xtty rebrand.
+#[cfg(unix)]
+fn legacy_default_config_dir() -> Option<PathBuf> {
+    let home = std::env::var_os("HOME").filter(|h| !h.is_empty())?;
     Some(PathBuf::from(home).join(".config/tty7"))
+}
+
+/// One-time: if `~/.config/tty7` exists and `~/.config/xtty` does not, move
+/// (prefer) or copy the directory so an upgrade keeps settings.
+///
+/// Skipped when `--config-dir` / `XTTY_CONFIG_DIR` / `TTY7_CONFIG_DIR` already
+/// redirects the instance, so a scratch or second install never steals the
+/// machine tree.
+pub fn migrate_legacy_config_dir() {
+    static DONE: OnceLock<()> = OnceLock::new();
+    if DONE.set(()).is_err() {
+        return;
+    }
+    if CONFIG_DIR_OVERRIDE.get().is_some() {
+        return;
+    }
+    if env_os_prefer("XTTY_CONFIG_DIR", "TTY7_CONFIG_DIR").is_some() {
+        return;
+    }
+    let Some(new_dir) = default_config_dir() else {
+        return;
+    };
+    let Some(old_dir) = legacy_default_config_dir() else {
+        return;
+    };
+    if new_dir.exists() || !old_dir.exists() {
+        return;
+    }
+    if let Some(parent) = new_dir.parent()
+        && let Err(e) = std::fs::create_dir_all(parent)
+    {
+        log::warn!(
+            "could not create {} to migrate config from {}: {e}",
+            parent.display(),
+            old_dir.display()
+        );
+        return;
+    }
+    match std::fs::rename(&old_dir, &new_dir) {
+        Ok(()) => {
+            log::info!(
+                "migrated config directory {} → {}",
+                old_dir.display(),
+                new_dir.display()
+            );
+        }
+        Err(rename_err) => match copy_dir_recursive(&old_dir, &new_dir) {
+            Ok(()) => log::info!(
+                "copied config directory {} → {} (rename failed: {rename_err}); left the original in place",
+                old_dir.display(),
+                new_dir.display()
+            ),
+            Err(copy_err) => log::warn!(
+                "could not migrate config directory {} → {}: rename={rename_err}; copy={copy_err}",
+                old_dir.display(),
+                new_dir.display()
+            ),
+        },
+    }
+}
+
+fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let from = entry.path();
+        let to = dst.join(entry.file_name());
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() {
+            copy_dir_recursive(&from, &to)?;
+        } else if file_type.is_symlink() {
+            // Live sockets / locks: skip; the new process recreates them.
+            continue;
+        } else {
+            std::fs::copy(&from, &to)?;
+        }
+    }
+    Ok(())
 }
 
 pub fn config_path(file: &str) -> Option<PathBuf> {
@@ -1071,6 +1195,68 @@ pub fn config_dir_path() -> Option<PathBuf> {
 
 pub fn shell_command() -> Option<(String, Vec<String>)> {
     Config::load().shell.map(|s| (s.program, s.args))
+}
+
+/// Whether `program` can be handed to the OS as argv[0] of a new pane.
+///
+/// Rejects empty strings, shell builtins (`source`, `.`, …), and path-form
+/// names that do not point at a file. Bare names of well-known shells are
+/// accepted even when PATH is empty at config-load time (the daemon's PATH
+/// often differs from the GUI's); unknown bare names must resolve on PATH.
+pub fn shell_program_is_usable(program: &str) -> bool {
+    let program = program.trim();
+    if program.is_empty() {
+        return false;
+    }
+    const NOT_A_PROGRAM: &[&str] = &[
+        "source", ".", "builtin", "command", "eval", "exec", "type", "hash", "alias", "unalias",
+        "export", "unset", "readonly", "local", "typeset", "set", "shift", "cd", "pwd", "popd",
+        "pushd", "dirs", "return", "exit", "logout", "times", "trap", "ulimit", "umask", "wait",
+        "jobs", "fg", "bg", ":", "break", "continue", "true", "false", "test", "[",
+    ];
+    if NOT_A_PROGRAM
+        .iter()
+        .any(|name| name.eq_ignore_ascii_case(program))
+    {
+        return false;
+    }
+    const KNOWN_SHELLS: &[&str] = &[
+        "zsh",
+        "bash",
+        "fish",
+        "sh",
+        "dash",
+        "ksh",
+        "tcsh",
+        "csh",
+        "pwsh",
+        "powershell",
+        "nu",
+        "xonsh",
+        "elvish",
+        "cmd",
+        "cmd.exe",
+        "powershell.exe",
+        "pwsh.exe",
+    ];
+    if KNOWN_SHELLS
+        .iter()
+        .any(|name| name.eq_ignore_ascii_case(program))
+    {
+        return true;
+    }
+    let path = std::path::Path::new(program);
+    if path.components().count() >= 2 || program.starts_with('.') {
+        return path.is_file();
+    }
+    shell_on_path(program).is_some()
+}
+
+fn shell_on_path(name: &str) -> Option<std::path::PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .map(|dir| dir.join(name))
+        .find(|candidate| candidate.is_file())
 }
 
 pub fn working_directory_base() -> Option<PathBuf> {
@@ -1517,6 +1703,17 @@ mod tests {
         .expect("stale override keys must be ignored");
         assert_eq!(cfg.font_size, 20.0);
         assert_eq!(cfg.theme_preset, "light");
+    }
+
+    #[test]
+    fn shell_program_rejects_builtins_and_keeps_known_shells() {
+        assert!(!shell_program_is_usable("source"));
+        assert!(!shell_program_is_usable("."));
+        assert!(!shell_program_is_usable("eval"));
+        assert!(!shell_program_is_usable(""));
+        assert!(shell_program_is_usable("zsh"));
+        assert!(shell_program_is_usable("bash"));
+        assert!(shell_program_is_usable("/bin/zsh") || !std::path::Path::new("/bin/zsh").is_file());
     }
 
     #[test]

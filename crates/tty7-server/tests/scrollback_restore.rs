@@ -107,7 +107,7 @@ impl Instance {
     }
 
     fn start(&self) -> Running {
-        let child = Command::new(env!("CARGO_BIN_EXE_tty7-server"))
+        let child = Command::new(env!("CARGO_BIN_EXE_xtty-server"))
             .arg("--daemon")
             .arg("--config-dir")
             .arg(self.path())

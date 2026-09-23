@@ -1,6 +1,7 @@
 pub use tty7_core::core::keychain::{
-    CredentialKind, CredentialRef, SERVICE_KEY_PASSPHRASE, SERVICE_PASSWORD,
-    SERVICE_PASSWORD_TRIGGER, endpoint_account, key_account_from_contents,
+    CredentialKind, CredentialRef, LEGACY_SERVICE_KEY_PASSPHRASE, LEGACY_SERVICE_PASSWORD,
+    LEGACY_SERVICE_PASSWORD_TRIGGER, SERVICE_KEY_PASSPHRASE, SERVICE_PASSWORD,
+    SERVICE_PASSWORD_TRIGGER, endpoint_account, key_account_from_contents, legacy_keychain_service,
 };
 
 #[derive(Debug)]
@@ -77,7 +78,7 @@ impl CredentialStore for OsCredentialStore {
             .map_err(|e| CredentialError::Backend(e.to_string()))?;
         match entry.get_password() {
             Ok(secret) => Ok(Some(secret)),
-            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(keyring::Error::NoEntry) => self.migrate_from_legacy(service, account),
             Err(e) => Err(CredentialError::Backend(e.to_string())),
         }
     }
@@ -94,7 +95,46 @@ impl CredentialStore for OsCredentialStore {
         let entry = keyring::Entry::new(service, account)
             .map_err(|e| CredentialError::Backend(e.to_string()))?;
         match entry.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => {
+                // Also clear a leftover pre-rebrand entry if present.
+                if let Some(legacy) = legacy_keychain_service(service) {
+                    let _ = self.delete_exact(legacy, account);
+                }
+                Ok(())
+            }
+            Err(e) => Err(CredentialError::Backend(e.to_string())),
+        }
+    }
+}
+
+impl OsCredentialStore {
+    fn delete_exact(&self, service: &str, account: &str) -> CredentialResult<()> {
+        let entry = keyring::Entry::new(service, account)
+            .map_err(|e| CredentialError::Backend(e.to_string()))?;
+        match entry.delete_credential() {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(e) => Err(CredentialError::Backend(e.to_string())),
+        }
+    }
+
+    /// If the new service has no entry, copy from the pre-rebrand service name.
+    fn migrate_from_legacy(
+        &self,
+        service: &str,
+        account: &str,
+    ) -> CredentialResult<Option<String>> {
+        let Some(legacy) = legacy_keychain_service(service) else {
+            return Ok(None);
+        };
+        let entry = keyring::Entry::new(legacy, account)
+            .map_err(|e| CredentialError::Backend(e.to_string()))?;
+        match entry.get_password() {
+            Ok(secret) => {
+                self.set(service, account, &secret)?;
+                let _ = self.delete_exact(legacy, account);
+                Ok(Some(secret))
+            }
+            Err(keyring::Error::NoEntry) => Ok(None),
             Err(e) => Err(CredentialError::Backend(e.to_string())),
         }
     }
@@ -188,7 +228,7 @@ mod tests {
 
         let cref = store.set_key_passphrase(&key_id, "s3cret").unwrap();
         assert_eq!(cref.kind, CredentialKind::KeyPassphrase);
-        assert_eq!(cref.service(), "tty7-ssh-key");
+        assert_eq!(cref.service(), "xtty-ssh-key");
         assert_eq!(
             store.passphrase_for_key(&key_id).unwrap().as_deref(),
             Some("s3cret")

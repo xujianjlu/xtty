@@ -18,7 +18,7 @@ struct Daemon {
 impl Daemon {
     fn start() -> Daemon {
         let dir = tempfile::TempDir::new().unwrap();
-        let child = Command::new(env!("CARGO_BIN_EXE_tty7-server"))
+        let child = Command::new(env!("CARGO_BIN_EXE_xtty-server"))
             .arg("--daemon")
             .arg("--config-dir")
             .arg(dir.path())

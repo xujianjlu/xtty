@@ -7,12 +7,12 @@ name = "tty7-cli"
 version.workspace = true
 edition.workspace = true
 description = "tty7's command line: a thin client for the tty7 server — workspaces, tabs, panes, agents, no GUI required"
-repository = "https://github.com/xujianjlu/tty7"
+repository = "https://github.com/xujianjlu/xtty"
 license = "Apache-2.0"
 publish = false
 
 [[bin]]
-name = "tty7"
+name = "xtty"
 path = "src/main.rs"
 
 [dependencies]

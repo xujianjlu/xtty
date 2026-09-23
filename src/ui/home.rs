@@ -12,11 +12,12 @@ use crate::core::session::{SessionPane, SessionTab};
 use crate::ui::app::Tty7App;
 use crate::ui::i18n::{L10nKey, t, t_fmt, t_plural};
 
+// Block letter "xtty" — replaces the old TTY7 splash glyph.
 const LOGO: [&str; 4] = [
-    " ▄▄▄ ▄▄▄ ▄  ▄ ▄▄▄▄",
-    "  █   █  █  █    █",
-    "  █   █  ▀▄▄█   █",
-    "  ▀▄  ▀▄ ▄▄▄▀  █  ",
+    "█ █ ▀█▀ ▀█▀ █ █",
+    "▄▀▄  █   █   █ ",
+    "█ █  █   █   █ ",
+    "▀ ▀  ▀   ▀   ▀ ",
 ];
 
 const LOGO_PX: f32 = 20.0;
@@ -411,10 +412,10 @@ mod strip_layout_tests {
     /// the retry button with them — #774's second and third screenshots.
     #[gpui::test]
     fn a_long_failure_wraps_instead_of_stretching_the_card(cx: &mut TestAppContext) {
-        let long = "the remote tty7-server did not start: \
-                    /home/hw/.local/share/tty7/bin/tty7-server-c8p6 exited with status 1 before \
+        let long = "the remote xtty-server did not start: \
+                    /home/hw/.local/share/xtty/bin/xtty-server-c8p6 exited with status 1 before \
                     it answered on the control socket; last probe said: no control server at \
-                    /home/hw/.config/tty7/control.sock";
+                    /home/hw/.config/xtty/control.sock";
 
         let mut short = home_strip(cx, 1440.0, None, Some("connection refused"));
         let short_card = short

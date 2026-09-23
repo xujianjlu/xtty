@@ -6,8 +6,8 @@ const FRECENCY_WEIGHT: f64 = 2.0;
 pub(super) struct ReverseSearch {
     /// Snapshot of the lines this search session ranks against. Owned so a
     /// mid-search history-scope switch (nested ssh/jumper) cannot invalidate
-    /// match indices, and so a fallback corpus from stashed scopes can live
-    /// here without mutating the pane's active history.
+    /// match indices, and so the active host corpus can live here without
+    /// mutating the pane's live history list while the user types.
     corpus: Vec<String>,
     frecency: Vec<f64>,
     query: String,

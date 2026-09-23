@@ -229,7 +229,7 @@ fn ui_scale(cx: &App) -> f32 {
 /// width. 260 is the widest of the three because it is the one with a
 /// requirement behind it: a font name or a shell path has to be readable
 /// without being truncated.
-const FIELD_W: f32 = 260.;
+pub(crate) const FIELD_W: f32 = 260.;
 
 /// The host editor's own two numbers: the column its labels stand in, and how
 /// wide a field beside one grows to. The label column fits the longest field
@@ -333,6 +333,7 @@ pub(crate) enum SettingsSection {
     Terminal,
     Input,
     Ssh,
+    PasswordTriggers,
     Agents,
     WindowTabs,
     Keybindings,
@@ -340,11 +341,12 @@ pub(crate) enum SettingsSection {
 }
 
 impl SettingsSection {
-    pub(crate) const ALL: [SettingsSection; 8] = [
+    pub(crate) const ALL: [SettingsSection; 9] = [
         SettingsSection::Appearance,
         SettingsSection::Terminal,
         SettingsSection::Input,
         SettingsSection::Ssh,
+        SettingsSection::PasswordTriggers,
         SettingsSection::Agents,
         SettingsSection::WindowTabs,
         SettingsSection::Keybindings,
@@ -357,6 +359,7 @@ impl SettingsSection {
             SettingsSection::Terminal => "settings:terminal",
             SettingsSection::Input => "settings:input",
             SettingsSection::Ssh => "settings:ssh",
+            SettingsSection::PasswordTriggers => "settings:password-triggers",
             SettingsSection::Agents => "settings:agents",
             SettingsSection::WindowTabs => "settings:window-tabs",
             SettingsSection::Keybindings => "settings:keybindings",
@@ -601,6 +604,16 @@ fn settings_search_entries() -> &'static [SearchEntry] {
             section: Ssh,
             title: SettingsPortForwarding,
             keywords: SettingsSearchPortForwardingKeywords,
+        },
+        SearchEntry {
+            section: PasswordTriggers,
+            title: SettingsNavPasswordTriggers,
+            keywords: SettingsSearchPasswordTriggersKeywords,
+        },
+        SearchEntry {
+            section: PasswordTriggers,
+            title: SettingsPasswordTriggerSendEnter,
+            keywords: SettingsSearchPasswordTriggerSendEnterKeywords,
         },
         SearchEntry {
             section: Agents,
@@ -889,6 +902,8 @@ pub(crate) struct SettingsState {
     pub(crate) ssh_filter: Entity<InputState>,
     pub(crate) ssh_collapsed_groups: std::collections::HashSet<String>,
     pub(crate) ssh_quick_connect: Entity<InputState>,
+    pub(crate) password_trigger_form:
+        Option<crate::ui::password_triggers_settings::PasswordTriggerForm>,
     pub(crate) agent_hooks_host: HostId,
     pub(crate) agent_hooks_states: AgentHooksView,
     pub(crate) agent_hooks_seq: u64,
@@ -1855,6 +1870,11 @@ impl Tty7App {
                 Icon::new(IconName::Globe),
             ))
             .child(nav_item(
+                t(L10nKey::SettingsNavPasswordTriggers),
+                SettingsSection::PasswordTriggers,
+                Icon::new(IconName::Eye),
+            ))
+            .child(nav_item(
                 t(L10nKey::SettingsNavAgents),
                 SettingsSection::Agents,
                 Icon::new(IconName::Bot),
@@ -1917,6 +1937,7 @@ impl Tty7App {
             SettingsSection::Terminal => self.render_settings_terminal(cx),
             SettingsSection::Input => self.render_settings_input(cx),
             SettingsSection::Ssh => self.render_settings_ssh(cx),
+            SettingsSection::PasswordTriggers => self.render_settings_password_triggers(cx),
             SettingsSection::Agents => self.render_settings_agents(cx),
             SettingsSection::WindowTabs => self.render_settings_window_tabs(cx),
             SettingsSection::Keybindings => self.render_settings_keybindings(cx),
@@ -2183,7 +2204,7 @@ impl Tty7App {
             .anchor_scroll(self.first_hit_anchor(title, cx))
     }
 
-    fn section_intro(
+    pub(crate) fn section_intro(
         &self,
         title: &str,
         desc: impl Into<String>,
@@ -7601,7 +7622,7 @@ impl Tty7App {
                                     .text_xl()
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .text_color(foreground)
-                                    .child("tty7"),
+                                    .child("xtty"),
                             )
                             .child(div().text_sm().text_color(muted_fg).child(format!(
                                 "{} {}",
@@ -7610,9 +7631,9 @@ impl Tty7App {
                             )))
                             .child(
                                 Link::new("about-github")
-                                    .href("https://github.com/xujianjlu/tty7")
+                                    .href("https://github.com/xujianjlu/xtty")
                                     .text_sm()
-                                    .child("github.com/xujianjlu/tty7"),
+                                    .child("github.com/xujianjlu/xtty"),
                             ),
                     ),
             )
@@ -8549,6 +8570,8 @@ mod tests {
             ("open files with", Terminal),
             ("bell", Terminal),
             ("known_hosts", Ssh),
+            ("password trigger", PasswordTriggers),
+            ("send enter", PasswordTriggers),
             ("claude", Agents),
             ("symlink", Agents),
             // Rows the index had no entry for at all, so the query counted
@@ -8603,7 +8626,7 @@ mod tests {
             "History search",
             "Dim inactive panes",
             "Option (⌥) acts as Meta",
-            "Install the tty7 command on PATH",
+            "Install the xtty command on PATH",
         ] {
             assert!(
                 settings_search_entries()
@@ -8677,7 +8700,7 @@ mod tests {
             ssh_group_label(crate::core::ssh_config::IMPORTED_GROUP),
             "~/.ssh/config"
         );
-        assert_eq!(ssh_group_label(""), "In tty7");
+        assert_eq!(ssh_group_label(""), "In xtty");
         assert_eq!(ssh_group_label("Work"), "Work");
     }
 

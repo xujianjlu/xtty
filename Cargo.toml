@@ -3,18 +3,18 @@ name = "tty7"
 version.workspace = true
 edition = "2024"
 description = "A terminal workbench: shells, persistent sessions, SSH, coding agents — GPU-rendered on Zed's gpui, pure Rust"
-repository = "https://github.com/xujianjlu/tty7"
+repository = "https://github.com/xujianjlu/xtty"
 license = "Apache-2.0"
 readme = "README.md"
 publish = false
-default-run = "tty7-app"
+default-run = "xtty-app"
 
 [[bin]]
-name = "tty7-app"
+name = "xtty-app"
 path = "src/main.rs"
 
 [[bin]]
-name = "tty7-updater"
+name = "xtty-updater"
 path = "src/bin/tty7-updater.rs"
 required-features = ["updater"]
 
@@ -86,7 +86,7 @@ uuid = { version = "1", features = ["v4", "serde"] }
 # the account scheme) stays in core, where `config.json` parsing needs it.
 keyring = "4"
 
-# Theme files. tty7 themes are authored as YAML (`~/.config/tty7/themes/*.yaml`,
+# Theme files. tty7 themes are authored as YAML (`~/.config/xtty/themes/*.yaml`,
 # our own schema); `plist` parses imported iTerm2 `.itermcolors` schemes (XML
 # plist) so the large iTerm color-scheme ecosystem drops straight in. serde_yaml
 # is already in the tree transitively, so it pins no new code; plist is pure Rust.
@@ -102,7 +102,8 @@ image = "0.25"
 
 # In-pane ZMODEM for remote `rz`/`sz` (`terminal::zmodem`). Caller-driven
 # state machine; we own the file dialogs and the PTY wire.
-zmodem2 = "0.6"
+# Vendored 0.6.0 with ESCCTL-safe ZDLE escaping (stock crate breaks `rz -be`).
+zmodem2 = { path = "crates/zmodem2" }
 
 # HTTP client for the startup update check (`core::update`): one GET to the
 # GitHub releases API to see if a newer version has shipped. `reqwest_client`
@@ -188,7 +189,7 @@ edition = "2024"
 # they must never drift apart. This is the line a release bump edits (and the
 # one nightly's `awk '/^version = /'` stamps: it is the first such line in the
 # file, since the package entries above are all `version.workspace = true`).
-version = "26.9.4"
+version = "26.9.13"
 
 [workspace.dependencies]
 # Our fork's `tty7` branch carries the local customizations tty7 relies on:

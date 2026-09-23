@@ -9,9 +9,9 @@ const VERSION: &str = "26.7.5";
 const CONTROL: u32 = 3;
 const PROTOCOL: u32 = 4;
 const HOME: &str = "/home/me";
-const BIN_DIR: &str = "/home/me/.local/share/tty7/bin";
-const BINARY: &str = "/home/me/.local/share/tty7/bin/tty7-server-c3p4";
-const TEMP_BASE: &str = "/home/me/.local/share/tty7/bin/.tty7-server-c3p4.tmp";
+const BIN_DIR: &str = "/home/me/.local/share/xtty/bin";
+const BINARY: &str = "/home/me/.local/share/xtty/bin/xtty-server-c3p4";
+const TEMP_BASE: &str = "/home/me/.local/share/xtty/bin/.xtty-server-c3p4.tmp";
 
 fn temp() -> String {
     unique_temp(TEMP_BASE)
@@ -144,7 +144,7 @@ impl FakeRemote {
     }
 
     fn with_legacy_install(self, version: &str) -> (Self, String) {
-        let path = format!("{BIN_DIR}/tty7-server-{version}");
+        let path = format!("{BIN_DIR}/xtty-server-{version}");
         self.preinstall(&path, 0o755);
         (self, path)
     }
@@ -548,9 +548,9 @@ fn first_install_runs_all_six_steps() {
     assert_eq!(
         release.fetched(),
         vec![
-            format!("https://github.com/xujianjlu/tty7/releases/download/v{VERSION}/checksums.txt"),
+            format!("https://github.com/xujianjlu/xtty/releases/download/v{VERSION}/checksums.txt"),
             format!(
-                "https://github.com/xujianjlu/tty7/releases/download/v{VERSION}/{ASSET_LINUX_X86_64}"
+                "https://github.com/xujianjlu/xtty/releases/download/v{VERSION}/{ASSET_LINUX_X86_64}"
             ),
         ]
     );
@@ -624,7 +624,7 @@ fn the_install_directory_is_created_in_order_and_locked_down() {
         vec![
             "/home/me/.local",
             "/home/me/.local/share",
-            "/home/me/.local/share/tty7",
+            "/home/me/.local/share/xtty",
             BIN_DIR,
         ]
     );
@@ -1108,7 +1108,7 @@ fn an_unidentifiable_running_daemon_is_not_a_mismatch() {
 fn restart_replaces_the_running_daemon() {
     let remote = FakeRemote::new()
         .with_previous_install()
-        .serving(&format!("{BIN_DIR}/tty7-server-26.7.4"));
+        .serving(&format!("{BIN_DIR}/xtty-server-26.7.4"));
     remote.preinstall(BINARY, 0o755);
     let release = FakeRelease::new();
     let user = FakeUser::declining();
@@ -1133,7 +1133,7 @@ fn a_restart_with_nothing_to_start_leaves_the_running_daemon_alone() {
     // dialect is up and serving, and the binary this build launches has never
     // been installed. Killing first would have ended every session there —
     // including other clients' — and then found nothing to run.
-    let old = format!("{BIN_DIR}/tty7-server-c2p3");
+    let old = format!("{BIN_DIR}/xtty-server-c2p3");
     let remote = FakeRemote::new().serving(&old);
     remote.preinstall(&old, 0o755);
     let release = FakeRelease::new();
@@ -1170,7 +1170,7 @@ fn replacing_installs_the_matching_server_and_then_restarts_into_it() {
     // The same machine, taken through the action that is actually meant for
     // it. This is the guard's other half: `replace` may kill, because by then
     // there is something to launch.
-    let old = format!("{BIN_DIR}/tty7-server-c2p3");
+    let old = format!("{BIN_DIR}/xtty-server-c2p3");
     let remote = FakeRemote::new().serving(&old);
     remote.preinstall(&old, 0o755);
     let release = FakeRelease::new();
@@ -1199,7 +1199,7 @@ fn replacing_installs_the_matching_server_and_then_restarts_into_it() {
 
 #[test]
 fn the_launch_command_detaches_and_closes_every_stream() {
-    let binary = "/home/me/.local/share/tty7/bin/tty7-server-26.7.5";
+    let binary = "/home/me/.local/share/xtty/bin/xtty-server-26.7.5";
     let cmd = launch_command(binary, &StartupLog::for_binary(binary));
     assert!(cmd.contains("setsid"), "{cmd}");
     assert!(
@@ -1227,7 +1227,7 @@ fn scoped_umask(binary: &str) -> String {
 /// start could ever report.
 #[test]
 fn the_launch_command_keeps_what_the_daemon_says_and_how_it_ends() {
-    let binary = "/home/me/.local/share/tty7/bin/tty7-server-26.7.5";
+    let binary = "/home/me/.local/share/xtty/bin/xtty-server-26.7.5";
     let cmd = launch_command(binary, &StartupLog::for_binary(binary));
     assert!(
         !cmd.contains("> /dev/null 2>&1"),
@@ -1308,6 +1308,7 @@ fn the_launch_command_quotes_its_binary() {
 fn the_running_exe_probe_cannot_fail_the_command() {
     assert!(RUNNING_EXE_COMMAND.trim_end().ends_with("true"));
     assert!(TERMINATE_RUNNING_COMMAND.trim_end().ends_with("true"));
+    assert!(TERMINATE_RUNNING_COMMAND.contains("*/xtty-server-*"));
     assert!(TERMINATE_RUNNING_COMMAND.contains("*/tty7-server-*"));
 }
 
@@ -1432,7 +1433,7 @@ fn a_stop_that_failed_is_named_in_the_timeout() {
     let remote = FakeRemote::new()
         .with_previous_install()
         .refusing_to_stop()
-        .serving(&format!("{BIN_DIR}/tty7-server-26.7.4"));
+        .serving(&format!("{BIN_DIR}/xtty-server-26.7.4"));
     remote.preinstall(BINARY, 0o755);
     let release = FakeRelease::new();
     let user = FakeUser::declining();
@@ -1621,7 +1622,7 @@ fn the_published_path_is_absolute_and_dialect_qualified() {
     );
     assert_ne!(
         published.rsplit('/').next(),
-        Some("tty7-server"),
+        Some("xtty-server"),
         "if this ever becomes the bare name, `PATH` lookup would start working by accident \
          and the reason for using the absolute path would be forgotten"
     );
@@ -1887,7 +1888,7 @@ fn ours() -> RemoteProtocol {
 }
 
 const OTHER_BUILD: &str = "26.7.9-nightly.20260801";
-const OTHER_EXE: &str = "/home/me/.local/share/tty7/bin/tty7-server-26.7.9-nightly.20260801";
+const OTHER_EXE: &str = "/home/me/.local/share/xtty/bin/xtty-server-26.7.9-nightly.20260801";
 
 #[test]
 fn a_compatible_running_server_is_reused_without_installing() {

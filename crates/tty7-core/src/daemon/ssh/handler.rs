@@ -164,9 +164,13 @@ impl russh::client::Handler for ClientHandler {
         banner: &str,
         _session: &mut Session,
     ) -> Result<(), Self::Error> {
-        if !self.skip_banner && !banner.is_empty() {
-            self.broker.banner(banner.to_string());
-        }
+        // Always suppress: server login notices ("Authorized users only…") are
+        // not actionable and used to surface as a dismissible toast even when
+        // a saved profile still had skip_banner=false from the old default.
+        // Real MOTD still prints in the PTY after login. `skip_banner` stays on
+        // the wire for older peers / settings UI, but the handler no longer
+        // forwards banners into PromptBroker.
+        let _ = (self.skip_banner, banner);
         Ok(())
     }
 

@@ -2,13 +2,13 @@ use std::io;
 use std::process::ExitCode;
 
 const USAGE: &str = "\
-tty7-server — the tty7 session daemon, headless
+xtty-server — the tty7 session daemon, headless
 
 USAGE:
-    tty7-server --daemon [--config-dir <dir>]
-    tty7-server --stdio [--serve | --bridge] [--control-sock <path>]
-    tty7-server --stdio --pane [--config-dir <dir>]
-    tty7-server agent-hook <agent> <event>
+    xtty-server --daemon [--config-dir <dir>]
+    xtty-server --stdio [--serve | --bridge] [--control-sock <path>]
+    xtty-server --stdio --pane [--config-dir <dir>]
+    xtty-server agent-hook <agent> <event>
 
 OPTIONS:
     --daemon              Serve panes and control connections until killed
@@ -34,7 +34,7 @@ fn main() -> ExitCode {
     }
 
     if args.iter().any(|a| a == "--version" || a == "-V") {
-        println!("tty7-server {}", env!("CARGO_PKG_VERSION"));
+        println!("xtty-server {}", env!("CARGO_PKG_VERSION"));
         return ExitCode::SUCCESS;
     }
     if args
@@ -53,6 +53,7 @@ fn main() -> ExitCode {
     }
 
     apply_config_dir_arg(&args);
+    tty7_core::core::config::migrate_legacy_config_dir();
 
     tty7_core::core::crash::install("server");
     tty7_core::core::logfile::install("server");
@@ -61,7 +62,7 @@ fn main() -> ExitCode {
         return match run_stdio(&args) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
-                eprintln!("tty7-server: stdio session ended with error: {e}");
+                eprintln!("xtty-server: stdio session ended with error: {e}");
                 ExitCode::FAILURE
             }
         };
@@ -71,13 +72,13 @@ fn main() -> ExitCode {
         return run_daemon();
     }
 
-    eprint!("tty7-server: nothing to do without --daemon or --stdio\n\n{USAGE}");
+    eprint!("xtty-server: nothing to do without --daemon or --stdio\n\n{USAGE}");
     ExitCode::FAILURE
 }
 
 fn run_daemon() -> ExitCode {
     if let Err(e) = tty7_core::daemon::server::run_daemon() {
-        eprintln!("tty7-server: daemon exited with error: {e}");
+        eprintln!("xtty-server: daemon exited with error: {e}");
         return ExitCode::FAILURE;
     }
     ExitCode::SUCCESS
@@ -242,7 +243,7 @@ fn flag_value(args: &[String], flag: &str) -> Option<String> {
 }
 
 fn log_stderr(args: std::fmt::Arguments<'_>) {
-    eprintln!("tty7-server: {args}");
+    eprintln!("xtty-server: {args}");
 }
 
 fn apply_config_dir_arg(args: &[String]) {

@@ -48,7 +48,7 @@ impl Daemon {
     }
 
     fn binary() -> PathBuf {
-        PathBuf::from(env!("CARGO_BIN_EXE_tty7-server"))
+        PathBuf::from(env!("CARGO_BIN_EXE_xtty-server"))
     }
 
     fn panes(&self) -> PaneClient {

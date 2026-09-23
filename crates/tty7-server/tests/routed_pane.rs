@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use tty7_core::daemon::protocol::{ClientMsg, DaemonMsg, ShellSpec, WinSize};
 use tty7_core::daemon::router::{RemoteRouter, RouteChannel, RouteHeader, negotiate};
 
-const EXE: &str = env!("CARGO_BIN_EXE_tty7-server");
+const EXE: &str = env!("CARGO_BIN_EXE_xtty-server");
 
 const OUTPUT_TIMEOUT: Duration = Duration::from_secs(30);
 

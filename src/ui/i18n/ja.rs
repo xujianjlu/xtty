@@ -59,9 +59,9 @@ pub fn translate_ja(key: L10nKey) -> Option<&'static str> {
         L10nKey::RememberKeychain => "キーチェーンに保存",
         L10nKey::Cancel => "キャンセル",
         L10nKey::Close => "閉じる",
-        L10nKey::QuitStopServerTitle => "tty7 を終了してサーバーを停止しますか？",
+        L10nKey::QuitStopServerTitle => "xtty を終了してサーバーを停止しますか？",
         L10nKey::QuitStopServerBody => {
-            "tty7 を終了してバックグラウンドサーバーを停止します。シェルで実行中のものはすべて終了します。タブとレイアウトは次回起動時に新しいシェルで開きます。（ウィンドウを閉じるだけならトレイに退避し、シェルは動き続けます）"
+            "xtty を終了してバックグラウンドサーバーを停止します。シェルで実行中のものはすべて終了します。タブとレイアウトは次回起動時に新しいシェルで開きます。（ウィンドウを閉じるだけならトレイに退避し、シェルは動き続けます）"
         }
         L10nKey::QuitAndStop => "終了して停止",
         L10nKey::CloseSshConnectionTitle => "この SSH 接続を閉じますか？",
@@ -77,6 +77,7 @@ pub fn translate_ja(key: L10nKey) -> Option<&'static str> {
         L10nKey::SettingsNavTerminal => "ターミナル",
         L10nKey::SettingsNavInput => "入力",
         L10nKey::SettingsNavSsh => "SSH",
+        L10nKey::SettingsNavPasswordTriggers => "パスワード自動入力",
         L10nKey::SettingsNavAgents => "エージェント",
         L10nKey::SettingsNavWindowTabs => "ウィンドウとタブ",
         L10nKey::SettingsNavKeybindings => "キーバインド",
@@ -130,7 +131,7 @@ pub fn translate_ja(key: L10nKey) -> Option<&'static str> {
             "カーソルの点滅一相にかかる秒数（0.1–2）。小数も可。大きいほどゆっくり点滅します"
         }
         L10nKey::SettingsLanguage => "言語",
-        L10nKey::SettingsLanguageDesc => "tty7 の表示言語を選択します",
+        L10nKey::SettingsLanguageDesc => "xtty の表示言語を選択します",
         L10nKey::SettingsLanguageEnglish => "English",
         L10nKey::SettingsLanguageChinese => "简体中文",
         L10nKey::SettingsLanguageJapanese => "日本語",
@@ -189,10 +190,10 @@ pub fn translate_ja(key: L10nKey) -> Option<&'static str> {
         L10nKey::ThemeDuplicateFailed => "テーマを複製できませんでした",
         L10nKey::ThemeSaveFailed => "テーマを保存できませんでした",
         L10nKey::OpenInFileManagerFailed => "{path} を開けませんでした",
-        L10nKey::ExplorerMenuOpenIn => "tty7 で開く",
-        L10nKey::ExplorerMenuOpenHere => "ここで tty7 を開く",
+        L10nKey::ExplorerMenuOpenIn => "xtty で開く",
+        L10nKey::ExplorerMenuOpenHere => "ここで xtty を開く",
         L10nKey::SettingsCustomThemesIntro => {
-            "テーマを複製して色を編集するか、tty7 の YAML テーマや iTerm2 の .itermcolors をテーマフォルダに置いてください"
+            "テーマを複製して色を編集するか、xtty の YAML テーマや iTerm2 の .itermcolors をテーマフォルダに置いてください"
         }
         L10nKey::SettingsDuplicateToEdit => "複製して編集",
         L10nKey::SettingsHosts => "ホスト",
@@ -200,19 +201,19 @@ pub fn translate_ja(key: L10nKey) -> Option<&'static str> {
         L10nKey::SettingsInheritedByEveryHost => "すべてのホストに継承されます",
         L10nKey::SettingsNoSavedHosts => "保存済みホストはまだありません",
         L10nKey::SettingsNothingMatches => "「{query}」に一致する項目がありません",
-        L10nKey::SettingsInTty7 => "tty7 内",
+        L10nKey::SettingsInTty7 => "xtty 内",
         L10nKey::SettingsImportFromSshConfig => "~/.ssh/config からインポート",
         L10nKey::SettingsExpandAllGroups => "すべてのグループを展開",
         L10nKey::SettingsNoHostsYet => "まだホストがありません",
         L10nKey::SettingsNothingSelected => "選択されていません",
         L10nKey::SettingsTypeAddressToConnect => {
-            "アドレスを入力するとすぐに接続できます。tty7 はあとで保存するか尋ねます"
+            "アドレスを入力するとすぐに接続できます。xtty はあとで保存するか尋ねます"
         }
         L10nKey::SettingsMoreInSshConfig => "~/.ssh/config にさらに {count} 件",
         L10nKey::SettingsAliasesLinked => "{count} 件のエイリアスがリンクされています",
         L10nKey::SettingsImportAliases => "エイリアスをインポート",
         L10nKey::SettingsImportAliasesDesc => {
-            "ファイルを再読み込みして新しい項目を追加します。ここでの編集は tty7 が保存します — ファイル自体には書き込まれません"
+            "ファイルを再読み込みして新しい項目を追加します。ここでの編集は xtty が保存します — ファイル自体には書き込まれません"
         }
         L10nKey::SettingsImportNow => "今すぐインポート",
         L10nKey::SettingsImportUnreadable => {
@@ -225,7 +226,7 @@ pub fn translate_ja(key: L10nKey) -> Option<&'static str> {
             "ホスト {count} 件を追加 — {updated} 件を更新、{unchanged} 件は変更なし"
         }
         L10nKey::SettingsImportIgnored => {
-            "tty7 に設定のないオプションが {count} 件あり、ファイルに残されています: {options}"
+            "xtty に設定のないオプションが {count} 件あり、ファイルに残されています: {options}"
         }
         L10nKey::SettingsImportMoreOptions => "他 {count} 件",
         L10nKey::SettingsDefaultsIntro => {
@@ -418,7 +419,7 @@ pub fn translate_ja(key: L10nKey) -> Option<&'static str> {
         }
         L10nKey::SettingsStartIn => "初期作業ディレクトリ",
         L10nKey::SettingsStartInDesc => {
-            "新しいシェルの開始場所: tty7 の起動ディレクトリ、ホームフォルダ、または固定パス"
+            "新しいシェルの開始場所: xtty の起動ディレクトリ、ホームフォルダ、または固定パス"
         }
         L10nKey::SettingsCustomPath => "カスタムパス",
         L10nKey::SettingsCustomPathDesc => "新しいシェルが起動するディレクトリ",
@@ -500,22 +501,22 @@ pub fn translate_ja(key: L10nKey) -> Option<&'static str> {
         L10nKey::SettingsBellModeBoth => "点滅 + 音声",
         L10nKey::SettingsPrompt => "プロンプト",
         L10nKey::SettingsPromptIntro => {
-            "シェルプロンプトでの tty7 独自のエディターとメニュー。オフにするとその分がシェルに渡されます"
+            "シェルプロンプトでの xtty 独自のエディターとメニュー。オフにするとその分がシェルに渡されます"
         }
         L10nKey::SettingsPromptEditor => "プロンプトエディター",
         L10nKey::SettingsPromptEditorDesc => {
-            "シェルプロンプトで入力する行を tty7 が編集します — 選択、取り消し、下のメニュー。オフにするとシェル自身の行エディター（ZLE、readline、fish）に戻ります"
+            "シェルプロンプトで入力する行を xtty が編集します — 選択、取り消し、下のメニュー。オフにするとシェル自身の行エディター（ZLE、readline、fish）に戻ります"
         }
         L10nKey::SettingsNeedsPromptEditor => {
             "プロンプトエディターが必要です。オフの間、このキーはすでにシェルのものです"
         }
         L10nKey::SettingsTabCompletion => "タブ補完",
         L10nKey::SettingsTabCompletionDesc => {
-            "プロンプトで Tab を押すと tty7 の補完メニューが開きます。オフの場合、Tab はシェル自身の補完に渡されます"
+            "プロンプトで Tab を押すと xtty の補完メニューが開きます。オフの場合、Tab はシェル自身の補完に渡されます"
         }
         L10nKey::SettingsHistorySearch => "履歴検索",
         L10nKey::SettingsHistorySearchDesc => {
-            "プロンプトで ⌃R を押すと tty7 のファジー履歴メニューが開きます。オフなら ⌃R はシェルへ — 逆方向検索や、そこでバインドしたもの（fzf、percol）"
+            "プロンプトで ⌃R を押すと xtty のファジー履歴メニューが開きます。オフなら ⌃R はシェルへ — 逆方向検索や、そこでバインドしたもの（fzf、percol）"
         }
         L10nKey::SettingsSelectionClipboard => "選択とクリップボード",
         L10nKey::SettingsSmartSelection => "スマート選択",
@@ -539,7 +540,7 @@ pub fn translate_ja(key: L10nKey) -> Option<&'static str> {
         }
         L10nKey::SettingsAgentsIntro => "エージェント",
         L10nKey::SettingsAgentsIntroDesc => {
-            "フックにより、これらのエージェントを実行するペインの状態（作業中 / 待機中 / 完了）がタブバーに表示されます。tty7 内でのみ有効"
+            "フックにより、これらのエージェントを実行するペインの状態（作業中 / 待機中 / 完了）がタブバーに表示されます。xtty 内でのみ有効"
         }
         L10nKey::SettingsReadingAgentConfig => "このマシンのエージェント設定を読み込んでいます…",
         L10nKey::SettingsStatusNotInstalled => "未インストール",
@@ -575,10 +576,10 @@ pub fn translate_ja(key: L10nKey) -> Option<&'static str> {
         L10nKey::SettingsDarkMode => "ダークモード",
         L10nKey::SettingsActive => "アクティブ",
         L10nKey::SettingsStartupWindow => "起動時のウィンドウ状態",
-        L10nKey::SettingsStartupWindowDesc => "tty7 起動時のウィンドウ状態",
+        L10nKey::SettingsStartupWindowDesc => "xtty 起動時のウィンドウ状態",
         L10nKey::SettingsRememberWindowSize => "ウィンドウサイズと位置を記憶",
         L10nKey::SettingsRememberWindowSizeDesc => {
-            "tty7 が最後に終了したときのサイズと位置で開き直します。オフならデフォルトサイズで中央に開きます"
+            "xtty が最後に終了したときのサイズと位置で開き直します。オフならデフォルトサイズで中央に開きます"
         }
         L10nKey::SettingsRestoreLastLayout => "前回のレイアウトを復元",
         L10nKey::SettingsRestoreLastLayoutDesc => {
@@ -655,14 +656,14 @@ pub fn translate_ja(key: L10nKey) -> Option<&'static str> {
         }
         L10nKey::SettingsDefaultTerminal => "デフォルトのターミナル",
         L10nKey::SettingsDefaultTerminalDesc => {
-            "tty7 を Unix 実行ファイル、SSH リンク、man ページリンク用の macOS のデフォルトターミナルにします。tty7 はフォルダとスクリプトも開けますが、Finder のフォルダハンドラは置き換えません。独自のターミナルを指定するアプリはこの設定を無視することがあります。"
+            "xtty を Unix 実行ファイル、SSH リンク、man ページリンク用の macOS のデフォルトターミナルにします。xtty はフォルダとスクリプトも開けますが、Finder のフォルダハンドラは置き換えません。独自のターミナルを指定するアプリはこの設定を無視することがあります。"
         }
         L10nKey::SettingsDefaultTerminalSet => "デフォルトのターミナルに設定",
         L10nKey::SettingsDefaultTerminalSetSuccess => {
-            "tty7 を対応するターミナルファイルとリンクのデフォルトハンドラに設定しました。"
+            "xtty を対応するターミナルファイルとリンクのデフォルトハンドラに設定しました。"
         }
         L10nKey::SettingsDefaultTerminalSetFailed => {
-            "tty7 をデフォルトのターミナルに設定できませんでした: {error}"
+            "xtty をデフォルトのターミナルに設定できませんでした: {error}"
         }
         L10nKey::SettingsVersion => "バージョン",
         L10nKey::SettingsUpdates => "アップデート",
@@ -685,7 +686,7 @@ pub fn translate_ja(key: L10nKey) -> Option<&'static str> {
         L10nKey::SettingsUpdateReady => {
             "{version} のダウンロードと検証が完了し、インストールできます。"
         }
-        L10nKey::SettingsUpdateReadyNextLaunch => "次回 tty7 を起動したときに適用されます。",
+        L10nKey::SettingsUpdateReadyNextLaunch => "次回 xtty を起動したときに適用されます。",
         L10nKey::SettingsUpdateInstallNow => "インストールして再起動",
         L10nKey::SettingsUpdateDiscard => "破棄",
         L10nKey::SettingsAutoDownload => "アップデートをバックグラウンドでダウンロード",
@@ -700,14 +701,14 @@ pub fn translate_ja(key: L10nKey) -> Option<&'static str> {
         L10nKey::SettingsUpdateChannelNightly => "ナイトリー",
         L10nKey::SettingsDaemonStale => "バックグラウンドサーバーは {build} のままです。",
         L10nKey::SettingsDaemonStaleDesc => {
-            "tty7 はその場で更新されました。アプリは新しく、ペインはまだ以前のビルドのサーバーが処理しています。再起動すると新しいビルドに切り替わり、ペインで動いているプロセスはすべて終了します。急ぐ必要はなく、ペインが空いているときにどうぞ"
+            "xtty はその場で更新されました。アプリは新しく、ペインはまだ以前のビルドのサーバーが処理しています。再起動すると新しいビルドに切り替わり、ペインで動いているプロセスはすべて終了します。急ぐ必要はなく、ペインが空いているときにどうぞ"
         }
         L10nKey::UpdateDialogTitle => "アップデートがあります",
         L10nKey::UpdateDialogDetail => {
-            "tty7 {version} が利用できます（現在 {current}）。インストールするとアプリが再起動します。バックグラウンドサーバーは動いたままなので、ペインの中身は残ります"
+            "xtty {version} が利用できます（現在 {current}）。インストールするとアプリが再起動します。バックグラウンドサーバーは動いたままなので、ペインの中身は残ります"
         }
         L10nKey::UpdateDialogDetailManual => {
-            "tty7 {version} が利用できます（現在 {current}）。{hint}"
+            "xtty {version} が利用できます（現在 {current}）。{hint}"
         }
         L10nKey::UpdateDialogCannotSelfUpdate => "このインストールは自動更新できません。",
         L10nKey::UpdateDialogLater => "後で",
@@ -716,13 +717,13 @@ pub fn translate_ja(key: L10nKey) -> Option<&'static str> {
         L10nKey::SettingsUpdatePrepareFailed => "アップデートに失敗しました: {error}",
         L10nKey::SettingsUpdateLaunchFailed => "インストーラーを起動できませんでした: {error}",
         L10nKey::SettingsUpdateUnsupportedMacos => {
-            "この tty7 は書き込み可能な tty7.app バンドルにないため、自分自身を置き換えられません。「アプリケーション」へ移動するか、リリースページから更新してください"
+            "この xtty は書き込み可能な xtty.app バンドルにないため、自分自身を置き換えられません。「アプリケーション」へ移動するか、リリースページから更新してください"
         }
         L10nKey::SettingsUpdateMissingPackage => {
             "このリリースには、現在のインストール形式に合う {name} パッケージがありません。リリースページを開いて別のパッケージを選んでください"
         }
         L10nKey::SettingsUpdateMissingChecksums => {
-            "このリリースには checksums.txt がないため、tty7 は自動インストールを行いません"
+            "このリリースには checksums.txt がないため、xtty は自動インストールを行いません"
         }
         L10nKey::SettingsVersionAvailable => "バージョン {version} が利用可能です",
         L10nKey::SettingsCheckUpdatesDesc => {
@@ -731,9 +732,9 @@ pub fn translate_ja(key: L10nKey) -> Option<&'static str> {
         L10nKey::SettingsCheckUpdatesOnLaunch => "起動時にアップデートを確認",
         L10nKey::SettingsCommandLine => "コマンドライン",
         L10nKey::SettingsCommandLineDesc => {
-            "同梱の tty7 コマンドを PATH に入れ、スクリプトやエージェントが任意のターミナルから tty7 を操作できるようにします（ペイン内ではどちらでも動きます）。自分でビルドした tty7 を優先したい場合はオフに。次回起動時に有効"
+            "同梱の xtty コマンドを PATH に入れ、スクリプトやエージェントが任意のターミナルから xtty を操作できるようにします（ペイン内ではどちらでも動きます）。自分でビルドした xtty を優先したい場合はオフに。次回起動時に有効"
         }
-        L10nKey::SettingsInstallCliOnPath => "`tty7` コマンドを PATH にインストール",
+        L10nKey::SettingsInstallCliOnPath => "`xtty` コマンドを PATH にインストール",
         L10nKey::SettingsServer => "デーモンサーバー",
         L10nKey::SettingsServerDesc => {
             "シェルを動かし続けているバックグラウンドサーバーを再起動します。このコンピュータ上のすべてのシェルが終了し、タブとレイアウトは新しいシェルで開き直します"
@@ -741,7 +742,7 @@ pub fn translate_ja(key: L10nKey) -> Option<&'static str> {
         L10nKey::SettingsRestartServer => "サーバーを再起動…",
         L10nKey::SettingsAppHttpProxy => "アップデート用プロキシ",
         L10nKey::SettingsAppHttpProxyDesc => {
-            "tty7 自身の更新チェックとダウンロードにのみ使用し、ペインで実行中のプログラムには影響しません。空欄ならシステムのプロキシに従います"
+            "xtty 自身の更新チェックとダウンロードにのみ使用し、ペインで実行中のプログラムには影響しません。空欄ならシステムのプロキシに従います"
         }
         L10nKey::SettingsAppHttpProxyInvalid => {
             "プロキシアドレスとして正しくないため、この値は保存されませんでした"
@@ -795,7 +796,7 @@ pub fn translate_ja(key: L10nKey) -> Option<&'static str> {
             "エージェント 統合 フック インストール trae code traecli traex agent integration hooks install"
         }
         L10nKey::SettingsSearchCommandLineToolKeywords => {
-            "cli tty7 パス シェル コマンド インストール シンボリックリンク ターミナル iterm エージェント スクリプト command line tool"
+            "cli xtty パス シェル コマンド インストール シンボリックリンク ターミナル iterm エージェント スクリプト command line tool"
         }
         L10nKey::SettingsSearchCopilotCliKeywords => {
             "エージェント 統合 フック インストール github copilot agent integration hooks install"
@@ -913,6 +914,66 @@ pub fn translate_ja(key: L10nKey) -> Option<&'static str> {
         L10nKey::SettingsSearchPortForwardingKeywords => {
             "ssh トンネル ローカル リモート ダイナミック socks フォワード ルール port forwarding ssh tunnel local remote dynamic forward rule"
         }
+        L10nKey::SettingsSearchPasswordTriggersKeywords => {
+            "パスワード 自動入力 トリガー キーチェーン credential prompt su sudo password trigger autofill keychain send enter"
+        }
+        L10nKey::SettingsSearchPasswordTriggerSendEnterKeywords => {
+            "Enter 送信 自動 Enter send enter password trigger"
+        }
+        L10nKey::SettingsPasswordTriggersIntro => "パスワード自動入力",
+        L10nKey::SettingsPasswordTriggersIntroDesc => {
+            "ターミナル出力がルールに一致すると、システムキーチェーンの秘密を送信します。秘密自体は設定ファイルに書きません。"
+        }
+        L10nKey::SettingsPasswordTriggerPattern => "パターン",
+        L10nKey::SettingsPasswordTriggerPatternDesc => {
+            "ライブ PTY 出力に対して照合するリテラル文字列または正規表現。"
+        }
+        L10nKey::SettingsPasswordTriggerPatternHint => "Password:",
+        L10nKey::SettingsPasswordTriggerPatternRequired => "照合するパターンを入力してください。",
+        L10nKey::SettingsPasswordTriggerRegex => "正規表現",
+        L10nKey::SettingsPasswordTriggerRegexDesc => "オンで正規表現、オフでリテラル照合。",
+        L10nKey::SettingsPasswordTriggerLiteral => "リテラル",
+        L10nKey::SettingsPasswordTriggerCredential => "資格情報名",
+        L10nKey::SettingsPasswordTriggerCredentialDesc => {
+            "キーチェーンの xtty-password-trigger サービス内のアカウント名。"
+        }
+        L10nKey::SettingsPasswordTriggerCredentialHint => "su-search",
+        L10nKey::SettingsPasswordTriggerCredentialRequired => {
+            "キーチェーンの資格情報名を入力してください。"
+        }
+        L10nKey::SettingsPasswordTriggerSendEnter => "Enter を送信 / Send Enter",
+        L10nKey::SettingsPasswordTriggerSendEnterDesc => {
+            "秘密のあとに Enter（CR）も送ります。別の入力を待つ場合はオフにしてください。"
+        }
+        L10nKey::SettingsPasswordTriggerSendEnterShort => "Enter 送信",
+        L10nKey::SettingsPasswordTriggerEnabled => "有効",
+        L10nKey::SettingsPasswordTriggerCooldown => "クールダウン（ms）",
+        L10nKey::SettingsPasswordTriggerCooldownDesc => {
+            "同じルールが連続して発火するまでの最短間隔。"
+        }
+        L10nKey::SettingsPasswordTriggerEmpty => {
+            "パスワードトリガーはまだありません。ルールを追加すると一致するプロンプトを自動入力します。"
+        }
+        L10nKey::SettingsPasswordTriggerBadRegex => "そのパターンは有効な正規表現ではありません。",
+        L10nKey::SettingsPasswordTriggerBadCooldown => "クールダウンはミリ秒の数値にしてください。",
+        L10nKey::SettingsPasswordTriggerSecretRequired => {
+            "キーチェーンに保存する秘密を入力してください。"
+        }
+        L10nKey::SettingsPasswordTriggerSecretKept => {
+            "システムキーチェーンに保存済みです。空欄のままにすると現在の秘密を維持します。"
+        }
+        L10nKey::SettingsPasswordTriggerSecretNeeded => {
+            "この資格情報名でシステムキーチェーンに保存します。設定ファイルには書きません。"
+        }
+        L10nKey::SettingsPasswordTriggerSecretHintKeep => "空欄で維持",
+        L10nKey::SettingsPasswordTriggerSecretHintNew => "保存する秘密",
+        L10nKey::SettingsPasswordTriggerDeleteTitle => "「{name}」を削除しますか？",
+        L10nKey::SettingsPasswordTriggerDeleteBody => {
+            "ルールは設定から削除されます。同じ資格情報を使う他のルールがない場合のみ、キーチェーン項目も削除します。"
+        }
+        L10nKey::SettingsCouldntSaveTriggerSecret => "{account} の秘密を保存できません: {error}",
+        L10nKey::SettingsNewPasswordTrigger => "新しいパスワードトリガー",
+        L10nKey::SettingsEditPasswordTrigger => "パスワードトリガーを編集",
         L10nKey::SettingsSearchProgramKeywords => {
             "シェル バイナリ zsh bash fish nu nushell pwsh powershell 実行可能 起動 program shell binary executable launch"
         }
@@ -1131,7 +1192,7 @@ pub fn translate_ja(key: L10nKey) -> Option<&'static str> {
         L10nKey::PanelProcessesSubtitle => "プロセス",
         L10nKey::PanelPortsSubtitle => "ポート",
         L10nKey::PanelLatency => "遅延",
-        L10nKey::PanelPortsUnsupported => "リモートの tty7-server が古く、ポートを列挙できません。",
+        L10nKey::PanelPortsUnsupported => "リモートの xtty-server が古く、ポートを列挙できません。",
         L10nKey::PanelPortsProbeFailed => {
             "このペインが何をリッスンしているか確認できませんでした。"
         }
@@ -1277,7 +1338,7 @@ pub fn translate_ja(key: L10nKey) -> Option<&'static str> {
             "Diff は {limit} 行で切り詰められました — 残りはターミナルで `git diff` を実行してください"
         }
         L10nKey::DiffTruncatedBudget => {
-            "内容は読み込まれていません — tty7 の Diff 予算を超えています。ターミナルで `git diff` を実行してください"
+            "内容は読み込まれていません — xtty の Diff 予算を超えています。ターミナルで `git diff` を実行してください"
         }
         L10nKey::DiffUntrackedHeader => "未追跡ファイル ({count})",
         L10nKey::DiffMoreUntracked => {
@@ -1287,8 +1348,8 @@ pub fn translate_ja(key: L10nKey) -> Option<&'static str> {
         L10nKey::DiffChangedLines => {
             "変更行 {total} 件、上限 {cap} までに読み込んだ Diff 行 {loaded} 件"
         }
-        L10nKey::DiffBudgetAndCap => "tty7 の予算とファイルごとの上限",
-        L10nKey::DiffBudget => "tty7 の予算",
+        L10nKey::DiffBudgetAndCap => "xtty の予算とファイルごとの上限",
+        L10nKey::DiffBudget => "xtty の予算",
         L10nKey::DiffPerFileCap => "ファイルごとの上限",
         L10nKey::DiffUntrackedSummary => "未追跡 {count}",
         L10nKey::DiffViewSplit => "左右分割",
@@ -1336,27 +1397,27 @@ pub fn translate_ja(key: L10nKey) -> Option<&'static str> {
         L10nKey::RemoteActionRetry => "再試行",
         L10nKey::RemoteActionRemoveEntry => "エントリを削除",
         L10nKey::RemoteNoConnectionDetails => {
-            "このウィンドウは {machine} 上のワークスペースですが、tty7 に接続情報がありません。SSH プロファイルか ~/.ssh/config の項目が残っているか確認してください"
+            "このウィンドウは {machine} 上のワークスペースですが、xtty に接続情報がありません。SSH プロファイルか ~/.ssh/config の項目が残っているか確認してください"
         }
         L10nKey::RemoteThisComputer => "このコンピュータ",
         L10nKey::RemoteProfileGone => "削除されたプロファイル",
-        L10nKey::RemoteRestartTitle => "「{machine}」上の tty7 サーバーを再起動しますか？",
+        L10nKey::RemoteRestartTitle => "「{machine}」上の xtty サーバーを再起動しますか？",
         L10nKey::RemoteRestartBody => {
             "{machine} 上のシェルは、表示されていないものも含めてすべて終了します。ワークスペースとレイアウトは保持され、新しいシェルで開きます"
         }
         L10nKey::RemoteReplaceBody => {
-            "tty7 は {machine} に対応するサーバーをインストールして起動します。\n\n{machine} で実行中のすべてのセッションが終了します。このウィンドウが接続していないセッションも含みます"
+            "xtty は {machine} に対応するサーバーをインストールして起動します。\n\n{machine} で実行中のすべてのセッションが終了します。このウィンドウが接続していないセッションも含みます"
         }
         L10nKey::RemoteRestartFailedTitle => {
-            "「{machine}」上の tty7 サーバーは再起動されませんでした"
+            "「{machine}」上の xtty サーバーは再起動されませんでした"
         }
         L10nKey::RemoteRestartFailedBody => {
             "{error}\n\nそこで実行中のセッションは古いビルドのままです。セッションがなくなっている場合は、再接続時にこのビルドのサーバーが起動します"
         }
         L10nKey::RemoteHostUnreachable => "{machine} に到達できませんでした: {error}",
-        L10nKey::RemoteInstallTitle => "「{machine}」に tty7 サーバーをインストールしますか？",
+        L10nKey::RemoteInstallTitle => "「{machine}」に xtty サーバーをインストールしますか？",
         L10nKey::RemoteInstallDetail => {
-            "tty7 はサーバーバイナリを {machine} に書き込み、{machine} でワークスペースをホストできるようにします。{machine} 上の他のものには触れず、sudo も使いません。\n\n{path_label}\u{2003}{path}\n{version_label}\u{2003}{version}\n{size_label}\u{2003}{size}\n{from_label}\u{2003}{from}\n{sha_label}\u{2003}{sha256}\n\n{silent_upgrades}"
+            "xtty はサーバーバイナリを {machine} に書き込み、{machine} でワークスペースをホストできるようにします。{machine} 上の他のものには触れず、sudo も使いません。\n\n{path_label}\u{2003}{path}\n{version_label}\u{2003}{version}\n{size_label}\u{2003}{size}\n{from_label}\u{2003}{from}\n{sha_label}\u{2003}{sha256}\n\n{silent_upgrades}"
         }
         L10nKey::RemoteInstallPathLabel => "パス",
         L10nKey::RemoteInstallVersionLabel => "バージョン",
@@ -1367,7 +1428,7 @@ pub fn translate_ja(key: L10nKey) -> Option<&'static str> {
             "このマシンでの今後のアップグレードはサイレントにインストールされます"
         }
         L10nKey::RemoteInstallBytes => "バイト",
-        L10nKey::RemoteMismatchTitle => "「{machine}」上の tty7 サーバーを更新しますか？",
+        L10nKey::RemoteMismatchTitle => "「{machine}」上の xtty サーバーを更新しますか？",
         L10nKey::RemoteMismatchDetail => {
             "{machine} はサーバー {running} で動いていますが、このクライアント（{wanted}）はそのプロトコルを話せません。対応するサーバーはインストール済みですが、セッションは実行中のサーバー上にあります。\n\n{replace_server}\u{2003}{wanted} に置き換え、そのサーバー上のセッションをすべて終了します。\n{cancel}\u{2003}{machine} はそのままです。このウィンドウは接続しません"
         }
@@ -1376,19 +1437,19 @@ pub fn translate_ja(key: L10nKey) -> Option<&'static str> {
         L10nKey::RemoteMismatchUnknownBuild => "不明なビルド",
         L10nKey::RemoteMismatchUnknownBuildFromExe => "不明なビルド（{exe} から）",
         L10nKey::RemoteServerOutdated => {
-            "{machine} の tty7 サーバーが古く（{build}）、この tty7 からは通信できません。更新すると接続できます"
+            "{machine} の xtty サーバーが古く（{build}）、この xtty からは通信できません。更新すると接続できます"
         }
         L10nKey::RemoteServerTooNew => {
-            "{machine} の tty7 サーバー（{build}）は、この tty7 より新しいバージョンです。このコンピューターの tty7 を更新するか、向こうのサーバーを対応するものに置き換えてください"
+            "{machine} の xtty サーバー（{build}）は、この xtty より新しいバージョンです。このコンピューターの xtty を更新するか、向こうのサーバーを対応するものに置き換えてください"
         }
         L10nKey::RemoteDaemonStartFailed => {
-            "tty7 のローカルサーバーを起動できませんでした: {error}"
+            "xtty のローカルサーバーを起動できませんでした: {error}"
         }
         L10nKey::RemoteDaemonUnreachable => {
-            "tty7 のローカルサーバーに到達できませんでした: {error}"
+            "xtty のローカルサーバーに到達できませんでした: {error}"
         }
         L10nKey::RemoteDaemonTooOld => {
-            "このマシンのデーモンは古いビルドのため、{machine} 上のサーバーを再起動できません。tty7 を終了（デーモンも停止します）して開き直し、再試行してください"
+            "このマシンのデーモンは古いビルドのため、{machine} 上のサーバーを再起動できません。xtty を終了（デーモンも停止します）して開き直し、再試行してください"
         }
         L10nKey::RemoteProfileMissing => "その保存済み SSH プロファイルはもう存在しません",
         L10nKey::RemoteAliasMissing => "`{alias}` は ~/.ssh/config にありません",
@@ -1396,15 +1457,15 @@ pub fn translate_ja(key: L10nKey) -> Option<&'static str> {
             "ローカルの --stdio ワークスペースには SSH 接続がありません"
         }
         L10nKey::RemoteHostNotTty7 => {
-            "{machine} は応答しましたが、tty7 サーバーとしては応答しませんでした: {error}"
+            "{machine} は応答しましたが、xtty サーバーとしては応答しませんでした: {error}"
         }
         L10nKey::RemoteWorkspaceListFailed => {
             "{machine} に接続しましたが、ワークスペースの一覧を取得できませんでした: {error}"
         }
         L10nKey::RemoteServerRestartFailed => {
-            "{machine} 上の tty7 サーバーを再起動できませんでした: {error}"
+            "{machine} 上の xtty サーバーを再起動できませんでした: {error}"
         }
-        L10nKey::RemoteNoRouteToHost => "tty7 は {machine} に到達する手段を失いました",
+        L10nKey::RemoteNoRouteToHost => "xtty は {machine} に到達する手段を失いました",
         L10nKey::RemoteMachineTreeUnexpectedReply => {
             "サーバーがマシンツリーに {reply} で応答しました"
         }
@@ -1413,12 +1474,12 @@ pub fn translate_ja(key: L10nKey) -> Option<&'static str> {
             "実行中のコーディングエージェントが見つかりません — 先にペインでコーディングエージェントを起動してください（claude、codex など）"
         }
         L10nKey::SwitcherThisComputer => "このコンピュータ",
-        L10nKey::SwitcherStartingServer => "tty7 のサーバーを起動中…",
+        L10nKey::SwitcherStartingServer => "xtty のサーバーを起動中…",
         L10nKey::SwitcherDownloadingServerWithTotal => {
-            "tty7 のサーバーをダウンロード中… {done} / {total}"
+            "xtty のサーバーをダウンロード中… {done} / {total}"
         }
-        L10nKey::SwitcherDownloadingServerNoTotal => "tty7 のサーバーをダウンロード中… {done}",
-        L10nKey::SwitcherCopyingServer => "tty7 のサーバーをコピー中… {done} / {total}",
+        L10nKey::SwitcherDownloadingServerNoTotal => "xtty のサーバーをダウンロード中… {done}",
+        L10nKey::SwitcherCopyingServer => "xtty のサーバーをコピー中… {done} / {total}",
         L10nKey::SwitcherThisWindow => "このウィンドウ",
         L10nKey::SwitcherOpen => "開く",
         L10nKey::SwitcherDisconnect => "切断",
@@ -1579,14 +1640,14 @@ pub fn translate_ja(key: L10nKey) -> Option<&'static str> {
         L10nKey::CmdAgentSendGitDiffSubtitle => "git diff → 実行中のコーディングエージェント",
         L10nKey::CmdSettings => "設定…",
         L10nKey::CmdKeyboardShortcuts => "キーボードショートカット",
-        L10nKey::CmdAboutTty7 => "tty7 について",
+        L10nKey::CmdAboutTty7 => "xtty について",
         L10nKey::CmdCheckForUpdates => "アップデートを確認…",
         L10nKey::CmdDocumentation => "ドキュメント",
         L10nKey::CmdJoinDiscord => "Discord に参加",
         L10nKey::CmdReportIssue => "問題を報告…",
         L10nKey::CmdRestartServer => "サーバーを再起動…",
         L10nKey::CmdRestartServerSubtitle => "実行中のすべてのシェルを終了し、レイアウトは保持",
-        L10nKey::CmdQuitTty7 => "tty7 を終了",
+        L10nKey::CmdQuitTty7 => "xtty を終了",
         L10nKey::CmdQuitTty7Subtitle => "サーバーを停止し、実行中のすべてのシェルを終了",
         L10nKey::CmdQuickConnect => "「{target}」に接続",
         L10nKey::CmdQuickConnectSaveProfile => "「{target}」をプロファイルとして保存…",
@@ -1654,12 +1715,12 @@ pub fn translate_ja(key: L10nKey) -> Option<&'static str> {
         L10nKey::AppWorktreeRemoveFailed => "ワークツリーの削除に失敗しました: {error}",
         L10nKey::AppForkStillConnecting => "フォークできませんでした: ペインはまだ接続中です",
         L10nKey::AppPaneNoCodingAgent => "このペインはコーディングエージェントを実行していません",
-        L10nKey::AppForkNoCommand => "tty7 には {name} 用のフォークコマンドがありません",
+        L10nKey::AppForkNoCommand => "xtty には {name} 用のフォークコマンドがありません",
         L10nKey::AppForkLocalOnly => {
             "{name} のセッションはローカルペインからしかフォークできません"
         }
         L10nKey::AppForkNoSessionId => {
-            "tty7 はこのペインで {name} のセッション ID を確認できていません — 設定 → エージェントでフックをインストールしてください"
+            "xtty はこのペインで {name} のセッション ID を確認できていません — 設定 → エージェントでフックをインストールしてください"
         }
         L10nKey::AppForkSessionIdNotToken => {
             "{name} のセッション ID はプレーンなトークンではありません"
@@ -1706,7 +1767,7 @@ pub fn translate_ja(key: L10nKey) -> Option<&'static str> {
         L10nKey::AppAgentHooksThisComputer => "このコンピュータ",
         L10nKey::AppAgentHooksRemoteMachine => "リモートマシン",
         L10nKey::AppAgentHooksNoHomeDir => {
-            "tty7 はこのコンピュータのホームディレクトリを特定できなかったため、インストール先がありません"
+            "xtty はこのコンピュータのホームディレクトリを特定できなかったため、インストール先がありません"
         }
         L10nKey::AppAgentHooksOffline => {
             "このマシンに接続されていないため、エージェントの設定を読み書きできません。そのマシンでワークスペースを開いてから戻ってください"
@@ -1724,7 +1785,7 @@ pub fn translate_ja(key: L10nKey) -> Option<&'static str> {
             "インストールされていないため、削除するものはありません"
         }
         L10nKey::AppAgentHooksNoTty7Hooks => {
-            "tty7 のフックが見つからないため、削除するものはありません"
+            "xtty のフックが見つからないため、削除するものはありません"
         }
         L10nKey::AppAgentHooksInstallFailed => "フックをインストールできませんでした: {error}",
         L10nKey::AppAgentHooksRemoveFailed => "フックを削除できませんでした: {error}",
@@ -1752,7 +1813,7 @@ pub fn translate_ja(key: L10nKey) -> Option<&'static str> {
         L10nKey::SettingsUiFontDefault => "デフォルト（システム UI フォント）",
         L10nKey::ForwardDescriptionPlaceholder => "用途",
         L10nKey::SettingsShellDefaultLoginShell => "あなたのログインシェル",
-        L10nKey::SettingsShellDetected => "tty7 が見つけたシェル",
+        L10nKey::SettingsShellDetected => "xtty が見つけたシェル",
         L10nKey::SftpErrorUnexpectedReply => "予期しない応答: {reply}",
         L10nKey::SftpErrorUnsafeRemoteName => "安全でないリモート名 {name} を拒否しました",
         L10nKey::SftpErrorNoFreeLocalName => {
@@ -1765,28 +1826,28 @@ pub fn translate_ja(key: L10nKey) -> Option<&'static str> {
         L10nKey::Replace => "置き換える",
         L10nKey::SftpErrorInvalidOctalMode => "無効な 8 進数モードです",
         L10nKey::SettingsDaemonStaleDescInPlace => {
-            "tty7 はその場で更新されました。アプリは新しく、ペインはまだ前のビルドで動いています。サーバーは停止せずに新しいビルドへ置き換えられるので、シェルはそのまま引き継がれます。tty7 内蔵の SSH クライアントを使うペインだけは例外で、その接続は閉じられ、開き直しが必要です"
+            "xtty はその場で更新されました。アプリは新しく、ペインはまだ前のビルドで動いています。サーバーは停止せずに新しいビルドへ置き換えられるので、シェルはそのまま引き継がれます。xtty 内蔵の SSH クライアントを使うペインだけは例外で、その接続は閉じられ、開き直しが必要です"
         }
         L10nKey::AppRestartServerBodyInPlace => {
-            "サーバーは停止せずに自分自身をこのビルドへ置き換えます。シェルは動いたままで、ウィンドウはすぐに再接続します。tty7 内蔵の SSH クライアントを使うペインだけは例外で、その接続は閉じられ、開き直しが必要です"
+            "サーバーは停止せずに自分自身をこのビルドへ置き換えます。シェルは動いたままで、ウィンドウはすぐに再接続します。xtty 内蔵の SSH クライアントを使うペインだけは例外で、その接続は閉じられ、開き直しが必要です"
         }
         L10nKey::PaneRestoredScreenBanner => {
             "復元された画面 — 以下は新しいシェルで、これより上のものは動いていません"
         }
         L10nKey::SettingsPerPaneHistory => "ペインごとに独自のシェル履歴を持たせる",
         L10nKey::SettingsPerPaneHistoryDescription => {
-            "上キーでたどるのは、全ペインが混ざったものではなくこのペインで実行したコマンドです。新しいペインは既存の履歴から始まり、追加分は閉じるときに書き戻されます。対象は tty7 が設定できる bash と zsh のペインで、独自の引数で起動したシェルはそのままです"
+            "上キーでたどるのは、全ペインが混ざったものではなくこのペインで実行したコマンドです。新しいペインは既存の履歴から始まり、追加分は閉じるときに書き戻されます。対象は xtty が設定できる bash と zsh のペインで、独自の引数で起動したシェルはそのままです"
         }
         L10nKey::IntegrationNoticeBlocked => {
             "“{wrapper}”がこのペインのシェルレポートを横取りしているため、インライン補完と Ctrl+R メニューは使えません。シェル独自の履歴検索は引き続き使えます。"
         }
         L10nKey::IntegrationNoticeNotEngaged => {
-            "このペインでは tty7 シェル統合が有効になっておらず、インライン補完と Ctrl+R メニューは使えません。よくある原因は、独自の引数で起動したシェル、PTY ラッパー、未対応のシェルです。"
+            "このペインでは xtty シェル統合が有効になっておらず、インライン補完と Ctrl+R メニューは使えません。よくある原因は、独自の引数で起動したシェル、PTY ラッパー、未対応のシェルです。"
         }
         L10nKey::PaneTitleDisconnected => "{title} — 切断されました",
         L10nKey::PaneTitleProcessExited => "{title} — プロセスが終了しました",
         L10nKey::LoopbackForwardFailed => ":{port} を転送できませんでした — {error}",
-        L10nKey::TrayTooltipAgents => "tty7: {parts}",
+        L10nKey::TrayTooltipAgents => "xtty: {parts}",
         L10nKey::TrayAgentSep => "、",
         L10nKey::CursorShapeBlock => "ブロック",
         L10nKey::CursorShapeBar => "バー",
@@ -1799,14 +1860,14 @@ pub fn translate_ja(key: L10nKey) -> Option<&'static str> {
         }
         L10nKey::ScmFilesChanged => "{count} 個のファイルが変更されました",
         L10nKey::ScmStagedFileCount => "{count} 個のファイルがステージされました",
-        L10nKey::AppMenuAbout => "tty7 について",
+        L10nKey::AppMenuAbout => "xtty について",
         L10nKey::AppMenuCheckForUpdates => "アップデートを確認…",
         L10nKey::AppMenuSettings => "設定…",
         L10nKey::AppMenuServices => "サービス",
-        L10nKey::AppMenuHideApp => "tty7 を非表示",
+        L10nKey::AppMenuHideApp => "xtty を非表示",
         L10nKey::AppMenuHideOthers => "ほかを非表示",
         L10nKey::AppMenuShowAll => "すべて表示",
-        L10nKey::AppMenuQuit => "tty7 を終了",
+        L10nKey::AppMenuQuit => "xtty を終了",
         L10nKey::AppMenuFile => "ファイル",
         L10nKey::AppMenuEdit => "編集",
         L10nKey::AppMenuView => "表示",
@@ -1855,13 +1916,13 @@ pub fn translate_ja(key: L10nKey) -> Option<&'static str> {
         L10nKey::AppMenuRevealInFinder => "Finder に表示",
         L10nKey::AppMenuRevealInFolder => "含まれるフォルダーを開く",
         L10nKey::AppMenuCopyLinkPath => "パスをコピー",
-        L10nKey::AppMenuDocumentation => "tty7 ドキュメント",
+        L10nKey::AppMenuDocumentation => "xtty ドキュメント",
         L10nKey::AppMenuKeyboardShortcuts => "キーボードショートカット",
         L10nKey::AppMenuJoinDiscord => "Discord に参加",
         L10nKey::AppMenuReportIssue => "問題を報告…",
         L10nKey::AppMenuRestartServer => "サーバーを再起動…",
         L10nKey::WindowUntitled => "無題",
-        L10nKey::TrayShowTty7 => "tty7 を表示",
+        L10nKey::TrayShowTty7 => "xtty を表示",
         L10nKey::TrayNotifications => "通知",
         L10nKey::TrayAgentNeedsInput => "入力が必要",
         L10nKey::AgentStatusWorking => "実行中",
@@ -1928,13 +1989,13 @@ pub fn translate_variant_ja(key: L10nKey, branch: &'static str) -> Option<&'stat
             "ホスト {count} 件を追加 — {updated} 件を更新、{unchanged} 件は変更なし"
         }
         (L10nKey::SettingsImportIgnored, "zero") => {
-            "ファイル内のすべてのオプションに tty7 側の設定があります"
+            "ファイル内のすべてのオプションに xtty 側の設定があります"
         }
         (L10nKey::SettingsImportIgnored, "one") => {
-            "tty7 に設定のないオプションが 1 件あり、ファイルに残されています: {options}"
+            "xtty に設定のないオプションが 1 件あり、ファイルに残されています: {options}"
         }
         (L10nKey::SettingsImportIgnored, "other") => {
-            "tty7 に設定のないオプションが {count} 件あり、ファイルに残されています: {options}"
+            "xtty に設定のないオプションが {count} 件あり、ファイルに残されています: {options}"
         }
         (L10nKey::SettingsRulesOpenedWithConnection, "zero") => "接続と同時に開くルール 0 件",
         (L10nKey::SettingsRulesOpenedWithConnection, "one") => "接続と同時に開くルール 1 件",

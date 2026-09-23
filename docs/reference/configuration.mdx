@@ -170,6 +170,11 @@ Matching follows live PTY output rather than a command name, works across
 split output frames, and ignores terminal colour/title escape sequences. Old
 scrollback is never replayed into the matcher when a pane is restored.
 
+You can also manage these rules in **Settings → Password triggers**（设置 → 密码自动填入）:
+add / edit / delete, toggle enabled, and set **Send Enter / 自动回车**. The
+password field writes to the OS keychain (`tty7-password-trigger`); only the
+credential account name is stored in `config.json`.
+
 ## Links
 
 | Key | Type | Default | |

@@ -62,6 +62,9 @@ impl ZmodemRole {
 pub(crate) struct ZmodemPipe {
     divert: AtomicBool,
     pending_role: AtomicU8,
+    /// After a clean finish, swallow the sender's trailing `OO` (and hex
+    /// trailer noise) so it does not paint into the shell.
+    oo_discard: AtomicBool,
     inbound: Mutex<Vec<u8>>,
     /// Undiverted tail kept so a header split across reads still matches.
     scan_tail: Mutex<Vec<u8>>,
@@ -78,6 +81,7 @@ impl ZmodemPipe {
 
     pub(crate) fn begin(&self, role: ZmodemRole) {
         self.pending_role.store(role as u8, Ordering::Release);
+        self.oo_discard.store(false, Ordering::Release);
         self.divert.store(true, Ordering::Release);
         if let Ok(mut tail) = self.scan_tail.lock() {
             tail.clear();
@@ -87,12 +91,18 @@ impl ZmodemPipe {
     pub(crate) fn end(&self) {
         self.divert.store(false, Ordering::Release);
         self.pending_role.store(0, Ordering::Release);
+        self.oo_discard.store(false, Ordering::Release);
         if let Ok(mut inbound) = self.inbound.lock() {
             inbound.clear();
         }
         if let Ok(mut tail) = self.scan_tail.lock() {
             tail.clear();
         }
+    }
+
+    /// Drop the remote sender's post-ZFIN `OO` (and CR/LF/XON) without painting.
+    pub(crate) fn arm_oo_discard(&self) {
+        self.oo_discard.store(true, Ordering::Release);
     }
 
     pub(crate) fn take_pending_role(&self) -> Option<ZmodemRole> {
@@ -135,16 +145,21 @@ impl ZmodemPipe {
             return Vec::new();
         }
 
+        let bytes = self.strip_trailing_oo(bytes);
+        if bytes.is_empty() {
+            return Vec::new();
+        }
+
         let (tail_len, combined) = self
             .scan_tail
             .lock()
             .map(|mut tail| {
                 let tail_len = tail.len();
                 let mut v = std::mem::take(&mut *tail);
-                v.extend_from_slice(bytes);
+                v.extend_from_slice(&bytes);
                 (tail_len, v)
             })
-            .unwrap_or_else(|_| (0, bytes.to_vec()));
+            .unwrap_or_else(|_| (0, bytes));
 
         if let Some((at, role)) = find_zmodem_start(&combined) {
             // Only the still-undisplayed prefix may reach the VT parser. Bytes
@@ -166,10 +181,37 @@ impl ZmodemPipe {
             if combined.len() > KEEP {
                 tail.extend_from_slice(&combined[combined.len() - KEEP..]);
             } else {
-                *tail = combined;
+                *tail = combined.clone();
             }
         }
-        bytes.to_vec()
+        // Prefer the post-OO-strip slice (not the original caller's buffer).
+        if tail_len == 0 {
+            combined
+        } else if combined.len() > tail_len {
+            combined[tail_len..].to_vec()
+        } else {
+            Vec::new()
+        }
+    }
+
+    fn strip_trailing_oo(&self, bytes: &[u8]) -> Vec<u8> {
+        if !self.oo_discard.load(Ordering::Acquire) {
+            return bytes.to_vec();
+        }
+        let mut i = 0;
+        while i < bytes.len() && i < 16 {
+            match bytes[i] {
+                // Sender "Over and Out", hex-header trailer, backspace cleanup.
+                b'O' | b'\r' | b'\n' | 0x11 | 0x8a | 0x08 => i += 1,
+                _ => break,
+            }
+        }
+        if i > 0 && i == bytes.len() {
+            // Entire chunk was trailer — keep discarding on the next read.
+            return Vec::new();
+        }
+        self.oo_discard.store(false, Ordering::Release);
+        bytes[i..].to_vec()
     }
 }
 
@@ -724,6 +766,7 @@ fn pump_send(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::io::FromRawFd;
 
     #[test]
     fn detects_hex_zrqinit_as_receive() {
@@ -905,5 +948,328 @@ mod tests {
         assert_eq!(std::fs::read(&saved).unwrap(), payload);
         drop(_guard);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn send_roundtrip_after_picker() {
+        // Mirrors `rz`: handshake before picker, then start_file after paths land.
+        // Full byte roundtrip is covered by `real_lrzsz_rz_be_send_via_pty`; this
+        // checks the session state machine + ESCCTL wire shape without a PTY.
+        let dir = std::env::temp_dir().join(format!(
+            "tty7-zmodem-send-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let upload = dir.join("up.txt");
+        std::fs::write(&upload, b"data").unwrap();
+
+        let mut remote = Receiver::new().expect("receiver");
+        let zrinit = remote.drain_outgoing().to_vec();
+        remote.advance_outgoing(zrinit.len());
+
+        let (mut session, wire) =
+            ZmodemSession::start_send_handshake(zrinit.clone()).expect("handshake");
+        assert!(session.is_awaiting_picker());
+        assert!(
+            wire.windows(6).any(|w| w == b"**\x18B00"),
+            "must emit ZRQINIT before picker"
+        );
+        assert!(remote.feed_incoming(&wire).unwrap() > 0);
+        let _ = remote.drain_outgoing();
+
+        // Retransmitted ZRINITs while the picker is open must not break us.
+        for _ in 0..3 {
+            let (_out, action) = session.pump(&zrinit).expect("pump");
+            assert!(action.is_none());
+        }
+
+        let zfile_wire = session
+            .begin_send_with_paths(vec![upload.clone()])
+            .expect("start send");
+        assert!(!zfile_wire.is_empty(), "ZFILE must be queued after picker");
+        assert!(
+            zfile_wire.windows(2).any(|w| w == [0x18, 0x40]),
+            "ZFILE must ESCCTL-escape NUL (ZDLE 0x40), got {:02x?}",
+            &zfile_wire[..zfile_wire.len().min(48)]
+        );
+        let raw_nul_header = zfile_wire
+            .windows(5)
+            .any(|w| w == [0x04, 0x00, 0x00, 0x00, 0x00]);
+        assert!(
+            !raw_nul_header,
+            "ZFILE must not contain unescaped NUL flag bytes: {:02x?}",
+            zfile_wire
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn zfile_escapes_control_bytes() {
+        // Regression: stock zmodem2 left raw NUL in ZBIN32 ZFILE headers;
+        // `rz -be` then printed Bad CRC and never left "waiting to receive".
+        let mut remote = Receiver::new().expect("receiver");
+        let zrinit = remote.drain_outgoing().to_vec();
+        remote.advance_outgoing(zrinit.len());
+
+        let (mut session, wire) = ZmodemSession::start_send_handshake(zrinit).expect("hs");
+        let _ = remote.feed_incoming(&wire);
+
+        let dir = std::env::temp_dir().join(format!("tty7-zm-esc-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("x.bin");
+        std::fs::write(&path, b"ab").unwrap();
+        let out = session.begin_send_with_paths(vec![path]).expect("send");
+        // Header starts * ZDLE ZBIN32, then escaped frame type / flags.
+        assert_eq!(&out[..3], &[b'*', 0x18, 0x43]);
+        assert!(
+            out[3..].contains(&0x18),
+            "expected ZDLE inside ZFILE body for escaped NULs: {:02x?}",
+            out
+        );
+        // Must not contain a raw NUL after the encoding byte in the first
+        // header fields (frame + four flag bytes would be 04 00 00 00 00).
+        let raw_nul_header = out.windows(5).any(|w| w == [0x04, 0x00, 0x00, 0x00, 0x00]);
+        assert!(
+            !raw_nul_header,
+            "ZFILE must not contain unescaped NUL flag bytes: {:02x?}",
+            out
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn oo_discard_swallows_over_and_out() {
+        let pipe = ZmodemPipe::new();
+        pipe.arm_oo_discard();
+        assert!(pipe.filter_output(b"OO\r\n").is_empty());
+        // Next non-trailer byte clears the discard latch and paints.
+        assert_eq!(pipe.filter_output(b"$ "), b"$ ");
+    }
+
+    #[test]
+    fn real_lrzsz_sz_receive_via_pty() {
+        let sz = which_bin(&["sz", "lrzsz-sz"]);
+        let Some(sz) = sz else {
+            eprintln!("skip: sz not installed");
+            return;
+        };
+
+        let dir = std::env::temp_dir().join(format!(
+            "tty7-lrzsz-sz-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let downloads = dir.join("Downloads");
+        std::fs::create_dir_all(&downloads).unwrap();
+        DOWNLOAD_DIR_OVERRIDE.with(|slot| *slot.borrow_mut() = Some(downloads.clone()));
+        struct OverrideGuard;
+        impl Drop for OverrideGuard {
+            fn drop(&mut self) {
+                DOWNLOAD_DIR_OVERRIDE.with(|slot| *slot.borrow_mut() = None);
+            }
+        }
+        let _guard = OverrideGuard;
+
+        let payload = b"hello-from-sz";
+        let src = dir.join("note.txt");
+        std::fs::write(&src, payload).unwrap();
+
+        let (master, slave) = open_pty();
+        set_pty_raw(master);
+        set_pty_raw(slave);
+
+        let mut child = std::process::Command::new(&sz)
+            .arg(&src)
+            .current_dir(&dir)
+            .stdin(unsafe { std::process::Stdio::from_raw_fd(slave) })
+            .stdout(unsafe { std::process::Stdio::from_raw_fd(libc::dup(slave)) })
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn sz");
+        let mut port = unsafe { std::fs::File::from_raw_fd(master) };
+
+        let mut local = ZmodemSession::start_receive().expect("recv");
+        let zrinit = local.take_initial_outgoing();
+        use std::io::Write as _;
+        port.write_all(&zrinit).unwrap();
+
+        let mut done = false;
+        let mut buf = [0u8; 8192];
+        let deadline = std::time::Instant::now() + Duration::from_secs(8);
+        while std::time::Instant::now() < deadline && !done {
+            let n = read_with_timeout(&mut port, &mut buf, Duration::from_millis(100));
+            let inbound = if n > 0 { &buf[..n] } else { &[][..] };
+            // Also detect handshake if sz spoke first (rz\r + ZRQINIT).
+            let (wire, action) = local.pump(inbound).expect("pump");
+            if !wire.is_empty() {
+                port.write_all(&wire).unwrap();
+            }
+            match action {
+                Some(ZmodemUiAction::Done { .. }) => done = true,
+                Some(ZmodemUiAction::Failed { detail }) => {
+                    panic!("sz receive failed: {detail}")
+                }
+                None => {}
+            }
+        }
+        let _ = child.kill();
+        assert!(done, "receive against real sz should complete");
+        let saved = downloads.join("note.txt");
+        assert_eq!(std::fs::read(&saved).expect("saved file"), payload);
+        drop(_guard);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn real_lrzsz_rz_be_send_via_pty() {
+        let rz = which_bin(&["rz", "lrzsz-rz"]);
+        let Some(rz) = rz else {
+            eprintln!("skip: rz not installed");
+            return;
+        };
+
+        let dir = std::env::temp_dir().join(format!(
+            "tty7-lrzsz-rz-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let recv_dir = dir.join("recv");
+        std::fs::create_dir_all(&recv_dir).unwrap();
+        let upload = dir.join("up.txt");
+        let payload = b"pty-rz-be";
+        std::fs::write(&upload, payload).unwrap();
+
+        let (master, slave) = open_pty();
+        set_pty_raw(master);
+        set_pty_raw(slave);
+
+        let mut child = std::process::Command::new(&rz)
+            .arg("-be")
+            .current_dir(&recv_dir)
+            .stdin(unsafe { std::process::Stdio::from_raw_fd(slave) })
+            .stdout(unsafe { std::process::Stdio::from_raw_fd(libc::dup(slave)) })
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn rz");
+        let mut port = unsafe { std::fs::File::from_raw_fd(master) };
+
+        // Read ZRINIT from rz
+        let mut buf = [0u8; 4096];
+        let n = read_with_timeout(&mut port, &mut buf, Duration::from_secs(2));
+        assert!(n > 0, "rz should advertise ZRINIT");
+        let zrinit = buf[..n].to_vec();
+        assert!(
+            find_zmodem_start(&zrinit).is_some_and(|(_, r)| r == ZmodemRole::Send),
+            "expected ZRINIT in {:02x?}",
+            &zrinit[..zrinit.len().min(32)]
+        );
+
+        let (mut session, wire) = ZmodemSession::start_send_handshake(zrinit).expect("handshake");
+        use std::io::Write as _;
+        port.write_all(&wire).unwrap();
+
+        let zfile = session
+            .begin_send_with_paths(vec![upload.clone()])
+            .expect("picker");
+        port.write_all(&zfile).unwrap();
+
+        let mut done = false;
+        let deadline = std::time::Instant::now() + Duration::from_secs(6);
+        while std::time::Instant::now() < deadline && !done {
+            let n = read_with_timeout(&mut port, &mut buf, Duration::from_millis(100));
+            let inbound = if n > 0 { &buf[..n] } else { &[][..] };
+            let (wire, action) = session.pump(inbound).expect("pump");
+            if !wire.is_empty() {
+                port.write_all(&wire).unwrap();
+            }
+            match action {
+                Some(ZmodemUiAction::Done { .. }) => done = true,
+                Some(ZmodemUiAction::Failed { detail }) => {
+                    panic!("rz -be send failed: {detail}")
+                }
+                None => {}
+            }
+        }
+        let _ = child.kill();
+        assert!(done, "local sender should complete against real rz -be");
+        let got = std::fs::read(recv_dir.join("up.txt")).expect("remote file");
+        assert_eq!(got, payload);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn which_bin(names: &[&str]) -> Option<std::path::PathBuf> {
+        let path = std::env::var_os("PATH")?;
+        for dir in std::env::split_paths(&path) {
+            for name in names {
+                let p = dir.join(name);
+                if p.is_file() {
+                    return Some(p);
+                }
+            }
+        }
+        None
+    }
+
+    fn open_pty() -> (i32, i32) {
+        let mut m = 0;
+        let mut s = 0;
+        let rc = unsafe {
+            libc::openpty(
+                &mut m,
+                &mut s,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        };
+        assert_eq!(rc, 0, "openpty");
+        (m, s)
+    }
+
+    fn set_pty_raw(fd: i32) {
+        unsafe {
+            let mut term: libc::termios = std::mem::zeroed();
+            libc::tcgetattr(fd, &mut term);
+            libc::cfmakeraw(&mut term);
+            libc::tcsetattr(fd, libc::TCSANOW, &mut term);
+        }
+    }
+
+    fn read_with_timeout(port: &mut std::fs::File, buf: &mut [u8], timeout: Duration) -> usize {
+        use std::io::Read as _;
+        use std::os::unix::io::AsRawFd;
+        let fd = port.as_raw_fd();
+        let mut fds = unsafe { std::mem::zeroed::<libc::fd_set>() };
+        unsafe {
+            libc::FD_ZERO(&mut fds);
+            libc::FD_SET(fd, &mut fds);
+        }
+        let mut tv = libc::timeval {
+            tv_sec: timeout.as_secs() as _,
+            tv_usec: timeout.subsec_micros() as _,
+        };
+        let ready = unsafe {
+            libc::select(
+                fd + 1,
+                &mut fds,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                &mut tv,
+            )
+        };
+        if ready <= 0 {
+            return 0;
+        }
+        port.read(buf).unwrap_or(0)
     }
 }

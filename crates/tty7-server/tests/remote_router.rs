@@ -10,7 +10,7 @@ use tty7_core::daemon::router::{RemoteRouter, RouteAck, RouteHeader};
 use tty7_core::host::Host;
 use tty7_core::host::remote::RemoteHost;
 
-const EXE: &str = env!("CARGO_BIN_EXE_tty7-server");
+const EXE: &str = env!("CARGO_BIN_EXE_xtty-server");
 
 #[test]
 fn a_routed_connection_reaches_a_real_server() {

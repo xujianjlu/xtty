@@ -10,9 +10,9 @@
 
 <br />
 
-[![CI](https://github.com/xujianjlu/tty7/actions/workflows/ci.yml/badge.svg)](https://github.com/xujianjlu/tty7/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/github/v/release/xujianjlu/tty7?label=version&color=3FDD8C)](https://github.com/xujianjlu/tty7/releases)
-[![Platforms](https://img.shields.io/badge/platforms-macOS-blue)](https://github.com/xujianjlu/tty7/releases)
+[![CI](https://github.com/xujianjlu/xtty/actions/workflows/ci.yml/badge.svg)](https://github.com/xujianjlu/xtty/actions/workflows/ci.yml)
+[![Version](https://img.shields.io/github/v/release/xujianjlu/xtty?label=version&color=3FDD8C)](https://github.com/xujianjlu/xtty/releases)
+[![Platforms](https://img.shields.io/badge/platforms-macOS-blue)](https://github.com/xujianjlu/xtty/releases)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 [![Discord](https://img.shields.io/badge/Discord-join%20chat-5865F2?logo=discord&logoColor=white)](https://discord.gg/s3dethqz2V)
 
@@ -39,7 +39,7 @@ below follows from that.
 
 ## Install
 
-Native builds for macOS on [**Releases**](https://github.com/xujianjlu/tty7/releases):
+Native builds for macOS on [**Releases**](https://github.com/xujianjlu/xtty/releases):
 
 | | | |
 |---|---|---|
@@ -111,7 +111,7 @@ documented in [skills/tty7/SKILL.md](skills/tty7/SKILL.md).
 Install the skill with:
 
 ```sh
-npx skills add xujianjlu/tty7    # install
+npx skills add xujianjlu/xtty    # install
 npx skills update tty7           # update later
 ```
 

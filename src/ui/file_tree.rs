@@ -1504,7 +1504,7 @@ impl Tty7App {
 
     fn file_tree_attach_to_agent(&mut self, path: &Path, cx: &mut Context<Self>) {
         let Some(target) = self.agent_target_leaf(cx) else {
-            crate::terminal::notify_desktop(Some("tty7"), t(L10nKey::AppNoRunningCodingAgent));
+            crate::terminal::notify_desktop(Some("xtty"), t(L10nKey::AppNoRunningCodingAgent));
             return;
         };
         let rel = self

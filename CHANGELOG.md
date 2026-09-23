@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Sidebar tab cards, Tab colors, and Ctrl+C input retention (26.9.13).** Left
+  tab rows are framed chrome-fill cards; idle/hover fills are swapped and the
+  active tab is ~30% brighter. Command-line syntax colors stay on the local
+  editor only — shell Tab handoff suppresses keyword chrome (no `handoff_paint`
+  overlay that fought completion/cursor). Ctrl+C from the prompt editor hands
+  the typed line to the PTY before SIGINT so the cancelled row stays visible.
+  Ctrl+R history probes require RS frame markers and drop probe-script junk.
+
 - **In-pane `rz` / `sz` no longer freezes the pane.** Remote `rz` is answered with
   ZRQINIT before the file picker opens (the old path waited for the dialog, so
   `lrzsz` timed out while the pane stayed diverted and ate keystrokes). Stalled

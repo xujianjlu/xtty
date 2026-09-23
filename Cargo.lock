@@ -2203,6 +2203,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "embedded-io"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "edd0f118536f44f5ccd48bcb8b111bdc3de888b58c74639dfb034a357d0f206d"
+
+[[package]]
 name = "encoding_rs"
 version = "0.8.35"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3118,7 +3124,7 @@ dependencies = [
  "log",
  "presser",
  "thiserror 2.0.20",
- "windows 0.62.2",
+ "windows 0.61.3",
 ]
 
 [[package]]
@@ -3957,7 +3963,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.62.2",
+ "windows-core 0.61.2",
 ]
 
 [[package]]
@@ -8627,7 +8633,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand 2.5.0",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.4",
  "windows-sys 0.61.2",
@@ -9479,7 +9485,7 @@ dependencies = [
 
 [[package]]
 name = "tty7"
-version = "26.9.4"
+version = "26.9.13"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
@@ -9519,7 +9525,7 @@ dependencies = [
 
 [[package]]
 name = "tty7-cli"
-version = "26.9.4"
+version = "26.9.13"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
@@ -9533,7 +9539,7 @@ dependencies = [
 
 [[package]]
 name = "tty7-core"
-version = "26.9.4"
+version = "26.9.13"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -9564,7 +9570,7 @@ dependencies = [
 
 [[package]]
 name = "tty7-server"
-version = "26.9.4"
+version = "26.9.13"
 dependencies = [
  "libc",
  "tempfile",
@@ -11494,10 +11500,9 @@ checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
 [[package]]
 name = "zmodem2"
 version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f6789cf75638bb3ae07e623298a29ded07019b175e536abd00bbcc1fcbb3a4e0"
 dependencies = [
  "bitflags 2.13.1",
+ "embedded-io",
  "hex",
  "thiserror 1.0.69",
 ]

@@ -42,7 +42,7 @@ impl Sandbox for TempSandbox {
 
 fn stdio_host() -> (SharedHost, TempSandbox) {
     let sandbox = TempSandbox(tempfile::TempDir::new().unwrap());
-    let mut child = Command::new(env!("CARGO_BIN_EXE_tty7-server"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_xtty-server"))
         .args(["--stdio", "--serve"])
         .env("TTY7_DATA_DIR", sandbox.path())
         .stdin(Stdio::piped())

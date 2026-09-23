@@ -1,20 +1,20 @@
 use std::fmt;
 
-pub const ASSET_LINUX_X86_64: &str = "tty7-server-linux-x86_64-musl";
-pub const ASSET_LINUX_AARCH64: &str = "tty7-server-linux-aarch64-musl";
+pub const ASSET_LINUX_X86_64: &str = "xtty-server-linux-x86_64-musl";
+pub const ASSET_LINUX_AARCH64: &str = "xtty-server-linux-aarch64-musl";
 
 /// The macOS servers carry no libc suffix because there is nothing to choose:
 /// they link the system libSystem every macOS has, which is as portable there
 /// as static musl is on Linux. Same flat, version-free shape as the others —
 /// the tag in the download URL carries the version.
-pub const ASSET_MACOS_X86_64: &str = "tty7-server-macos-x86_64";
-pub const ASSET_MACOS_AARCH64: &str = "tty7-server-macos-aarch64";
+pub const ASSET_MACOS_X86_64: &str = "xtty-server-macos-x86_64";
+pub const ASSET_MACOS_AARCH64: &str = "xtty-server-macos-aarch64";
 
 pub const CHECKSUMS_ASSET: &str = "checksums.txt";
 
-pub const RELEASE_BASE: &str = "https://github.com/xujianjlu/tty7/releases/download";
+pub const RELEASE_BASE: &str = "https://github.com/xujianjlu/xtty/releases/download";
 
-pub const INSTALL_DIR_COMPONENTS: [&str; 4] = [".local", "share", "tty7", "bin"];
+pub const INSTALL_DIR_COMPONENTS: [&str; 4] = [".local", "share", "xtty", "bin"];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UnsupportedTarget {
@@ -38,12 +38,12 @@ impl fmt::Display for UnsupportedTarget {
         match self {
             Self::UnsupportedSystem { raw } => write!(
                 f,
-                "a remote tty7 workspace needs a Linux or macOS host; this machine reports \
+                "a remote xtty workspace needs a Linux or macOS host; this machine reports \
                  `uname -sm` = {raw:?}"
             ),
             Self::UnknownMachine { raw } => write!(
                 f,
-                "no tty7-server is published for this architecture (`uname -sm` = {raw:?}); \
+                "no xtty-server is published for this architecture (`uname -sm` = {raw:?}); \
                  supported: Linux on x86_64/amd64 and aarch64/arm64, macOS on x86_64 and arm64"
             ),
             Self::Unparseable { raw } => write!(
@@ -129,7 +129,7 @@ pub fn remote_paths(home: &str, control: u32, protocol: u32) -> RemotePaths {
 }
 
 pub fn binary_name(control: u32, protocol: u32) -> String {
-    format!("tty7-server-c{control}p{protocol}")
+    format!("xtty-server-c{control}p{protocol}")
 }
 
 pub fn remote_paths_for_binary(
@@ -145,7 +145,10 @@ pub fn remote_paths_for_binary(
 
 pub fn dialect_from_path(path: &str) -> Option<(u32, u32)> {
     let name = path.rsplit('/').next()?;
-    let (control, protocol) = name.strip_prefix("tty7-server-c")?.split_once('p')?;
+    let rest = name
+        .strip_prefix("xtty-server-c")
+        .or_else(|| name.strip_prefix("tty7-server-c"))?;
+    let (control, protocol) = rest.split_once('p')?;
     Some((control.parse().ok()?, protocol.parse().ok()?))
 }
 
@@ -279,20 +282,20 @@ mod tests {
     fn download_urls_point_at_the_release_the_tag_names() {
         assert_eq!(
             download_url(&release_tag("26.7.5"), ASSET_LINUX_X86_64),
-            "https://github.com/xujianjlu/tty7/releases/download/v26.7.5/tty7-server-linux-x86_64-musl"
+            "https://github.com/xujianjlu/xtty/releases/download/v26.7.5/xtty-server-linux-x86_64-musl"
         );
         assert_eq!(
             download_url(&release_tag("26.7.6-nightly.20260727"), CHECKSUMS_ASSET),
-            "https://github.com/xujianjlu/tty7/releases/download/nightly/checksums.txt"
+            "https://github.com/xujianjlu/xtty/releases/download/nightly/checksums.txt"
         );
     }
 
     #[test]
     fn asset_names_are_the_ones_the_release_workflow_publishes() {
-        assert_eq!(ASSET_LINUX_X86_64, "tty7-server-linux-x86_64-musl");
-        assert_eq!(ASSET_LINUX_AARCH64, "tty7-server-linux-aarch64-musl");
-        assert_eq!(ASSET_MACOS_X86_64, "tty7-server-macos-x86_64");
-        assert_eq!(ASSET_MACOS_AARCH64, "tty7-server-macos-aarch64");
+        assert_eq!(ASSET_LINUX_X86_64, "xtty-server-linux-x86_64-musl");
+        assert_eq!(ASSET_LINUX_AARCH64, "xtty-server-linux-aarch64-musl");
+        assert_eq!(ASSET_MACOS_X86_64, "xtty-server-macos-x86_64");
+        assert_eq!(ASSET_MACOS_AARCH64, "xtty-server-macos-aarch64");
 
         let all = [
             ASSET_LINUX_X86_64,
@@ -320,19 +323,19 @@ mod tests {
     #[test]
     fn remote_paths_are_posix_and_named_by_dialect() {
         let p = remote_paths("/home/me", 3, 4);
-        assert_eq!(p.bin_dir, "/home/me/.local/share/tty7/bin");
-        assert_eq!(p.binary, "/home/me/.local/share/tty7/bin/tty7-server-c3p4");
+        assert_eq!(p.bin_dir, "/home/me/.local/share/xtty/bin");
+        assert_eq!(p.binary, "/home/me/.local/share/xtty/bin/xtty-server-c3p4");
         assert_eq!(
             p.temp,
-            "/home/me/.local/share/tty7/bin/.tty7-server-c3p4.tmp"
+            "/home/me/.local/share/xtty/bin/.xtty-server-c3p4.tmp"
         );
         assert_eq!(
             p.dir_chain,
             vec![
                 "/home/me/.local",
                 "/home/me/.local/share",
-                "/home/me/.local/share/tty7",
-                "/home/me/.local/share/tty7/bin",
+                "/home/me/.local/share/xtty",
+                "/home/me/.local/share/xtty/bin",
             ]
         );
         assert!(
@@ -354,28 +357,33 @@ mod tests {
     fn trailing_slash_on_home_is_absorbed() {
         assert_eq!(
             remote_paths("/root/", 1, 1).binary,
-            "/root/.local/share/tty7/bin/tty7-server-c1p1"
+            "/root/.local/share/xtty/bin/xtty-server-c1p1"
         );
-        assert_eq!(remote_paths("/", 1, 1).bin_dir, "/.local/share/tty7/bin");
+        assert_eq!(remote_paths("/", 1, 1).bin_dir, "/.local/share/xtty/bin");
     }
 
     #[test]
     fn dialects_are_recoverable_from_an_install_path() {
         assert_eq!(
-            dialect_from_path("/home/me/.local/share/tty7/bin/tty7-server-c3p4"),
+            dialect_from_path("/home/me/.local/share/xtty/bin/xtty-server-c3p4"),
             Some((3, 4))
         );
-        assert_eq!(dialect_from_path("tty7-server-c12p30"), Some((12, 30)));
+        assert_eq!(dialect_from_path("xtty-server-c12p30"), Some((12, 30)));
+        assert_eq!(
+            dialect_from_path("/home/me/.local/share/tty7/bin/tty7-server-c3p4"),
+            Some((3, 4)),
+            "legacy install prefix must still parse"
+        );
         assert_eq!(dialect_from_path("/usr/bin/tty7-server"), None);
         assert_eq!(dialect_from_path("/bin/bash"), None);
-        assert_eq!(dialect_from_path("tty7-server-c3"), None);
-        assert_eq!(dialect_from_path("tty7-server-cxpy"), None);
+        assert_eq!(dialect_from_path("xtty-server-c3"), None);
+        assert_eq!(dialect_from_path("xtty-server-cxpy"), None);
     }
 
     #[test]
     fn legacy_version_named_binaries_carry_no_dialect() {
         for legacy in [
-            "/home/me/.local/share/tty7/bin/tty7-server-26.7.4",
+            "/home/me/.local/share/xtty/bin/tty7-server-26.7.4",
             "tty7-server-26.7.6-nightly.20260727",
             "tty7-server-0.1.0",
             "/usr/local/bin/tty7-server-",

@@ -3,12 +3,12 @@ name = "tty7-server"
 version.workspace = true
 edition.workspace = true
 description = "tty7's headless session server: the persistent terminal daemon, with no GUI attached"
-repository = "https://github.com/xujianjlu/tty7"
+repository = "https://github.com/xujianjlu/xtty"
 license = "Apache-2.0"
 publish = false
 
 [[bin]]
-name = "tty7-server"
+name = "xtty-server"
 path = "src/main.rs"
 
 # One dependency, on purpose. This binary exists to prove — and keep proving —

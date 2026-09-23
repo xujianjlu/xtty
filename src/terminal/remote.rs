@@ -101,6 +101,8 @@ struct ReaderSignals {
     trigger_output: Arc<Mutex<Vec<u8>>>,
     /// ZMODEM divert pipe shared with the UI (`terminal::zmodem`).
     zmodem: Arc<crate::terminal::zmodem::ZmodemPipe>,
+    /// Nested-SSH history dump divert (`terminal::history_probe`).
+    history_probe: Arc<crate::terminal::history_probe::HistoryProbePipe>,
     auth: Arc<Mutex<VecDeque<(u64, AuthPromptKind)>>>,
     phase: Arc<Mutex<Option<SshPhase>>>,
     /// Kitty-graphics images the daemon lifted out of the stream (issue #213),
@@ -538,6 +540,7 @@ pub struct RemoteTerminal {
     running_command: Arc<Mutex<String>>,
     trigger_output: Arc<Mutex<Vec<u8>>>,
     zmodem: Arc<crate::terminal::zmodem::ZmodemPipe>,
+    history_probe: Arc<crate::terminal::history_probe::HistoryProbePipe>,
     auth_prompts: Arc<Mutex<VecDeque<(u64, AuthPromptKind)>>>,
     ssh_phase: Arc<Mutex<Option<SshPhase>>>,
     ssh_endpoint: Option<(String, u16)>,
@@ -591,6 +594,13 @@ impl RemoteTerminal {
     /// Shared ZMODEM divert pipe for this pane.
     pub(crate) fn zmodem_pipe(&self) -> Arc<crate::terminal::zmodem::ZmodemPipe> {
         self.zmodem.clone()
+    }
+
+    /// Nested-SSH history dump divert for this pane.
+    pub(crate) fn history_probe_pipe(
+        &self,
+    ) -> Arc<crate::terminal::history_probe::HistoryProbePipe> {
+        self.history_probe.clone()
     }
 
     pub fn spawn(
@@ -895,6 +905,7 @@ impl RemoteTerminal {
                 running_command: self.running_command.clone(),
                 trigger_output: self.trigger_output.clone(),
                 zmodem: self.zmodem.clone(),
+                history_probe: self.history_probe.clone(),
                 auth: self.auth_prompts.clone(),
                 phase: self.ssh_phase.clone(),
                 images: self.images.clone(),
@@ -974,6 +985,7 @@ impl RemoteTerminal {
         let running_command: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
         let trigger_output: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
         let zmodem = crate::terminal::zmodem::ZmodemPipe::new();
+        let history_probe = crate::terminal::history_probe::HistoryProbePipe::new();
         let auth_prompts: Arc<Mutex<VecDeque<(u64, AuthPromptKind)>>> =
             Arc::new(Mutex::new(VecDeque::new()));
         let ssh_phase: Arc<Mutex<Option<SshPhase>>> = Arc::new(Mutex::new(None));
@@ -1002,6 +1014,7 @@ impl RemoteTerminal {
                 running_command: running_command.clone(),
                 trigger_output: trigger_output.clone(),
                 zmodem: zmodem.clone(),
+                history_probe: history_probe.clone(),
                 auth: auth_prompts.clone(),
                 phase: ssh_phase.clone(),
                 images: images.clone(),
@@ -1034,6 +1047,7 @@ impl RemoteTerminal {
             running_command,
             trigger_output,
             zmodem,
+            history_probe,
             auth_prompts,
             ssh_phase,
             ssh_endpoint: None,
@@ -1115,6 +1129,7 @@ impl RemoteTerminal {
                     running_command,
                     trigger_output,
                     zmodem,
+                    history_probe,
                     auth,
                     phase,
                     images,
@@ -1336,9 +1351,12 @@ impl RemoteTerminal {
                                 // so `rz`/`sz` binary frames do not paint as
                                 // garbage — and so the UI can drive the transfer.
                                 let bytes = zmodem.filter_output(&bytes);
+                                // Nested-SSH history probe: divert the dump so
+                                // it never paints, then wake the UI to parse it.
+                                let bytes = history_probe.filter_output(&bytes);
                                 if bytes.is_empty() {
                                     // Still wake the UI so it can poll the pipe.
-                                    if zmodem.is_diverting() {
+                                    if zmodem.is_diverting() || history_probe.is_active() {
                                         flush_batch!();
                                         proxy.send_event(AlacEvent::Wakeup);
                                     }
@@ -1465,6 +1483,10 @@ impl RemoteTerminal {
                                 if let Ok(mut guard) = cwd.lock() {
                                     *guard = Some(path);
                                 }
+                                // Side panel Files/SCM and the Info cwd row
+                                // follow this; without a wake they stay on the
+                                // previous directory until unrelated output.
+                                proxy.send_event(AlacEvent::Wakeup);
                             }
                             DaemonMsg::Prompt {
                                 active,
@@ -2089,6 +2111,23 @@ impl RemoteTerminal {
         query(pane_id).unwrap_or_else(|e| Err(e.to_string()))
     }
 
+    /// Run a command on the far side of a native-SSH pane (extra session channel).
+    pub fn ssh_exec(pane_id: u64, command: &str) -> Result<tty7_core::host::Output, String> {
+        fn query(
+            pane_id: u64,
+            command: String,
+        ) -> anyhow::Result<Result<tty7_core::host::Output, String>> {
+            let mut stream = connect()?;
+            ClientMsg::SshExec { pane_id, command }.encode(&mut stream)?;
+            Ok(match DaemonMsg::read(&mut stream)? {
+                DaemonMsg::SshExecResult(out) => Ok(out),
+                DaemonMsg::Error(msg) => Err(msg),
+                other => Err(format!("unexpected reply to SshExec: {other:?}")),
+            })
+        }
+        query(pane_id, command.to_string()).unwrap_or_else(|e| Err(e.to_string()))
+    }
+
     /// `None` when the request never got a list back — which is not the same
     /// as getting an empty one, because only the caller of a *failed* request
     /// still has to keep showing what it had.
@@ -2460,7 +2499,7 @@ pub(crate) fn notify_desktop(title: Option<&str>, body: &str) {
 ///
 /// macOS always goes through `macos_notify`, clickable or not.
 pub(crate) fn notify_desktop_for_pane(title: Option<&str>, body: &str, pane: Option<EntityId>) {
-    let summary = sanitize_notification_text(title.unwrap_or("tty7"), NOTIFY_TITLE_MAX);
+    let summary = sanitize_notification_text(title.unwrap_or("xtty"), NOTIFY_TITLE_MAX);
     let body = sanitize_notification_text(body, NOTIFY_BODY_MAX);
     macos_notify::deliver(summary, body, pane.map(|p| p.as_u64()));
 }
