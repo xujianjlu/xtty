@@ -885,13 +885,24 @@ impl Tty7App {
                     .pl_2()
                     .pr_2()
                     .rounded_lg()
+                    // Framed chrome-fill cards (26.9.12): hairline + ROW_GAP seams.
+                    // Idle/hover are swapped vs the pre-card ladder (idle was
+                    // transparent, hover was `sf.hover`); active is ~30% brighter
+                    // than `sidebar.selected` so the current tab clearly stands out.
+                    .border_1()
+                    .border_color(cx.theme().sidebar_border)
                     .when(is_active, |s| {
-                        s.bg(cx.theme().sidebar_accent)
+                        let active_fill =
+                            crate::ui::presets::mix(sf.selected, sf.text_resting, 0.30);
+                        s.bg(gpui::rgb(active_fill))
                             .text_color(cx.theme().sidebar_accent_foreground)
                     })
                     .when(!is_active, |s| {
-                        s.text_color(cx.theme().sidebar_foreground)
-                            .hover(|s| s.bg(gpui::rgb(sf.hover)))
+                        let idle_fill = sf.hover;
+                        let hover_fill = crate::ui::presets::mix(sf.base, sf.selected, 0.55);
+                        s.bg(gpui::rgb(idle_fill))
+                            .text_color(cx.theme().sidebar_foreground)
+                            .hover(|s| s.bg(gpui::rgb(hover_fill)))
                     })
                     .when(row_preview.as_ref().is_some_and(|p| p.from == slot), |s| {
                         s.opacity(0.75)
@@ -962,8 +973,11 @@ impl Tty7App {
                     })
                     .when(!(show_badges && badge_pos < 9), |row| {
                         let backing: gpui::Hsla = if is_active {
-                            gpui::rgb(sf.selected).into()
+                            let active_fill =
+                                crate::ui::presets::mix(sf.selected, sf.text_resting, 0.30);
+                            gpui::rgb(active_fill).into()
                         } else {
+                            // Match the idle card fill (former hover).
                             gpui::rgb(sf.hover).into()
                         };
                         let mut fade_from = backing;

@@ -121,28 +121,24 @@ pub(crate) fn probe_command_bytes() -> Vec<u8> {
 }
 
 /// Parse a diverted dump into command lines (oldest → newest).
+///
+/// Only RS-framed dumps (`\x1eTTY7_HIST_BEGIN\x1e` … `\x1eTTY7_HIST_END\x1e`)
+/// count. Unframed / partial captures return empty so probe echoes, PS1, and
+/// script bodies never leak into the Ctrl+R overlay.
 pub(crate) fn parse_history_builtin_dump(bytes: &[u8]) -> Vec<String> {
-    let text = String::from_utf8_lossy(bytes);
-    let start = text
-        .find("TTY7_HIST_BEGIN")
-        .map(|i| i + "TTY7_HIST_BEGIN".len())
-        .unwrap_or(0);
-    let end = text[start..]
-        .find("TTY7_HIST_END")
-        .map(|i| start + i)
-        .unwrap_or(text.len());
-    let body = text[start..end]
-        .trim_matches(|c: char| c == '\x1e' || c.is_whitespace());
+    let Some(body) = rs_framed_body(bytes) else {
+        return Vec::new();
+    };
 
     let mut out = Vec::new();
     for raw in body.lines() {
         let line = raw.trim_matches(|c: char| c == '\x1e' || c == '\r' || c.is_whitespace());
-        if line.is_empty() || line.contains("TTY7_HIST") {
+        if line.is_empty() || is_probe_junk(line) {
             continue;
         }
         if let Some(cmd) = strip_history_prefix(line) {
             let cmd = cmd.trim();
-            if !cmd.is_empty() && !cmd.contains("TTY7_HIST") && cmd != "\u{1e}" {
+            if !cmd.is_empty() && !is_probe_junk(cmd) && cmd != "\u{1e}" {
                 out.push(cmd.to_string());
             }
         }
@@ -153,6 +149,41 @@ pub(crate) fn parse_history_builtin_dump(bytes: &[u8]) -> Vec<String> {
         out.drain(..out.len() - MAX);
     }
     out
+}
+
+/// Slice between the RS begin/end markers. Missing either marker → `None`.
+fn rs_framed_body(bytes: &[u8]) -> Option<String> {
+    let begin = find_subslice(bytes, BEGIN_MARK)?;
+    let after_begin = begin + BEGIN_MARK.len();
+    let end_rel = find_subslice(&bytes[after_begin..], END_MARK)?;
+    let end = after_begin + end_rel;
+    Some(
+        String::from_utf8_lossy(&bytes[after_begin..end])
+            .trim_matches(|c: char| c == '\x1e' || c.is_whitespace())
+            .to_string(),
+    )
+}
+
+/// Probe inject / shell-echo lines that must never appear as history matches.
+fn is_probe_junk(line: &str) -> bool {
+    let s = line.trim();
+    if s.contains("TTY7_HIST") || s.contains('\x1e') {
+        return true;
+    }
+    // Injected probe body (and echoes of it) before/inside the frame.
+    if s.starts_with("set +o history")
+        || s.starts_with("setopt HIST_NO_STORE")
+        || s.contains("fc -ln 1")
+        || (s.starts_with("printf ")
+            && (s.contains("\\036") || s.contains("TTY7_HIST") || s.contains("HIST")))
+    {
+        return true;
+    }
+    // `{ HISTTIMEFORMAT= history … }` compound from the probe script.
+    if s.contains("HISTTIMEFORMAT=") && (s.contains(" history") || s.contains("|| history")) {
+        return true;
+    }
+    false
 }
 
 /// `  512  ls -la` / `512* cmd` / HISTTIMEFORMAT lines → `ls -la`.
@@ -293,6 +324,34 @@ mod tests {
                 "git push origin fix_common -f".to_string(),
                 "git push origin add_ut -f".to_string(),
             ]
+        );
+    }
+
+    #[test]
+    fn parse_requires_rs_frame_markers() {
+        // Probe echo / PS1 without RS markers must not become overlay entries.
+        let junk = b"set +o history\n  1  ls\nHISTTIMEFORMAT= history\nfc -ln 1\n";
+        assert!(parse_history_builtin_dump(junk).is_empty());
+        // BEGIN without END is also rejected.
+        let partial = b"\x1eTTY7_HIST_BEGIN\x1e\n  1  ls\n";
+        assert!(parse_history_builtin_dump(partial).is_empty());
+    }
+
+    #[test]
+    fn parse_filters_probe_script_lines_inside_frame() {
+        let dump = concat!(
+            "noise before\n",
+            "\x1eTTY7_HIST_BEGIN\x1e\n",
+            "set +o history 2>/dev/null || setopt HIST_NO_STORE 2>/dev/null\n",
+            "  10  real cmd\n",
+            "  11  { HISTTIMEFORMAT= history 2>/dev/null || fc -ln 1; }\n",
+            "  12  printf '\\036TTY7_HIST_BEGIN\\036'\n",
+            "\x1eTTY7_HIST_END\x1e\n",
+            "prompt> "
+        );
+        assert_eq!(
+            parse_history_builtin_dump(dump.as_bytes()),
+            vec!["real cmd".to_string()]
         );
     }
 

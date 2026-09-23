@@ -3141,11 +3141,15 @@ impl TerminalView {
                 self.terminal.write(vec![0x0c]);
             }
             "c" => {
-                self.cmd.clear();
+                // Hand the typed line to the shell first so ZLE/readline can
+                // leave `line^C` above the fresh PS1 — clearing `cmd` alone
+                // wiped the overlay with nothing on the PTY to echo.
                 self.history_nav = None;
-                let _ = self.typeahead.drain();
-                let _ = self.hold.engage();
-                self.terminal.write(vec![0x03]);
+                self.handoff_line_to_shell(&[0x03], cx);
+                // Same as Tab-handoff Ctrl+C: shell integration often reports
+                // the interrupted prompt without advancing prompt_cycle, so
+                // remember this report boundary for reclaiming the editor.
+                self.editor_handoff_interrupt_seq = Some(self.terminal.prompt_seq());
             }
             "d" => {
                 if self.cmd.is_empty() {
@@ -5339,6 +5343,11 @@ impl TerminalView {
             }
         }
         self.cmd.clear();
+        // Local syntax overlay must not paint while the shell owns the line
+        // (Tab completion / echo redraw). Suppress keyword chrome until the
+        // next real insert after reclaim — same gate as post-Enter PS1.
+        // Do not invent a second "handoff_paint" that recolors shell echo.
+        self.input_chrome_suppressed = true;
         self.editor_handoff = Some(self.terminal.prompt_cycle());
         self.editor_handoff_interrupt_seq = None;
         self.send_to_pty(chord, cx);
@@ -12480,6 +12489,54 @@ mod gpui_tests {
             None,
             "the fresh line must not keep going raw to the shell"
         );
+    }
+
+    #[gpui::test]
+    fn ctrl_c_from_editor_hands_the_line_to_the_shell_before_sigint(cx: &mut TestAppContext) {
+        // Typical shell UX: cancel leaves the typed row above the new prompt.
+        // Clearing the local overlay without writing the line first wiped it.
+        crate::core::config::pin_test_config_dir();
+        let (window, mut daemon) = harness(cx);
+        DaemonMsg::Prompt {
+            active: true,
+            at_prompt: true,
+            last_exit: None,
+        }
+        .encode(&mut daemon)
+        .unwrap();
+        wait_for_input_active(&window, cx);
+
+        window
+            .update(cx, |view, window, cx| {
+                for ch in ["e", "c", "h", "o", " ", "h", "i"] {
+                    type_char(view, ch, window, cx);
+                }
+                assert_eq!(view.cmd.text(), "echo hi");
+                view.on_key_down(
+                    &KeyDownEvent {
+                        keystroke: key("ctrl-c"),
+                        is_held: false,
+                        prefer_character_input: false,
+                    },
+                    window,
+                    cx,
+                );
+                assert!(
+                    view.cmd.text().is_empty(),
+                    "local editor releases the line after handoff"
+                );
+                assert!(
+                    view.input_chrome_suppressed,
+                    "keyword chrome stays off while the shell redraws"
+                );
+            })
+            .unwrap();
+        assert_eq!(
+            next_input_until_timeout(&mut daemon),
+            Some(b"echo hi".to_vec()),
+            "typed text must reach the PTY so the shell can leave it visible"
+        );
+        assert_eq!(next_input_until_timeout(&mut daemon), Some(vec![0x03]));
     }
 
     #[gpui::test]
