@@ -1465,6 +1465,10 @@ impl RemoteTerminal {
                                 if let Ok(mut guard) = cwd.lock() {
                                     *guard = Some(path);
                                 }
+                                // Side panel Files/SCM and the Info cwd row
+                                // follow this; without a wake they stay on the
+                                // previous directory until unrelated output.
+                                proxy.send_event(AlacEvent::Wakeup);
                             }
                             DaemonMsg::Prompt {
                                 active,
@@ -2087,6 +2091,23 @@ impl RemoteTerminal {
             })
         }
         query(pane_id).unwrap_or_else(|e| Err(e.to_string()))
+    }
+
+    /// Run a command on the far side of a native-SSH pane (extra session channel).
+    pub fn ssh_exec(pane_id: u64, command: &str) -> Result<tty7_core::host::Output, String> {
+        fn query(
+            pane_id: u64,
+            command: String,
+        ) -> anyhow::Result<Result<tty7_core::host::Output, String>> {
+            let mut stream = connect()?;
+            ClientMsg::SshExec { pane_id, command }.encode(&mut stream)?;
+            Ok(match DaemonMsg::read(&mut stream)? {
+                DaemonMsg::SshExecResult(out) => Ok(out),
+                DaemonMsg::Error(msg) => Err(msg),
+                other => Err(format!("unexpected reply to SshExec: {other:?}")),
+            })
+        }
+        query(pane_id, command.to_string()).unwrap_or_else(|e| Err(e.to_string()))
     }
 
     /// `None` when the request never got a list back — which is not the same

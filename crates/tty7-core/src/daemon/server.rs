@@ -968,6 +968,18 @@ fn handle_conn(stream: Stream, registry: Arc<Registry>) -> anyhow::Result<()> {
             Ok(())
         }
 
+        ClientMsg::SshExec { pane_id, command } => {
+            let mut w = write_stream;
+            match ssh_connection_for(&registry, pane_id) {
+                Ok(conn) => match crate::daemon::ssh::SshManager::global().exec(&conn, &command) {
+                    Ok(out) => DaemonMsg::SshExecResult(out).encode(&mut w)?,
+                    Err(e) => DaemonMsg::Error(e).encode(&mut w)?,
+                },
+                Err(e) => DaemonMsg::Error(e).encode(&mut w)?,
+            }
+            Ok(())
+        }
+
         ClientMsg::RemoveForward {
             pane_id,
             forward_id,

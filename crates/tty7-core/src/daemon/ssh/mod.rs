@@ -98,6 +98,50 @@ impl SshManager {
         self.runtime.handle().clone()
     }
 
+    /// Run one non-interactive command on an open native-SSH connection.
+    ///
+    /// Opens a fresh session channel (same budget as SFTP), runs `command`, and
+    /// returns stdout/stderr/status. Used by the GUI's SFTP-backed Host for
+    /// `git` on panes that have no tty7-server.
+    pub fn exec(
+        &self,
+        conn: &Arc<SshConnection>,
+        command: &str,
+    ) -> Result<crate::host::Output, String> {
+        use russh::ChannelMsg;
+
+        self.runtime.block_on(async {
+            let mut channel = conn
+                .open_command_channel()
+                .await
+                .map_err(|e| format!("could not open a command channel: {e}"))?;
+            channel
+                .exec(true, command)
+                .await
+                .map_err(|e| format!("could not run `{command}`: {e}"))?;
+            let _ = channel.eof().await;
+
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+            let mut status = None;
+            while let Some(msg) = channel.wait().await {
+                match msg {
+                    ChannelMsg::Data { data } => stdout.extend_from_slice(&data),
+                    ChannelMsg::ExtendedData { data, .. } => stderr.extend_from_slice(&data),
+                    ChannelMsg::ExitStatus { exit_status } => {
+                        status = Some(exit_status as i32);
+                    }
+                    _ => {}
+                }
+            }
+            Ok(crate::host::Output {
+                status,
+                stdout,
+                stderr,
+            })
+        })
+    }
+
     pub fn add_forward(
         &self,
         pane_id: u64,
