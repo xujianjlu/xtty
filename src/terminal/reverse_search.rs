@@ -101,10 +101,14 @@ impl ReverseSearch {
     ) -> Action {
         let m = &ks.modifiers;
         let key = ks.key.as_str();
-        if (m.control && key == "r") || key == "down" {
+        // Cmd+R opens the same menu as Ctrl+R; once open, either chord steps.
+        let history_step_fwd =
+            key == "r" && !m.alt && ((m.control && !m.platform) || (m.platform && !m.control));
+        let history_step_back = key == "s" && m.control && !m.platform && !m.alt;
+        if history_step_fwd || key == "down" {
             self.step(1);
             Action::Redraw
-        } else if (m.control && key == "s") || key == "up" {
+        } else if history_step_back || key == "up" {
             self.step(-1);
             Action::Redraw
         } else if (m.control && (key == "g" || key == "c")) || key == "escape" {
@@ -199,10 +203,17 @@ mod tests {
             Action::Redraw
         ));
         assert_eq!(rs.selected_line(&h), Some("git status"));
-        rs.handle_key(&key("ctrl-r"), &h, &flat(&h));
-        assert_eq!(rs.selected(), 1);
         rs.handle_key(&key("ctrl-s"), &h, &flat(&h));
         assert_eq!(rs.selected(), 0);
+        assert!(matches!(
+            rs.handle_key(&key("cmd-r"), &h, &flat(&h)),
+            Action::Redraw
+        ));
+        assert_eq!(
+            rs.selected_line(&h),
+            Some("git status"),
+            "Cmd+R steps the same way Ctrl+R does"
+        );
         rs.handle_key(&key("up"), &h, &flat(&h));
         assert_eq!(rs.selected(), 0);
         rs.handle_key(&key("down"), &h, &flat(&h));

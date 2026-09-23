@@ -19,7 +19,6 @@ pub mod palette;
 pub(crate) mod pane_liveness;
 mod password_trigger;
 mod remote;
-mod zmodem;
 mod reverse_search;
 pub(crate) mod scrollbar;
 pub mod search;
@@ -28,6 +27,7 @@ mod size;
 mod smart_select;
 mod typeahead;
 pub mod view;
+mod zmodem;
 
 pub(crate) use remote::notify_desktop;
 pub use remote::{PaneRoute, PaneWorkspace, RemoteTerminal, attach_refused, attach_unanswered};
