@@ -221,14 +221,14 @@ jobs:
       - name: Ad-hoc sign the binary
         if: steps.probe.outputs.present == 'true'
         working-directory: tty7
-        run: codesign --force --sign - "target/${{ matrix.target }}/release/tty7-server"
+        run: codesign --force --sign - "target/${{ matrix.target }}/release/xtty-server"
 
       - name: Assert the binary is self-contained
         if: steps.probe.outputs.present == 'true'
         working-directory: tty7
         run: |
           bash .github/scripts/assert-macho.sh \
-            "target/${{ matrix.target }}/release/tty7-server" "${{ matrix.arch }}"
+            "target/${{ matrix.target }}/release/xtty-server" "${{ matrix.arch }}"
 
       - name: Stage the asset
         if: steps.probe.outputs.present == 'true'
@@ -236,7 +236,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          cp "target/${{ matrix.target }}/release/tty7-server" \
+          cp "target/${{ matrix.target }}/release/xtty-server" \
              "dist/${{ matrix.asset }}"
           chmod +x "dist/${{ matrix.asset }}"
 

@@ -195,10 +195,10 @@ jobs:
       # asks for. `--force` makes this idempotent across both.
       - name: Ad-hoc sign the binary
         if: steps.probe.outputs.present == 'true'
-        run: codesign --force --sign - "target/${{ matrix.target }}/release/tty7-server"
+        run: codesign --force --sign - "target/${{ matrix.target }}/release/xtty-server"
 
       - name: Assert the binary is self-contained
         if: steps.probe.outputs.present == 'true'
         run: |
           bash .github/scripts/assert-macho.sh \
-            "target/${{ matrix.target }}/release/tty7-server" "${{ matrix.arch }}"
+            "target/${{ matrix.target }}/release/xtty-server" "${{ matrix.arch }}"
