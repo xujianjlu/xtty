@@ -341,6 +341,15 @@ pub struct TerminalView {
     /// ordinary full-screen programs cannot replace the tab identity; a
     /// detected coding agent is allowed to name the tab while it is active.
     terminal_identity: Option<String>,
+    /// Identity of the pane's home machine (local shell or dialled native SSH).
+    /// Nested `ssh` hops overwrite [`terminal_identity`]; exiting restores this.
+    identity_home: Option<String>,
+    /// Last nested-SSH destination we applied to the tab identity, so a hop
+    /// change (or exit back home) is noticed even when OSC titles stay path-only.
+    last_remote_ssh_target: Option<String>,
+    /// Last interactive `ssh …` command we applied as a hop, so we do not
+    /// re-apply every Wakeup while it stays in `running_command`.
+    last_ssh_command: Option<String>,
     password_trigger: super::password_trigger::PasswordTriggerMatcher,
     /// Active in-pane ZMODEM transfer (`rz`/`sz`), if any.
     zmodem: Option<super::zmodem::ZmodemSession>,
@@ -1290,6 +1299,15 @@ impl TerminalView {
             view.default_title = name.to_string();
             view.title = name.to_string();
         }
+        // Seed the stable tab identity from the dialled endpoint. Remote shells
+        // that only emit a bare cwd path as OSC 0 would otherwise displace the
+        // chip to `…/dir` after the first prompt; connection metadata is the
+        // one identity that is known before shell integration speaks.
+        view.terminal_identity = tty7_core::core::tab_view::connection_identity(
+            &parts.persist.user,
+            &parts.persist.host,
+        );
+        view.identity_home = view.terminal_identity.clone();
         view.ssh_spec = Some(parts.persist);
         view
     }
@@ -1493,6 +1511,9 @@ impl TerminalView {
             gesture_until: None,
             title: DEFAULT_TITLE.to_string(),
             terminal_identity: None,
+            identity_home: None,
+            last_remote_ssh_target: None,
+            last_ssh_command: None,
             password_trigger: Default::default(),
             zmodem: None,
             zmodem_picker_open: false,
@@ -1647,6 +1668,94 @@ impl TerminalView {
         }
     }
 
+    fn set_terminal_identity(&mut self, identity: String, cx: &mut Context<Self>) {
+        match self.terminal.remote_context().map(|r| r.kind) {
+            Some(crate::daemon::protocol::RemoteKind::Ssh) => {}
+            Some(crate::daemon::protocol::RemoteKind::NativeSsh) => {
+                if self.identity_home.is_none() {
+                    self.identity_home = Some(identity.clone());
+                }
+            }
+            None => {
+                self.identity_home = Some(identity.clone());
+            }
+        }
+        if self.terminal_identity.as_deref() != Some(identity.as_str()) {
+            self.terminal_identity = Some(identity);
+            cx.notify();
+        }
+    }
+
+    /// Keep the tab chip on the *current* hop's `user@host`.
+    ///
+    /// Sources:
+    /// - Process-table nested SSH (`RemoteContext`) on a local PTY — update on
+    ///   enter, restore [`identity_home`] on exit
+    /// - Interactive `ssh …` from OSC 133;C (`running_command`) — covers hops
+    ///   inside a native-SSH pane; exit relies on the home shell's next
+    ///   identity OSC (or RemoteContext clear when visible)
+    fn sync_identity_with_remote(&mut self, cx: &mut Context<Self>) {
+        let target = self
+            .terminal
+            .remote_context()
+            .and_then(|r| (r.kind == crate::daemon::protocol::RemoteKind::Ssh).then_some(r.target));
+        if target != self.last_remote_ssh_target {
+            let leaving = self.last_remote_ssh_target.take();
+            self.last_remote_ssh_target = target.clone();
+            match target {
+                Some(dest) => {
+                    let fallback_user = self
+                        .terminal_identity
+                        .as_deref()
+                        .or(self.identity_home.as_deref())
+                        .and_then(|id| id.split_once('@').map(|(u, _)| u));
+                    if let Some(identity) =
+                        tty7_core::core::tab_view::identity_from_ssh_target(&dest, fallback_user)
+                    {
+                        if self.terminal_identity.as_deref() != Some(identity.as_str()) {
+                            self.terminal_identity = Some(identity);
+                            cx.notify();
+                        }
+                    }
+                }
+                None if leaving.is_some() => {
+                    if let Some(home) = self.identity_home.clone() {
+                        if self.terminal_identity.as_deref() != Some(home.as_str()) {
+                            self.terminal_identity = Some(home);
+                            cx.notify();
+                        }
+                    }
+                    self.last_ssh_command = None;
+                }
+                None => {}
+            }
+        }
+
+        let cmd = self.terminal.running_command();
+        if cmd.is_empty() {
+            self.last_ssh_command = None;
+            return;
+        }
+        if self.last_ssh_command.as_deref() == Some(cmd.as_str()) {
+            return;
+        }
+        let fallback_user = self
+            .terminal_identity
+            .as_deref()
+            .or(self.identity_home.as_deref())
+            .and_then(|id| id.split_once('@').map(|(u, _)| u));
+        let Some(identity) =
+            tty7_core::core::tab_view::identity_from_ssh_command(&cmd, fallback_user)
+        else {
+            return;
+        };
+        self.last_ssh_command = Some(cmd);
+        if self.terminal_identity.as_deref() != Some(identity.as_str()) {
+            self.terminal_identity = Some(identity);
+            cx.notify();
+        }
+    }
+
     /// Sets how opaque the pane wants this terminal painted; the pane leaf
     /// calls this every frame while rendering, and the terminal element
     /// blends its colours toward the window background during paint (see
@@ -1713,6 +1822,17 @@ impl TerminalView {
                 self.title = label.clone();
             }
             self.default_title = label;
+        }
+        // Remote-workspace panes are local to tty7-server on that host. Seed
+        // identity from the route's SSH endpoint when the shell has not yet
+        // reported one — otherwise a path-only OSC title (common when
+        // oh-my-zsh termsupport is on for a "local" remote shell) wins the tab.
+        if self.terminal_identity.is_none() {
+            if let Some(spec) = workspace.as_ref().and_then(|w| w.spec.as_deref()) {
+                self.terminal_identity =
+                    tty7_core::core::tab_view::connection_identity(&spec.user, &spec.host);
+                self.identity_home = self.terminal_identity.clone();
+            }
         }
         self.workspace = workspace;
     }
@@ -2087,6 +2207,7 @@ impl TerminalView {
             AlacEvent::Wakeup => {
                 self.poll_password_triggers(cx);
                 self.poll_zmodem(cx);
+                self.sync_identity_with_remote(cx);
                 // The grid moved under whatever the search bar last measured.
                 self.note_output_under_search(cx);
                 // Only a pane that is on screen repaints on output. The
@@ -2099,8 +2220,7 @@ impl TerminalView {
             }
             AlacEvent::Title(title) => {
                 if let Some(identity) = tty7_core::core::tab_view::identity_from_title(&title) {
-                    self.terminal_identity = Some(identity);
-                    cx.notify();
+                    self.set_terminal_identity(identity, cx);
                 }
                 self.set_title_when_settled(title, cx);
             }
@@ -8097,6 +8217,7 @@ mod tests {
         // A title from the program running in it.
         assert_eq!(stated_title("vim — main.rs"), Some("vim — main.rs"));
         assert_eq!(stated_title(" user@host:~/repo "), Some("user@host:~/repo"));
+
         // A default tty7 chose for the pane itself is a name, not the absence
         // of one: an SSH pane answers to its host (#438) and a workspace pane
         // to its workspace, and neither gives way to a directory.
@@ -8105,6 +8226,27 @@ mod tests {
         assert_eq!(
             stated_title("tty7 — process exited"),
             Some("tty7 — process exited")
+        );
+    }
+
+    #[test]
+    fn connection_identity_seeds_survive_path_only_titles() {
+        // Mirrors the Title-event path: a dialled SSH pane already knows
+        // user@host, and a remote PROMPT that only emits the cwd must not
+        // displace the tab chip to `…/dir`.
+        let identity = tty7_core::core::tab_view::connection_identity("xujian6", "dev-box.corp")
+            .expect("seed");
+        assert_eq!(identity, "xujian6@dev-box");
+        assert!(
+            tty7_core::core::tab_view::identity_from_title(
+                "/home/xujian6/CODE/groups/search-algo/retr"
+            )
+            .is_none()
+        );
+        assert_eq!(
+            tty7_core::core::tab_view::identity_from_title("xujian6@dev-box:~/CODE/retr")
+                .as_deref(),
+            Some("xujian6@dev-box")
         );
     }
 

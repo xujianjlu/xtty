@@ -190,11 +190,14 @@ pub(crate) fn label_of(
     };
     match view.label() {
         TabLabel::Named(name) => name.to_string(),
-        // Through `short_title` because a title is so often a path: the shell
-        // integration writes `user@host:~/dir`, and a tab spelling that out in
-        // full where the one beside it says "…/dir" would be the same
-        // disagreement in a new place.
-        TabLabel::Osc(title) => shortened(title),
+        // Prefer the stable `user@host` identity when the OSC title still
+        // carries a path suffix (`user@host:~/dir`). Stripping to the path was
+        // the pre-identity behaviour; tab chips and the switcher now keep the
+        // same identity the shell integration reports.
+        TabLabel::Osc(title) => match tty7_core::core::tab_view::identity_from_title(title) {
+            Some(identity) => identity,
+            None => shortened(title),
+        },
         TabLabel::Agent(agent) => agent.display_name().to_string(),
         TabLabel::Cwd(cwd) => shortened(cwd),
         TabLabel::Process(title) => title.to_string(),
@@ -220,14 +223,29 @@ fn tooltip_of(
     use crate::ui::machine_mirror::TabLabel;
 
     // The other rungs are never shortened: a given name and a process name are
-    // printed whole, and an agent's is a word.
+    // printed whole, and an agent's is a word. An identity Osc title is also
+    // shown whole on the chip — hover then offers the path suffix when the
+    // raw title still carried one.
     let raw = match view.label() {
         TabLabel::Osc(title) => title,
         TabLabel::Cwd(cwd) => cwd,
         _ => return None,
     };
+    let label = label_of(view, index, home);
+    if tty7_core::core::tab_view::identity_from_title(raw).as_deref() == Some(label.as_str()) {
+        let path = strip_host_prefix(raw.trim());
+        let path = path.trim();
+        if path.is_empty() || path == raw.trim() {
+            return None;
+        }
+        let full = abbreviate_home(path, home);
+        if full.trim().is_empty() || full.as_ref() == label.as_str() {
+            return None;
+        }
+        return Some(SharedString::from(full.into_owned()));
+    }
     let full = abbreviate_home(raw.trim(), home);
-    if full.trim().is_empty() || full.as_ref() == label_of(view, index, home).as_str() {
+    if full.trim().is_empty() || full.as_ref() == label.as_str() {
         return None;
     }
     Some(SharedString::from(full.into_owned()))
@@ -3110,12 +3128,13 @@ mod tests {
         titled.osc_title = Some("/Users/x/repo".into());
         assert_eq!(tooltip_of(&titled, 0, Some(home())), None);
 
-        // A shell integration's `user@host:` head is not in the label, so it
-        // is still worth spelling out.
+        // A shell integration title that still carries `user@host:path` keeps
+        // the identity on the chip; hover spells the path.
         titled.osc_title = Some("me@box:/Users/x/repo".into());
+        assert_eq!(label_of(&titled, 0, Some(home())), "me@box");
         assert_eq!(
             tooltip_of(&titled, 0, Some(home())).as_deref(),
-            Some("me@box:/Users/x/repo")
+            Some("~/repo")
         );
     }
 
@@ -3199,34 +3218,25 @@ mod tests {
         assert!(label_of(&empty, 2, Some(home())).contains('3'));
     }
 
-    /// The rung under the shortener, which the two surfaces reach holding
-    /// different things. A shell that has said who and where it is but not
-    /// *where* — `user@host:` with nothing after the colon — leaves nothing to
-    /// show, and whatever stands in has to be something the tab does not
-    /// already say: the switcher has the foreground process name, and a tab of
-    /// this window has only the placeholder, which is the answer #740 removed.
+    /// A shell that reports `user@host:` (identity, empty path) keeps the
+    /// identity on both surfaces — it must not fall through to the app name
+    /// or a numbered placeholder (#740).
     #[test]
-    fn a_title_that_shortens_away_never_puts_the_app_name_back_on_the_tab() {
+    fn a_bare_identity_title_names_the_tab() {
         let mut strip = strip_tab();
         strip.osc_title = Some("user@host:".into());
+        assert_eq!(label_of(&strip, 0, Some(home())), "user@host");
         assert_ne!(
             label_of(&strip, 0, Some(home())),
             crate::terminal::view::DEFAULT_TITLE
         );
-        assert!(
-            label_of(&strip, 0, Some(home())).contains('1'),
-            "the numbered placeholder, which is what the strip showed here \
-             before it shared this renderer"
-        );
 
-        // The switcher arrives with a real process name in that slot, and it
-        // is still worth more than a number.
         let from_tree = crate::ui::machine_mirror::TabView {
             title: "zsh".into(),
             osc_title: Some("user@host:".into()),
             ..strip_tab()
         };
-        assert_eq!(label_of(&from_tree, 0, Some(home())), "zsh");
+        assert_eq!(label_of(&from_tree, 0, Some(home())), "user@host");
     }
 
     /// A path is spelled the way the machine it is on spells it, and which

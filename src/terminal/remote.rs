@@ -1503,6 +1503,10 @@ impl RemoteTerminal {
                                 if let Ok(mut guard) = remote.lock() {
                                     *guard = ctx;
                                 }
+                                // Wake the view so tab identity can follow the hop
+                                // immediately — waiting for the next keystroke left
+                                // the chip on the previous machine after `ssh`/`exit`.
+                                proxy.send_event(AlacEvent::Wakeup);
                             }
                             DaemonMsg::AuthPrompt { request_id, prompt } => {
                                 flush_batch!();

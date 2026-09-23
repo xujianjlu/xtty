@@ -624,6 +624,10 @@ struct PaneState {
     /// The last title the pane reported over OSC 0/2, for the machine tree to
     /// record. See [`crate::core::machine::PaneRecord::osc_title`].
     osc_title: Option<String>,
+    /// Identity of the pane's "home" machine — the local shell, or the native
+    /// SSH endpoint that was dialled. Nested `ssh` hops overwrite `osc_title`;
+    /// exiting them restores this so the tab does not keep the inner host.
+    home_identity: Option<String>,
     shell: ShellState,
     /// Whether a prompt mark has arrived since `remote` was last set.
     ///
@@ -1381,7 +1385,10 @@ impl DaemonPane {
                 observers: Vec::new(),
                 observer_seq: 0,
                 cwd: spawn.initial_cwd,
-                osc_title: restored_title,
+                osc_title: restored_title.clone(),
+                home_identity: restored_title
+                    .as_deref()
+                    .and_then(crate::core::tab_view::identity_from_title),
                 shell: ShellState::default(),
                 remote_prompt_seen: false,
                 modes: TerminalModes::default(),
@@ -1590,7 +1597,11 @@ impl DaemonPane {
                 observers: Vec::new(),
                 observer_seq: 0,
                 cwd: carried.cwd,
-                osc_title: carried.osc_title,
+                osc_title: carried.osc_title.clone(),
+                home_identity: carried
+                    .osc_title
+                    .as_deref()
+                    .and_then(crate::core::tab_view::identity_from_title),
                 shell_spec: carried.shell_spec,
                 shell: ShellState {
                     active: carried.shell_active,
@@ -1642,6 +1653,10 @@ impl DaemonPane {
             argv: Vec::new(),
             target,
         };
+        // Seed the machine-tree title with the dialled identity so the switcher
+        // and `tty7 tab ls` do not fall through to a path-only OSC title before
+        // (or instead of) shell integration reporting `user@host`.
+        let osc_title = crate::core::tab_view::connection_identity(&spec.user, &spec.host);
 
         let state = Arc::new(Mutex::new(PaneState {
             id,
@@ -1656,7 +1671,8 @@ impl DaemonPane {
             // it is, `ssh_spec` already says.
             shell_spec: None,
             cwd: None,
-            osc_title: None,
+            home_identity: osc_title.clone(),
+            osc_title,
             shell: ShellState::default(),
             remote_prompt_seen: false,
             modes: TerminalModes::default(),
@@ -2703,11 +2719,14 @@ fn apply_signals(st: &mut PaneState, signals: SniffSignals) {
             st.cwd = Some(cwd);
         }
     }
+    if let Some(host) = signals.cwd_host.as_deref() {
+        apply_osc7_host_identity(st, host);
+    }
     if let Some(title) = signals.title {
         // No `notify`: a window renders its own tabs from its own terminal,
         // which parsed the same sequence. This is only for the tree.
         if let Some(identity) = crate::core::tab_view::identity_from_title(&title) {
-            st.osc_title = Some(identity);
+            set_pane_identity(st, identity);
         } else if st.agent.is_some() {
             // Agent task/status titles are useful while the agent owns the
             // pane. Ordinary programs (vim, top, wget) still cannot displace
@@ -2723,6 +2742,9 @@ fn apply_signals(st: &mut PaneState, signals: SniffSignals) {
         }
     }
     for shell in signals.shell {
+        if let Some(cmd) = shell.command.as_deref() {
+            try_ssh_command_hop(st, cmd);
+        }
         st.shell = shell.clone();
         notify(
             st,
@@ -2734,6 +2756,52 @@ fn apply_signals(st: &mut PaneState, signals: SniffSignals) {
         );
     }
     apply_agent_signals(st, signals.agent_events, signals.notification);
+}
+
+fn set_pane_identity(st: &mut PaneState, identity: String) {
+    // Home is the machine this pane "belongs" to. Nested process-table SSH and
+    // further hops inside a native-SSH pane must not overwrite it — exit has
+    // to land back on the dialled / local identity. When OSC identity matches
+    // home again, that is the far shell of the hop ending (or the home shell
+    // speaking), so restore is implicit.
+    match st.remote.as_ref().map(|r| r.kind) {
+        Some(RemoteKind::Ssh) => {}
+        Some(RemoteKind::NativeSsh) => {
+            if st.home_identity.is_none() {
+                st.home_identity = Some(identity.clone());
+            }
+        }
+        None => {
+            st.home_identity = Some(identity.clone());
+        }
+    }
+    st.osc_title = Some(identity);
+}
+
+fn try_ssh_command_hop(st: &mut PaneState, cmd: &str) {
+    let fallback = st
+        .osc_title
+        .as_deref()
+        .or(st.home_identity.as_deref())
+        .and_then(|id| id.split_once('@').map(|(u, _)| u));
+    let Some(identity) = crate::core::tab_view::identity_from_ssh_command(cmd, fallback) else {
+        return;
+    };
+    // Do not touch home_identity — this is an outbound hop.
+    st.osc_title = Some(identity);
+}
+
+fn apply_osc7_host_identity(st: &mut PaneState, host: &str) {
+    let Some(next) = crate::core::tab_view::identity_with_host(st.osc_title.as_deref(), host)
+        .or_else(|| crate::core::tab_view::identity_with_host(st.home_identity.as_deref(), host))
+    else {
+        return;
+    };
+    if st.osc_title.as_deref() == Some(next.as_str()) {
+        return;
+    }
+    // OSC 7 host retargeting is a hop signal; keep home stable.
+    st.osc_title = Some(next);
 }
 
 #[cfg_attr(not(windows), allow(dead_code))]
@@ -2861,6 +2929,26 @@ fn apply_remote_context(st: &mut PaneState, remote: Option<RemoteContext>) {
     // standing right now belongs to whatever the pane was before this hop —
     // the near shell's "I started `ssh`", or the previous host's prompt.
     st.remote_prompt_seen = false;
+    match &remote {
+        Some(ctx) if ctx.kind == RemoteKind::Ssh => {
+            let fallback_user = st
+                .osc_title
+                .as_deref()
+                .or(st.home_identity.as_deref())
+                .and_then(|id| id.split_once('@').map(|(u, _)| u));
+            if let Some(identity) =
+                crate::core::tab_view::identity_from_ssh_target(&ctx.target, fallback_user)
+            {
+                st.osc_title = Some(identity);
+            }
+        }
+        None => {
+            if let Some(home) = st.home_identity.clone() {
+                st.osc_title = Some(home);
+            }
+        }
+        Some(_) => {}
+    }
     notify(st, DaemonMsg::RemoteContext(remote.clone()));
     st.remote = remote;
 }
@@ -3073,6 +3161,9 @@ struct ShellState {
 #[derive(Default)]
 struct SniffSignals {
     cwd: Option<PathBuf>,
+    /// Hostname from the OSC 7 `file://host/path` URI, when present and not
+    /// a useless placeholder. Used to retarget tab identity across nested hops.
+    cwd_host: Option<String>,
     /// The last title the pane set in this read, already capped. `Some("")` is
     /// a reset — an empty OSC 0/2 clears the title rather than setting a blank
     /// one, the same way the GUI's terminal treats it.
@@ -3099,8 +3190,11 @@ impl OscSniffer {
         let mut signals = SniffSignals::default();
         let shell = &mut self.shell;
         self.tok.feed(bytes, |payload| {
-            if let Some(path) = parse_osc7(payload) {
+            if let Some((host, path)) = parse_osc7_parts(payload) {
                 signals.cwd = Some(path);
+                if let Some(host) = host {
+                    signals.cwd_host = Some(host);
+                }
             } else if let Some(title) = parse_osc_title(payload) {
                 signals.title = Some(title);
             } else if let Some(rest) = payload.strip_prefix(b"133;") {
@@ -3169,20 +3263,45 @@ fn strip_uri_drive_slash(path: &str) -> &str {
 }
 
 pub(crate) fn parse_osc7(payload: &[u8]) -> Option<PathBuf> {
+    parse_osc7_parts(payload).map(|(_, path)| path)
+}
+
+/// OSC 7 `file://host/path` → optional hostname (for identity retargeting) and path.
+fn parse_osc7_parts(payload: &[u8]) -> Option<(Option<String>, PathBuf)> {
     let rest = payload.strip_prefix(b"7;")?;
-    let path_bytes: &[u8] = if let Some(after) = rest.strip_prefix(b"file://") {
-        let idx = after.iter().position(|&c| c == b'/')?;
-        &after[idx..]
-    } else if rest.first() == Some(&b'/') {
-        rest
-    } else {
-        return None;
-    };
+    let (host, path_bytes): (Option<String>, &[u8]) =
+        if let Some(after) = rest.strip_prefix(b"file://") {
+            let idx = after.iter().position(|&c| c == b'/')?;
+            let raw_host = String::from_utf8_lossy(&after[..idx]);
+            let host = {
+                let h = raw_host
+                    .rsplit('@')
+                    .next()
+                    .unwrap_or(raw_host.as_ref())
+                    .trim()
+                    .trim_matches(|c| c == '[' || c == ']');
+                osc7_identity_host(h)
+            };
+            (host, &after[idx..])
+        } else if rest.first() == Some(&b'/') {
+            (None, rest)
+        } else {
+            return None;
+        };
     let decoded = percent_decode(path_bytes);
     if decoded.is_empty() {
         return None;
     }
-    Some(path_from_bytes(&decoded))
+    Some((host, path_from_bytes(&decoded)))
+}
+
+fn osc7_identity_host(host: &str) -> Option<String> {
+    if host.is_empty() || matches!(host, "localhost" | "127.0.0.1" | "::1") {
+        return None;
+    }
+    // Reuse connection_identity's host shortening without inventing a user.
+    let id = crate::core::tab_view::connection_identity("_", host)?;
+    id.split_once('@').map(|(_, h)| h.to_string())
 }
 
 /// Longest title the tree will keep. The window that owns the pane shows about
@@ -4566,6 +4685,7 @@ mod tests {
             shell_spec: None,
             cwd: None,
             osc_title: None,
+            home_identity: None,
             shell: ShellState::default(),
             remote_prompt_seen: false,
             modes: TerminalModes::default(),
@@ -6413,5 +6533,78 @@ mod tests {
 
         apply_signals(&mut st, SniffSignals::default());
         assert_eq!(st.cwd, Some(PathBuf::from("/tmp/x")));
+    }
+
+    #[test]
+    fn apply_signals_keeps_identity_when_a_path_only_title_arrives() {
+        let mut st = test_state(true);
+        apply_signals(
+            &mut st,
+            SniffSignals {
+                title: Some("xujian6@dev-box:~/CODE/retr".into()),
+                ..SniffSignals::default()
+            },
+        );
+        assert_eq!(st.osc_title.as_deref(), Some("xujian6@dev-box"));
+
+        apply_signals(
+            &mut st,
+            SniffSignals {
+                title: Some("/home/xujian6/CODE/groups/search-algo/retr".into()),
+                ..SniffSignals::default()
+            },
+        );
+        assert_eq!(
+            st.osc_title.as_deref(),
+            Some("xujian6@dev-box"),
+            "path-only OSC titles must not erase a stored identity"
+        );
+    }
+
+    #[test]
+    fn nested_ssh_hops_retarget_identity_and_exit_restores_home() {
+        let mut st = test_state(true);
+        st.home_identity = Some("alice@laptop".into());
+        st.osc_title = Some("alice@laptop".into());
+
+        apply_remote_context(
+            &mut st,
+            Some(RemoteContext {
+                kind: RemoteKind::Ssh,
+                argv: vec!["ssh".into(), "bob@jumper".into()],
+                target: "bob@jumper".into(),
+            }),
+        );
+        assert_eq!(st.osc_title.as_deref(), Some("bob@jumper"));
+        assert_eq!(st.home_identity.as_deref(), Some("alice@laptop"));
+
+        apply_signals(
+            &mut st,
+            SniffSignals {
+                shell: vec![ShellState {
+                    active: true,
+                    at_prompt: false,
+                    mark_at_prompt: false,
+                    last_exit_code: None,
+                    command: Some("ssh carol@dev-box".into()),
+                }],
+                ..SniffSignals::default()
+            },
+        );
+        assert_eq!(st.osc_title.as_deref(), Some("carol@dev-box"));
+        assert_eq!(st.home_identity.as_deref(), Some("alice@laptop"));
+
+        apply_signals(
+            &mut st,
+            SniffSignals {
+                cwd_host: Some("dev-box".into()),
+                cwd: Some(PathBuf::from("/home/carol")),
+                ..SniffSignals::default()
+            },
+        );
+        assert_eq!(st.osc_title.as_deref(), Some("carol@dev-box"));
+
+        apply_remote_context(&mut st, None);
+        assert_eq!(st.osc_title.as_deref(), Some("alice@laptop"));
     }
 }

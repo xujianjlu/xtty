@@ -509,7 +509,17 @@ impl Tty7App {
                         use crate::ui::machine_mirror::TabLabel;
                         let (view, home) = tab.label_view(Some(window), cx);
                         let raw = match view.label() {
-                            TabLabel::Osc(title) | TabLabel::Cwd(title) => {
+                            TabLabel::Osc(title) => {
+                                match tty7_core::core::tab_view::identity_from_title(title) {
+                                    Some(identity) => identity,
+                                    None => abbreviate_home(
+                                        strip_host_prefix(title.trim()),
+                                        home.as_deref(),
+                                    )
+                                    .into_owned(),
+                                }
+                            }
+                            TabLabel::Cwd(title) => {
                                 abbreviate_home(strip_host_prefix(title.trim()), home.as_deref())
                                     .into_owned()
                             }

@@ -3732,15 +3732,15 @@ mod tests {
         view.osc_title = Some("user@host:~/repo/025/tty7".to_string());
         assert_eq!(
             tab_view_label(&view, 0, None),
-            crate::ui::tab_strip::short_title("user@host:~/repo/025/tty7", None),
-            "a shell's title goes through the shortener the strip uses"
+            "user@host",
+            "a shell title that carries user@host keeps the identity, not the path"
         );
 
         view.osc_title = Some("user@host:".to_string());
         assert_eq!(
             tab_view_label(&view, 0, None),
-            "zsh",
-            "a title that shortens away to nothing falls through"
+            "user@host",
+            "a bare user@host: identity still names the tab"
         );
 
         view.osc_title = None;
