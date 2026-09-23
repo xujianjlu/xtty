@@ -876,6 +876,14 @@ pub enum ClientMsg {
     SftpTransferList {
         pane_id: u64,
     },
+    /// Run `command` on the far side of a native-SSH pane (not through the PTY).
+    ///
+    /// Used by the side panel's Source Control for that pane: SFTP can list and
+    /// edit files, but `git status` needs a real `git` process on the host.
+    SshExec {
+        pane_id: u64,
+        command: String,
+    },
     AddForward {
         pane_id: u64,
         rule: SshForwardRule,
@@ -949,6 +957,8 @@ pub enum DaemonMsg {
         job_id: u64,
     },
     SftpTransferProgress(Vec<SftpJobProgress>),
+    /// Reply to [`ClientMsg::SshExec`].
+    SshExecResult(crate::host::Output),
     ForwardList(Vec<ManagedForward>),
     Procs(PaneProcs),
     Version(DaemonVersion),
@@ -976,6 +986,8 @@ mod kind {
     pub const SFTP_TRANSFER_START: u8 = 32;
     pub const SFTP_TRANSFER_CANCEL: u8 = 33;
     pub const SFTP_TRANSFER_LIST: u8 = 34;
+    /// Run one command on a native-SSH pane's connection (extra session channel).
+    pub const SSH_EXEC: u8 = 35;
     pub const ADD_FORWARD: u8 = 20;
     pub const REMOVE_FORWARD: u8 = 21;
     pub const LIST_FORWARDS: u8 = 22;
@@ -1006,6 +1018,7 @@ mod kind {
     pub const SFTP_OP_RESULT: u8 = 31;
     pub const SFTP_TRANSFER_STARTED: u8 = 32;
     pub const SFTP_TRANSFER_PROGRESS: u8 = 33;
+    pub const SSH_EXEC_RESULT: u8 = 35;
     pub const FORWARD_LIST: u8 = 20;
     pub const AGENT: u8 = 21;
     pub const AGENT_STATUS: u8 = 22;
@@ -1245,6 +1258,9 @@ impl ClientMsg {
             ClientMsg::SftpTransferList { pane_id } => {
                 write_frame(w, kind::SFTP_TRANSFER_LIST, &to_json(pane_id)?)
             }
+            ClientMsg::SshExec { pane_id, command } => {
+                write_frame(w, kind::SSH_EXEC, &to_json(&(pane_id, command))?)
+            }
             ClientMsg::AddForward { pane_id, rule } => {
                 write_frame(w, kind::ADD_FORWARD, &to_json(&(pane_id, rule))?)
             }
@@ -1368,6 +1384,10 @@ impl ClientMsg {
             kind::SFTP_TRANSFER_LIST => ClientMsg::SftpTransferList {
                 pane_id: from_json(&payload)?,
             },
+            kind::SSH_EXEC => {
+                let (pane_id, command) = from_json(&payload)?;
+                ClientMsg::SshExec { pane_id, command }
+            }
             kind::QUERY_PROCS => ClientMsg::QueryProcs {
                 pane_id: from_json(&payload)?,
             },
@@ -1451,6 +1471,9 @@ impl DaemonMsg {
             DaemonMsg::SftpTransferProgress(jobs) => {
                 write_frame(w, kind::SFTP_TRANSFER_PROGRESS, &to_json(jobs)?)
             }
+            DaemonMsg::SshExecResult(out) => {
+                write_frame(w, kind::SSH_EXEC_RESULT, &to_json(out)?)
+            }
             DaemonMsg::ForwardList(list) => write_frame(w, kind::FORWARD_LIST, &to_json(list)?),
             DaemonMsg::Procs(procs) => write_frame(w, kind::PROCS, &to_json(procs)?),
             DaemonMsg::Version(version) => write_frame(w, kind::VERSION_REPLY, &to_json(version)?),
@@ -1504,6 +1527,7 @@ impl DaemonMsg {
                 job_id: from_json(&payload)?,
             },
             kind::SFTP_TRANSFER_PROGRESS => DaemonMsg::SftpTransferProgress(from_json(&payload)?),
+            kind::SSH_EXEC_RESULT => DaemonMsg::SshExecResult(from_json(&payload)?),
             kind::FORWARD_LIST => DaemonMsg::ForwardList(from_json(&payload)?),
             kind::PROCS => DaemonMsg::Procs(from_json(&payload)?),
             kind::VERSION_REPLY => DaemonMsg::Version(from_json(&payload)?),
@@ -1741,6 +1765,10 @@ mod tests {
             }),
             ClientMsg::SftpTransferCancel { job_id: 9 },
             ClientMsg::SftpTransferList { pane_id: 4 },
+            ClientMsg::SshExec {
+                pane_id: 4,
+                command: "git -C '/home/u/proj' status --porcelain=v2 -b".into(),
+            },
             ClientMsg::AddForward {
                 pane_id: 7,
                 rule: SshForwardRule {
@@ -1910,6 +1938,11 @@ mod tests {
                 local: "/local".into(),
                 remote: "/remote".into(),
             }]),
+            DaemonMsg::SshExecResult(crate::host::Output {
+                status: Some(0),
+                stdout: b"# branch.head main\n".to_vec(),
+                stderr: Vec::new(),
+            }),
             DaemonMsg::ForwardList(vec![
                 ManagedForward {
                     id: 1,

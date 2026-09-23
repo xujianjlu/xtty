@@ -4,9 +4,9 @@
 //! and saves files on the local machine and over a remote workspace. An SSH
 //! pane's files come over SFTP instead, which had no `Host`, so double-click
 //! could only download (#656). This adapter closes that gap: the file
-//! operations map one-to-one onto [`SftpOp`]s, and everything a bare SFTP
-//! channel cannot do — git, search, shells, watching — says so honestly
-//! instead of pretending.
+//! operations map one-to-one onto [`SftpOp`]s, and `git` runs over an extra
+//! SSH session channel on the same connection. Shell discovery and file
+//! watching still say so honestly — those need a daemon on the far side.
 //!
 //! Calls block on a daemon round trip, so they must stay off the UI thread;
 //! `HostOps` already guarantees that for every `Host`.
@@ -42,6 +42,30 @@ impl SftpHost {
 
 fn rpath(p: &Path) -> String {
     p.to_string_lossy().into_owned()
+}
+
+/// POSIX single-quote a string for embedding in an `ssh exec` command line.
+fn posix_quote(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('\'');
+    for ch in s.chars() {
+        if ch == '\'' {
+            out.push_str("'\\''");
+        } else {
+            out.push(ch);
+        }
+    }
+    out.push('\'');
+    out
+}
+
+fn git_command(cwd: &Path, args: &[&str]) -> String {
+    let mut cmd = format!("git -C {}", posix_quote(&cwd.to_string_lossy()));
+    for arg in args {
+        cmd.push(' ');
+        cmd.push_str(&posix_quote(arg));
+    }
+    cmd
 }
 
 /// An SFTP error is a string by the time it crosses the daemon socket. The
@@ -221,12 +245,45 @@ impl Host for SftpHost {
         }
     }
 
-    fn repo_root(&self, _p: &Path) -> io::Result<Option<PathBuf>> {
-        Ok(None)
+    fn repo_root(&self, p: &Path) -> io::Result<Option<PathBuf>> {
+        // Prefer `git rev-parse` when the far side has git; fall back to
+        // walking for `.git` over SFTP when it does not answer.
+        match self.git(
+            p,
+            &["rev-parse", "--path-format=absolute", "--show-toplevel"],
+        ) {
+            Ok(out) if out.success() => {
+                let root = String::from_utf8_lossy(&out.stdout);
+                let line = root.lines().next().unwrap_or("").trim();
+                if line.is_empty() {
+                    Ok(None)
+                } else {
+                    Ok(Some(PathBuf::from(line)))
+                }
+            }
+            _ => {
+                let mut cur = p.to_path_buf();
+                loop {
+                    let git = cur.join(".git");
+                    if self.exists(&git) {
+                        return Ok(Some(cur));
+                    }
+                    let parent = remote_parent(&rpath(&cur));
+                    if parent == rpath(&cur) || parent == "/" {
+                        let root = PathBuf::from("/");
+                        return Ok(self.exists(&root.join(".git")).then_some(root));
+                    }
+                    cur = PathBuf::from(parent);
+                }
+            }
+        }
     }
 
-    fn git(&self, _cwd: &Path, _args: &[&str]) -> io::Result<Output> {
-        Err(unsupported("git"))
+    fn git(&self, cwd: &Path, args: &[&str]) -> io::Result<Output> {
+        let command = git_command(cwd, args);
+        self.route
+            .exec(&command)
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))
     }
 
     fn shells(&self) -> io::Result<ShellInventory> {
@@ -250,6 +307,16 @@ mod tests {
         assert_eq!(a.id(), b.id());
         assert_ne!(a.id(), c.id());
         assert!(!a.id().is_local());
+    }
+
+    #[test]
+    fn posix_quote_wraps_and_escapes_single_quotes() {
+        assert_eq!(posix_quote("plain"), "'plain'");
+        assert_eq!(posix_quote("a'b"), "'a'\\''b'");
+        assert_eq!(
+            git_command(Path::new("/home/u/proj"), &["status", "-sb"]),
+            "git -C '/home/u/proj' 'status' '-sb'"
+        );
     }
 
     #[test]
@@ -278,7 +345,7 @@ mod tests {
             kind: SftpEntryKind::Dir,
             size: 4096,
             mtime: 0,
-            permissions: 0o40755,
+            permissions: 0o040755,
             target_is_dir: false,
         });
         assert!(dir.is_dir);

@@ -1776,7 +1776,22 @@ impl TerminalView {
     }
 
     fn paths_are_local(&self) -> bool {
-        self.remote_context().is_none() && self.host_id.is_local()
+        self.remote_context().is_none() && self.host_id().is_local()
+    }
+
+    /// Whether this pane is a connected native-SSH session whose paths live on
+    /// the dialled host (reachable over SFTP / SSH exec, not LocalHost).
+    fn native_ssh_connected(&self) -> bool {
+        self.remote_context()
+            .is_some_and(|c| c.kind == crate::daemon::protocol::RemoteKind::NativeSsh)
+            && matches!(
+                self.ssh_phase(),
+                Some(crate::daemon::protocol::SshPhase::Connected)
+            )
+    }
+
+    fn sftp_route_for_host(&self) -> crate::ui::sftp::SftpRoute {
+        crate::ui::sftp::SftpRoute::new(self.pane_id, self.workspace.clone())
     }
 
     /// The directory a `~` in this pane's paths stands for, for anything that
@@ -1799,10 +1814,20 @@ impl TerminalView {
     }
 
     pub fn host(&self, cx: &gpui::App) -> Option<crate::ui::host_ops::SharedHost> {
+        if self.native_ssh_connected() {
+            return Some(std::sync::Arc::new(crate::ui::sftp_host::SftpHost::new(
+                self.sftp_route_for_host(),
+            )));
+        }
         crate::ui::host_registry::HostRegistry::lookup(cx, self.host_id)
     }
 
     pub fn host_id(&self) -> crate::ui::host_ops::HostId {
+        if self.native_ssh_connected() {
+            return crate::ui::host_ops::HostId::from_connection_key(
+                &self.sftp_route_for_host().connection_key(),
+            );
+        }
         self.host_id
     }
 
@@ -1889,7 +1914,7 @@ impl TerminalView {
     }
 
     fn cwd_is_on_host(&self) -> bool {
-        cwd_is_on_host(!self.paths_are_local(), self.host_id.is_local())
+        cwd_is_on_host(!self.paths_are_local(), self.host_id().is_local())
     }
 
     pub fn agent(&self) -> Option<crate::core::cli_agent::CLIAgent> {
@@ -1982,7 +2007,7 @@ impl TerminalView {
     pub fn git_status(&self, cx: &App) -> Option<crate::terminal::git_status::GitStatus> {
         let cwd = self.git_status_cwd.as_ref()?;
         cx.try_global::<crate::terminal::git_status::GitStatusCache>()?
-            .status_for(self.host_id, cwd)
+            .status_for(self.host_id(), cwd)
     }
 
     pub fn git_status_cwd(&self) -> Option<&std::path::Path> {
@@ -3951,6 +3976,9 @@ impl TerminalView {
             && self.ranked_cwd.as_ref() != Some(&cwd)
         {
             self.rerank_history(Some(&cwd));
+            // OSC 7 can arrive without other output; the side panel's Files and
+            // SCM tabs need a frame so they can follow the new directory.
+            cx.notify();
         }
 
         if self.integration_notice.is_some() && self.terminal.shell_active() {
@@ -4051,14 +4079,15 @@ impl TerminalView {
         use crate::terminal::git_status::GitStatusCache;
 
         let Some(cwd) = cwd else { return };
+        let host = self.host_id();
         let Some(root) = cx
             .try_global::<GitStatusCache>()
-            .and_then(|cache| cache.repo_root_for(self.host_id, cwd))
+            .and_then(|cache| cache.repo_root_for(host, cwd))
             .map(std::path::Path::to_path_buf)
         else {
             return;
         };
-        cx.default_global::<ScmData>().bump(self.host_id, &root);
+        cx.default_global::<ScmData>().bump(host, &root);
     }
 
     fn desired_history_scope(&self) -> super::history::Scope {
@@ -4219,7 +4248,7 @@ impl TerminalView {
             }
             return;
         };
-        let id = self.host_id;
+        let id = self.host_id();
         let Some(host) = self.host(cx) else {
             if changed {
                 cx.notify();
@@ -9962,6 +9991,23 @@ mod tests {
 
         assert!(!cwd_is_on_host(true, true));
         assert!(!cwd_is_on_host(false, false));
+    }
+
+    /// A dialled native-SSH pane's paths are on the far host. `host_id()` must
+    /// name that SFTP route — not LOCAL — so `cwd_is_on_host` is true and the
+    /// side panel can ask SftpHost for git / listings after `cd`.
+    #[test]
+    fn native_ssh_host_id_is_the_sftp_route_not_local() {
+        let local_field = crate::ui::host_ops::HostId::LOCAL;
+        let sftp = crate::ui::host_ops::HostId::from_connection_key(
+            &crate::ui::sftp::SftpRoute::new(42, None).connection_key(),
+        );
+        assert!(!sftp.is_local());
+        // paths remote + host not local → cwd is on that host
+        assert!(cwd_is_on_host(true, sftp.is_local()));
+        // The old bug: native SSH kept host_id LOCAL, so the same remote paths
+        // were treated as "third machine we cannot ask".
+        assert!(!cwd_is_on_host(true, local_field.is_local()));
     }
 
     /// Which machine's spelling a pane's paths are read in. Ungated on
