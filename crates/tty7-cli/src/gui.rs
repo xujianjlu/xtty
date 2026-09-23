@@ -21,45 +21,50 @@ pub fn launch(path: Option<&Path>) -> Result<()> {
     Ok(())
 }
 
-/// The bundled `tty7-app` this CLI belongs to: `TTY7_APP`, then the file next
-/// to this executable, then `PATH`. `gui` launches it; hook diagnosis needs the
-/// same path because that is the executable a hook command names.
+/// The bundled `xtty-app` this CLI belongs to: `XTTY_APP` / legacy `TTY7_APP`,
+/// then the file next to this executable, then `PATH`.
 pub fn find_executable() -> Result<PathBuf> {
-    if let Some(explicit) = std::env::var_os("TTY7_APP") {
-        let path = PathBuf::from(explicit);
-        if path.is_file() {
-            return Ok(path);
+    for key in ["XTTY_APP", "TTY7_APP"] {
+        if let Some(explicit) = std::env::var_os(key) {
+            let path = PathBuf::from(explicit);
+            if path.is_file() {
+                return Ok(path);
+            }
+            bail!(
+                "{key} points to {}, but that file does not exist",
+                path.display()
+            );
         }
-        bail!(
-            "TTY7_APP points to {}, but that file does not exist",
-            path.display()
-        );
     }
 
     let name = executable_name();
     if let Ok(own) = std::env::current_exe()
         && let Some(dir) = own.parent()
     {
-        let sibling = dir.join(name);
-        if sibling.is_file() {
-            return Ok(sibling);
+        for candidate_name in [name, "tty7-app"] {
+            let sibling = dir.join(candidate_name);
+            if sibling.is_file() {
+                return Ok(sibling);
+            }
         }
     }
 
     if let Some(paths) = std::env::var_os("PATH") {
         for dir in std::env::split_paths(&paths) {
-            let candidate = dir.join(name);
-            if candidate.is_file() {
-                return Ok(candidate);
+            for candidate_name in [name, "tty7-app"] {
+                let candidate = dir.join(candidate_name);
+                if candidate.is_file() {
+                    return Ok(candidate);
+                }
             }
         }
     }
 
-    bail!("could not find {name} next to this CLI or on PATH — install tty7-app, or set TTY7_APP")
+    bail!("could not find {name} next to this CLI or on PATH — install xtty-app, or set XTTY_APP")
 }
 
 fn executable_name() -> &'static str {
-    "tty7-app"
+    "xtty-app"
 }
 
 #[cfg(test)]
@@ -68,6 +73,6 @@ mod tests {
 
     #[test]
     fn the_gui_executable_name_matches_the_platform() {
-        assert_eq!(executable_name(), "tty7-app");
+        assert_eq!(executable_name(), "xtty-app");
     }
 }

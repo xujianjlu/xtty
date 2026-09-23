@@ -99,18 +99,19 @@ impl HistoryProbePipe {
 /// Bytes written to the PTY to dump the remote shell's in-memory history.
 ///
 /// Clears the current line (`^U`), prints begin/end markers around a plain
-/// `fc -ln` / `HISTTIMEFORMAT= history` dump (bash + zsh), and avoids recording
-/// the probe itself when the shell honors `set +o history` / `setopt HIST_NO_STORE`.
+/// `history` / `fc -ln` dump (bash + zsh), and avoids recording the probe
+/// itself when the shell honors `set +o history` / `setopt HIST_NO_STORE`.
 ///
-/// Prefer `fc -ln` so Ctrl+R sees the same commands `history` would list, without
-/// HISTTIMEFORMAT decoration that would otherwise pollute the corpus.
+/// Prefer `history` (with `HISTTIMEFORMAT=` cleared) so jumper / nested bash
+/// dumps match what the user sees from `history | grep …`. Fall back to
+/// `fc -ln` for zsh. Parser strips leftover timestamps if any leak through.
 pub(crate) fn probe_command_bytes() -> Vec<u8> {
     // One line, portable enough for bash/zsh behind jumper / Native SSH / local.
     // Markers use octal \036 so the shell emits the same RS bytes we scan for.
     let body = concat!(
         "set +o history 2>/dev/null || setopt HIST_NO_STORE 2>/dev/null; ",
         "printf '\\036TTY7_HIST_BEGIN\\036\\n'; ",
-        "{ fc -ln 1 2>/dev/null || HISTTIMEFORMAT= history 2>/dev/null || history 2>/dev/null || true; }; ",
+        "{ HISTTIMEFORMAT= history 2>/dev/null || history 2>/dev/null || fc -ln 1 2>/dev/null || true; }; ",
         "printf '\\036TTY7_HIST_END\\036\\n'\r"
     );
     let mut out = Vec::with_capacity(1 + body.len());

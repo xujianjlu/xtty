@@ -32,6 +32,10 @@ pub struct SshProfile {
     pub keepalive_count_max: Option<u32>,
     pub connect_timeout_s: Option<u32>,
     pub warn_on_close: Option<bool>,
+    /// When true, the SSH auth banner is not forwarded to the UI. Default
+    /// on: server login notices ("Authorized users only…") are not useful as
+    /// a dismissible modal, and real MOTD still prints in the PTY after login.
+    #[serde(default = "default_true")]
     pub skip_banner: bool,
     #[serde(default = "default_true")]
     pub shell_integration: bool,
@@ -68,7 +72,7 @@ impl Default for SshProfile {
             keepalive_count_max: None,
             connect_timeout_s: None,
             warn_on_close: None,
-            skip_banner: false,
+            skip_banner: true,
             shell_integration: true,
             remote_clipboard_write: false,
             login_scripts: Vec::new(),
@@ -544,6 +548,10 @@ mod tests {
         assert_eq!(p.auth, AuthMode::Auto);
         assert!(p.credential_ref.is_none());
         assert!(!p.remote_clipboard_write);
+        assert!(
+            p.skip_banner,
+            "login banners must not surface as modals by default"
+        );
 
         let p: SshProfile =
             serde_json::from_str(r#"{"name":"old","host":"h","use_system_ssh":true}"#).unwrap();

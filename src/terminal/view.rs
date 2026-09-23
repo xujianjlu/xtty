@@ -445,6 +445,10 @@ pub struct TerminalView {
     git_status_cwd: Option<std::path::PathBuf>,
     last_agent_activity: u64,
     cmd: CmdEditor,
+    /// After an empty Enter (or any submit), shell reprints PS1. Skip
+    /// command-highlight + ghost hint until the user types real input so the
+    /// overlay does not fight the prompt redraw (green↔white jitter).
+    input_chrome_suppressed: bool,
     /// Mirrors `Config::prompt_editor`. Cached rather than read from the global
     /// because the ownership question ("does this keystroke belong to the local
     /// editor?") is asked from `&self` helpers that have no `App` to read from;
@@ -1566,6 +1570,7 @@ impl TerminalView {
             git_status_cwd: None,
             last_agent_activity: 0,
             cmd: CmdEditor::new(),
+            input_chrome_suppressed: false,
             prompt_editor,
             typeahead: Typeahead::new(),
             hold: GapHold::new(),
@@ -4180,14 +4185,16 @@ impl TerminalView {
         cx.notify();
 
         let shell_files = self.remote_shell_history_sources(cx);
-        let needs_pty_probe = !self.history_ready
-            && shell_files.is_empty()
-            && self
-                .remote_context()
-                .is_some_and(|c| c.kind == crate::daemon::protocol::RemoteKind::Ssh);
-        // Nested process-table ssh: keep loading until the PTY dump lands (or
-        // times out). Do not mark ready from an empty SFTP pass — that painted
-        // "No history" while `history` still worked on the far host.
+        // Nested process-table ssh: always PTY-dump the inner host on hop.
+        // SFTP cannot reach that box; a cached list from a prior visit can be
+        // stale; and Ctrl+R must not cancel an in-flight hop dump (see
+        // `start_pty_history_probe`).
+        let needs_pty_probe = self
+            .remote_context()
+            .is_some_and(|c| c.kind == crate::daemon::protocol::RemoteKind::Ssh);
+        // Keep loading until the PTY dump lands (or times out). Do not mark
+        // ready from an empty SFTP pass — that painted "No history" while
+        // `history` still worked on the far host.
         if needs_pty_probe {
             self.history_ready = false;
         }
@@ -4250,9 +4257,18 @@ impl TerminalView {
     /// not the OSC/app-tracked stash.
     fn start_pty_history_probe(&mut self, cx: &mut Context<Self>) {
         let pipe = self.terminal.history_probe_pipe();
-        // Always re-arm: a stuck divert or a stale in-flight dump from an
-        // earlier hop must not block Ctrl+R from getting a fresh corpus.
-        pipe.cancel();
+        // Never cancel an in-flight divert: jumper/nested ssh arms a dump on
+        // hop, and Ctrl+R moments later used to wipe that capture (and inject
+        // a second probe mid-command), leaving an empty overlay / timeout.
+        if pipe.is_diverting() {
+            self.history_ready = false;
+            self.history_probe_error = None;
+            cx.notify();
+            return;
+        }
+        // Claim any unread completed dump so a stale END from a prior hop
+        // cannot complete the next arm with the wrong corpus.
+        let _ = pipe.take_if_complete();
         let scope = self.history_scope.clone();
         pipe.arm();
         self.history_ready = false;
@@ -5029,6 +5045,10 @@ impl TerminalView {
         let pasted = self.cmd.pasted();
         self.terminal.write(submit_bytes(&line, bracketed, pasted));
         self.cmd.clear();
+        // Prompt-only / empty-Enter (and any submit): shell reprints PS1.
+        // Hold off highlight+hint until the next real keystroke so chrome
+        // does not flicker against the prompt redraw.
+        self.input_chrome_suppressed = true;
         self.cursor_visible = true;
         self.jump_to_prompt();
         cx.notify();
@@ -5227,8 +5247,16 @@ impl TerminalView {
             // Always open empty and dump live shell history for this session.
             // Painting OSC/SFTP stash first made Native SSH look "working" with
             // a handful of recent cmds while `history | grep …` had hundreds.
+            // Claim a just-completed hop dump first; if a divert is still in
+            // flight (typical right after jumper), keep waiting on it — do not
+            // cancel mid-capture.
+            self.poll_history_probe(cx);
             self.history_probe_error = None;
             self.history_ready = false;
+            // Abort a shell-native reverse-i-search if Ctrl+R also reached the
+            // PTY (Ctrl+G). Harmless bell when not in isearch; clears the dual
+            // UI when it did leak.
+            self.terminal.write(vec![0x07]);
             self.reverse_search = Some(ReverseSearch::new(&[], &[]));
             self.start_pty_history_probe(cx);
         }
@@ -5748,6 +5776,7 @@ impl TerminalView {
         if self.input_active() {
             self.adopt_typeahead();
             self.cmd.insert_str(text);
+            self.input_chrome_suppressed = false;
             self.history_nav = None;
             self.editor_goal_col = None;
             self.last_word_nav = None;
@@ -6802,35 +6831,21 @@ impl TerminalView {
         let shift = self.input_scroll_rows();
         let cy_top = px(GRID_PAD_Y) + self.line_height * (crow as f32 - shift as f32);
 
-        if let Some(rs) = &self.reverse_search {
-            let label = format!("(reverse-i-search)`{}': ", rs.query());
-            let matched = one_line(rs.selected_line().unwrap_or_default());
+        if self.reverse_search.is_some() {
+            // The fuzzy history menu is the only search UI. A bash-style
+            // `(reverse-i-search)`'query': match` on the prompt read as a
+            // second, shell-native isearch (and hid nothing underneath).
+            // Opaque cover: swallow clicks and hide any leaked shell isearch
+            // / echo on the grid until the menu closes.
+            let bg = cx.theme().background;
             return div()
                 .absolute()
                 .left(cx_left)
                 .top(cy_top)
                 .right_4()
                 .h(self.line_height)
-                // The row floats over live grid cells; a bare div inserts no
-                // hitbox, so a click aimed at it started a selection in the
-                // text underneath (#541).
                 .occlude()
-                .flex()
-                .items_center()
-                .font_family(self.font.family.clone())
-                .text_size(self.font_size)
-                .child(
-                    div()
-                        .whitespace_nowrap()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(label),
-                )
-                .child(
-                    div()
-                        .whitespace_nowrap()
-                        .text_color(cx.theme().foreground)
-                        .child(matched),
-                );
+                .bg(bg);
         }
 
         let chars: Vec<char> = self.cmd.text().chars().collect();
@@ -6842,6 +6857,7 @@ impl TerminalView {
 
         let theme = cx.theme();
         let fg = theme.foreground;
+        let line_bg = theme.background;
         let caret_col = theme.caret;
         let muted = theme.muted_foreground;
         let mut sel_bg = theme.selection;
@@ -6852,12 +6868,20 @@ impl TerminalView {
         let caret_top = px((lh.as_f32() - caret_h.as_f32()) / 2.0);
 
         let line: String = chars.iter().collect();
+        // Prompt-only / post-Enter PS redraw: paint plain caret only — no
+        // keyword colors, no ghost hint — so shell echo cannot flash the
+        // overlay green↔white. Re-enabled on the next real insert.
+        let paint_chrome = !self.input_chrome_suppressed && !line.trim().is_empty();
         let mut colors: Vec<gpui::Hsla> = Vec::with_capacity(len);
-        for span in highlight::highlight(&line) {
-            let c = self.kind_color(span.kind, cx);
-            for _ in span.text.chars() {
-                colors.push(c);
+        if paint_chrome {
+            for span in highlight::highlight(&line) {
+                let c = self.kind_color(span.kind, cx);
+                for _ in span.text.chars() {
+                    colors.push(c);
+                }
             }
+        } else {
+            colors.resize(len, fg);
         }
 
         let cursor_style = cx.global::<Config>().cursor_style;
@@ -6902,12 +6926,17 @@ impl TerminalView {
                 .h(lh)
                 .flex()
                 .items_center()
+                // Opaque cell fill so shell echo / grid redraw under the
+                // overlay cannot flash the same glyphs back to default white
+                // between highlight frames.
+                .bg(if inverted {
+                    caret_col
+                } else if selected {
+                    sel_bg
+                } else {
+                    line_bg
+                })
                 .text_color(if inverted { caret_ink } else { color });
-            if inverted {
-                d = d.bg(caret_col);
-            } else if selected {
-                d = d.bg(sel_bg);
-            }
             if underline {
                 d = d.border_b_1().border_color(fg);
             }
@@ -6919,6 +6948,7 @@ impl TerminalView {
         };
 
         let blank = move |w: gpui::Pixels| div().flex_none().w(w).h(lh);
+        let opaque_blank = move |w: gpui::Pixels| div().flex_none().w(w).h(lh).bg(line_bg);
 
         let mut lines: Vec<Vec<gpui::AnyElement>> =
             vec![vec![blank(cell_w * (ccol as f32)).into_any_element()]];
@@ -6946,7 +6976,7 @@ impl TerminalView {
             if chars[i] == '\n' {
                 if selection.is_none() && !has_marked && cursor_on && cursor == i {
                     lines.last_mut().unwrap().push(
-                        blank(cell_w)
+                        opaque_blank(cell_w)
                             .relative()
                             .child(caret_bar())
                             .into_any_element(),
@@ -6974,7 +7004,7 @@ impl TerminalView {
                 .push(cell(colors[i], c.text, c.width, selected, caret, false));
         }
 
-        let ghost: Option<String> = if selection.is_none() && !has_marked && !is_multiline {
+        let ghost: Option<String> = if paint_chrome && selection.is_none() && !has_marked && !is_multiline {
             self.ghost_suggestion()
                 .map(|full| full.chars().skip(len).collect::<String>())
                 .filter(|r| !r.is_empty())
@@ -6989,7 +7019,7 @@ impl TerminalView {
                     last.push(cell(fg, mc.text.clone(), mc.width, false, false, true));
                 }
             } else if ghost.is_none() {
-                let mut tail = blank(cell_w).relative();
+                let mut tail = opaque_blank(cell_w).relative();
                 if selection.is_none() && cursor_on {
                     tail = tail.child(caret_bar());
                 }
@@ -7022,6 +7052,10 @@ impl TerminalView {
             .top(cy_top)
             .right_4()
             .min_h(lh)
+            // Hitbox so clicks do not select the echoed grid underneath (#541).
+            // Per-cell opaque fills (above) hide echo under keywords/hints;
+            // do not fill this whole row — that would cover the shell prompt.
+            .occlude()
             .flex()
             .flex_col()
             .font_family(self.font.family.clone())
@@ -7184,9 +7218,7 @@ impl TerminalView {
         let now = unix_now();
 
         // Always paint a panel while search is open. An empty match list used
-        // to return None, which after jumper (empty scoped history) left only
-        // the `(reverse-i-search)` label — visually indistinguishable from
-        // bash's native mode.
+        // to return None, which after jumper left no fuzzy UI at all.
         let (place_above, rows, hidden_above, hidden_below) = if matches.is_empty() {
             let probe_err = self.history_probe_error.clone();
             let corpus_empty = rs.corpus().is_empty();
@@ -10348,17 +10380,25 @@ mod gpui_tests {
         }
     }
 
-    /// Ctrl+R writes a probe line (^U + dump command); drain it before asserting
-    /// later PTY writes (Accept / Cmd+Enter).
+    /// Ctrl+R may write Ctrl+G (abort leaked shell isearch) then a probe line
+    /// (^U + dump command); drain both before asserting later PTY writes.
     fn drain_history_probe_write(daemon: &mut Stream) {
-        let Some(bytes) = next_input_until_timeout(daemon) else {
+        let Some(first) = next_input_until_timeout(daemon) else {
             return;
         };
-        assert_eq!(bytes.first(), Some(&0x15), "probe clears the current line");
+        let probe = if first == vec![0x07] {
+            next_input_until_timeout(daemon).unwrap_or_default()
+        } else {
+            first
+        };
+        if probe.is_empty() {
+            return;
+        }
+        assert_eq!(probe.first(), Some(&0x15), "probe clears the current line");
         assert!(
-            String::from_utf8_lossy(&bytes).contains("TTY7_HIST"),
+            String::from_utf8_lossy(&probe).contains("TTY7_HIST"),
             "probe command written to PTY: {:?}",
-            String::from_utf8_lossy(&bytes)
+            String::from_utf8_lossy(&probe)
         );
     }
 
@@ -13134,6 +13174,10 @@ mod gpui_tests {
                     view.render_reverse_search_menu(cx).is_some(),
                     "overlay paints while Loading shell history…"
                 );
+                assert!(
+                    view.terminal.history_probe_pipe().is_diverting(),
+                    "Ctrl+R must keep the in-flight jumper dump, not cancel it"
+                );
             })
             .unwrap();
 
@@ -13179,6 +13223,92 @@ mod gpui_tests {
                     "open search refreshed onto host history"
                 );
                 assert!(view.render_reverse_search_menu(cx).is_some());
+            })
+            .unwrap();
+    }
+
+    /// Ctrl+R alone after jumper (no prior hop probe still diverting) must
+    /// arm a fresh PTY dump and seed the overlay from the inner host.
+    #[gpui::test]
+    fn history_search_ctrl_r_after_jumper_starts_pty_dump(cx: &mut TestAppContext) {
+        crate::core::config::pin_test_config_dir();
+
+        let (window, mut daemon) = harness(cx);
+        window
+            .update(cx, |view, _, _| {
+                view.history = vec!["from-jumper-only".to_string()];
+                view.history_frecency = vec![0.0];
+                view.history_ready = true;
+            })
+            .unwrap();
+
+        DaemonMsg::RemoteContext(Some(crate::daemon::protocol::RemoteContext {
+            kind: crate::daemon::protocol::RemoteKind::Ssh,
+            argv: vec!["ssh".into(), "krsvr-gray-01".into()],
+            target: "krsvr-gray-01".into(),
+        }))
+        .encode(&mut daemon)
+        .unwrap();
+        for _ in 0..200 {
+            if window
+                .update(cx, |view, _, _| view.remote_context().is_some())
+                .unwrap()
+            {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+
+        window
+            .update(cx, |view, window, cx| {
+                view.follow_history_scope(cx);
+                // Simulate hop-time probe already finished empty / cancelled —
+                // user hits Ctrl+R later and must still get a live dump.
+                view.terminal.history_probe_pipe().cancel();
+                view.history.clear();
+                view.history_ready = false;
+                assert!(!view.terminal.history_probe_pipe().is_active());
+
+                view.on_key_down(
+                    &KeyDownEvent {
+                        keystroke: key("ctrl-r"),
+                        is_held: false,
+                        prefer_character_input: false,
+                    },
+                    window,
+                    cx,
+                );
+                assert!(
+                    view.terminal.history_probe_pipe().is_diverting(),
+                    "Ctrl+R after jumper must arm a PTY history dump"
+                );
+                assert!(view.render_reverse_search_menu(cx).is_some());
+            })
+            .unwrap();
+
+        drain_history_probe_write(&mut daemon);
+
+        let mut dump = Vec::new();
+        dump.extend_from_slice(super::super::history_probe::BEGIN_MARK);
+        dump.extend_from_slice(b"\n  42  git push origin fix -f\n  43  systemctl status nginx\n");
+        dump.extend_from_slice(super::super::history_probe::END_MARK);
+        DaemonMsg::Output(dump).encode(&mut daemon).unwrap();
+
+        wait_history_probe_ready(&window, cx);
+
+        window
+            .update(cx, |view, _, _| {
+                assert!(
+                    view.history.iter().any(|c| c == "git push origin fix -f"),
+                    "inner-host history must populate Ctrl+R: {:?}",
+                    view.history
+                );
+                assert!(
+                    !view.history.iter().any(|c| c == "from-jumper-only"),
+                    "must not fall back to jumper stash"
+                );
+                let rs = view.reverse_search.as_ref().expect("overlay open");
+                assert!(rs.corpus().iter().any(|c| c == "git push origin fix -f"));
             })
             .unwrap();
     }
@@ -13825,6 +13955,54 @@ mod gpui_tests {
                 "{chord} ships the line to the PTY"
             );
         }
+    }
+
+    #[gpui::test]
+    fn history_search_on_does_not_forward_ctrl_r_to_the_shell(cx: &mut TestAppContext) {
+        crate::core::config::pin_test_config_dir();
+
+        let (window, mut daemon) = harness(cx);
+        window
+            .update(cx, |view, window, cx| {
+                view.on_key_down(
+                    &KeyDownEvent {
+                        keystroke: key("ctrl-r"),
+                        is_held: false,
+                        prefer_character_input: false,
+                    },
+                    window,
+                    cx,
+                );
+                assert!(view.reverse_search.is_some(), "overlay opens");
+            })
+            .unwrap();
+
+        // First write may be Ctrl+G (abort leaked isearch); never raw ^R.
+        let first = next_input_until_timeout(&mut daemon).expect("PTY traffic after Ctrl+R");
+        assert_ne!(first, vec![0x12], "history_search must not forward Ctrl+R");
+        if first == vec![0x07] {
+            let probe = next_input_until_timeout(&mut daemon).expect("history probe");
+            assert_ne!(probe, vec![0x12]);
+            assert_eq!(probe.first(), Some(&0x15));
+        } else {
+            assert_eq!(first.first(), Some(&0x15), "expected history probe, got {first:?}");
+        }
+
+        window
+            .update(cx, |view, window, cx| {
+                type_char(view, "l", window, cx);
+                type_char(view, "l", window, cx);
+                assert_eq!(
+                    view.reverse_search.as_ref().map(|rs| rs.query()),
+                    Some("ll"),
+                    "query stays in the overlay"
+                );
+            })
+            .unwrap();
+        assert!(
+            next_input_until_timeout(&mut daemon).is_none(),
+            "typed query must not reach the shell while overlay is open"
+        );
     }
 
     #[gpui::test]

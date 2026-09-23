@@ -7631,9 +7631,9 @@ impl Tty7App {
                             )))
                             .child(
                                 Link::new("about-github")
-                                    .href("https://github.com/xujianjlu/tty7")
+                                    .href("https://github.com/xujianjlu/xtty")
                                     .text_sm()
-                                    .child("github.com/xujianjlu/tty7"),
+                                    .child("github.com/xujianjlu/xtty"),
                             ),
                     ),
             )
@@ -8626,7 +8626,7 @@ mod tests {
             "History search",
             "Dim inactive panes",
             "Option (⌥) acts as Meta",
-            "Install the tty7 command on PATH",
+            "Install the xtty command on PATH",
         ] {
             assert!(
                 settings_search_entries()

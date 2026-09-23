@@ -327,15 +327,17 @@ impl Tty7App {
         cx: &mut Context<Self>,
     ) {
         let pane_id = view.read(cx).pane_id;
-        let (endpoint, auto_supplied, phase, banners, next) = {
+        let (endpoint, auto_supplied, phase, next) = {
             let term = &view.read(cx).terminal;
-            let mut banners = Vec::new();
             let mut next: Option<(u64, AuthPromptKind)> = None;
             let want_prompt = self.ssh_prompt.model.is_none();
             loop {
                 if want_prompt {
                     match term.take_auth_prompt() {
-                        Some((_, AuthPromptKind::Banner { text })) => banners.push(text),
+                        // Auth banners are drained, never raised as a modal —
+                        // they are not actionable and block the terminal until
+                        // dismissed. Connect-error toasts still use `banners`.
+                        Some((_, AuthPromptKind::Banner { .. })) => {}
                         Some(p) => {
                             next = Some(p);
                             break;
@@ -344,7 +346,7 @@ impl Tty7App {
                     }
                 } else {
                     match term.take_auth_banner() {
-                        Some(text) => banners.push(text),
+                        Some(_) => {}
                         None => break,
                     }
                 }
@@ -358,12 +360,10 @@ impl Tty7App {
                 endpoint,
                 term.auto_supplied_password(),
                 term.ssh_phase(),
-                banners,
                 next,
             )
         };
 
-        self.ssh_prompt.banners.extend(banners);
         if phase.is_some() {
             self.ssh_prompt.phase = phase;
         }
@@ -417,9 +417,7 @@ impl Tty7App {
             pending.endpoint.clone(),
             pending.auto_supplied_password,
         ) else {
-            if let AuthPromptKind::Banner { text } = &pending.prompt {
-                self.ssh_prompt.banners.push(text.clone());
-            }
+            // Banner (and any other non-sheet prompt) — discard, do not toast.
             pending.answer(AuthResponse::Cancelled);
             cx.notify();
             return SheetOutcome::Raised;
@@ -1112,6 +1110,25 @@ mod tests {
             PromptModel::from_prompt(AuthPromptKind::Banner { text: "hi".into() }, None, false)
                 .is_none()
         );
+    }
+
+    #[test]
+    fn auth_banner_text_is_never_a_ui_sheet() {
+        // Server login banners used to become a dismissible modal ("关闭").
+        // They must stay non-models so the overlay path can drain them without
+        // occluding the terminal.
+        let kinds = [
+            AuthPromptKind::Banner {
+                text: "Authorized users only. All activities may be monitored and reported."
+                    .into(),
+            },
+            AuthPromptKind::Banner {
+                text: String::new(),
+            },
+        ];
+        for kind in kinds {
+            assert!(PromptModel::from_prompt(kind, None, false).is_none());
+        }
     }
 
     #[test]

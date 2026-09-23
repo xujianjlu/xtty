@@ -594,7 +594,7 @@ pub struct NativeSshSpec {
     pub term: String,
     #[serde(default = "default_true")]
     pub verify_host_keys: bool,
-    #[serde(default)]
+    #[serde(default = "default_true")]
     pub skip_banner: bool,
     #[serde(default = "default_true")]
     pub shell_integration: bool,
@@ -2441,6 +2441,7 @@ mod tests {
         assert_eq!(spec.term, "xterm-256color");
         assert!(spec.verify_host_keys);
         assert!(spec.shell_integration);
+        assert!(spec.skip_banner);
         assert_eq!(spec.password, None);
         assert!(spec.jump.is_none());
     }

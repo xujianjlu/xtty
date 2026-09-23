@@ -76,7 +76,7 @@ fn spawn_stdio_owned(program: &str, args: &[String]) -> io::Result<ProcessStream
     Ok(ProcessStream::from_parts(child, stdin, stdout))
 }
 
-pub const DEFAULT_REMOTE_SERVER_CMD: &str = "tty7-server --stdio";
+pub const DEFAULT_REMOTE_SERVER_CMD: &str = "xtty-server --stdio";
 
 const MAX_SOCKET_PATH_BYTES: usize = 100;
 
@@ -314,7 +314,7 @@ mod tests {
 
     #[test]
     fn the_entry_falls_back_exactly_when_streamlocal_cannot_be_used() {
-        let cmd = "tty7-server --stdio";
+        let cmd = "xtty-server --stdio";
         assert_eq!(
             choose_entry(Some("/run/user/1000/tty7/daemon.sock"), true, cmd),
             RemoteEntry::StreamLocal {
