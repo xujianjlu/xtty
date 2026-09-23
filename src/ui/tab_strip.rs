@@ -1008,7 +1008,7 @@ impl Tty7App {
 
         crate::terminal::pane_liveness::sweep(cx);
         let current = crate::ui::machine_mirror::display_name_for(cx, self.workspace)
-            .unwrap_or_else(|| "tty7".to_string());
+            .unwrap_or_else(|| "xtty".to_string());
         let monogram: String = current
             .chars()
             .next()
@@ -3210,7 +3210,7 @@ mod tests {
     fn a_pane_with_nothing_to_say_falls_back_the_way_it_always_did() {
         // No title and no directory: the placeholder, exactly as before.
         let tab = strip_tab();
-        assert_eq!(label_of(&tab, 0, Some(home())), "tty7");
+        assert_eq!(label_of(&tab, 0, Some(home())), "xtty");
 
         // And a tab holding no live pane at all is still numbered.
         let mut empty = strip_tab();

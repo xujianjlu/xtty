@@ -388,7 +388,7 @@ mod tests {
             assert!(in_a_build_tree(Path::new(p)), "{p} should read as a build");
         }
         for p in [
-            "/Applications/tty7.app/Contents/MacOS/tty7",
+            "/Applications/xtty.app/Contents/MacOS/tty7",
             "/opt/tty7/tty7",
             "/usr/local/bin/tty7",
             // `release` with no `target` above it is somebody's install prefix.

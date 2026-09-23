@@ -479,6 +479,7 @@ fn main() {
     }
 
     apply_config_dir_arg(&args);
+    crate::core::config::migrate_legacy_config_dir();
 
     let daemon = args
         .iter()

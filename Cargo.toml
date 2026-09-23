@@ -86,7 +86,7 @@ uuid = { version = "1", features = ["v4", "serde"] }
 # the account scheme) stays in core, where `config.json` parsing needs it.
 keyring = "4"
 
-# Theme files. tty7 themes are authored as YAML (`~/.config/tty7/themes/*.yaml`,
+# Theme files. tty7 themes are authored as YAML (`~/.config/xtty/themes/*.yaml`,
 # our own schema); `plist` parses imported iTerm2 `.itermcolors` schemes (XML
 # plist) so the large iTerm color-scheme ecosystem drops straight in. serde_yaml
 # is already in the tree transitively, so it pins no new code; plist is pure Rust.
@@ -189,7 +189,7 @@ edition = "2024"
 # they must never drift apart. This is the line a release bump edits (and the
 # one nightly's `awk '/^version = /'` stamps: it is the first such line in the
 # file, since the package entries above are all `version.workspace = true`).
-version = "26.9.8"
+version = "26.9.10"
 
 [workspace.dependencies]
 # Our fork's `tty7` branch carries the local customizations tty7 relies on:

@@ -827,7 +827,7 @@ fn window_options(cx: &mut App, workspace: Option<WorkspaceId>) -> WindowOptions
 
     WindowOptions {
         window_bounds: Some(window_bounds),
-        app_id: Some("tty7".to_owned()),
+        app_id: Some("xtty".to_owned()),
         titlebar: Some(TitlebarOptions {
             traffic_light_position: Some(crate::ui::theme::traffic_light_position()),
             ..TitleBar::title_bar_options()

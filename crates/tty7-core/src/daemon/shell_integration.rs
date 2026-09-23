@@ -915,7 +915,7 @@ fn nushell_config_dir_from(
 }
 
 /// `dirs::config_dir()` — what nu falls back to. Note this is **not** where
-/// tty7 keeps its own config (`~/.config/tty7` on macOS too); nu follows the
+/// tty7 keeps its own config (`~/.config/xtty` on macOS too); nu follows the
 /// platform convention, and the two are only the same directory on Linux.
 
 #[cfg(target_os = "macos")]
@@ -2292,7 +2292,7 @@ mod tests {
 
     /// The macOS half of the same rule, stated as itself: nu follows the
     /// platform convention there, which is *not* where tty7 keeps its own
-    /// config (`~/.config/tty7`). Reading `~/.config/nushell` on a Mac finds
+    /// config (`~/.config/xtty`). Reading `~/.config/nushell` on a Mac finds
     /// nothing, and the wrapper then replaces a config it thinks is absent.
     #[cfg(target_os = "macos")]
     #[test]

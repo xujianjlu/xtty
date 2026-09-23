@@ -2481,7 +2481,7 @@ pub(crate) fn notify_desktop(title: Option<&str>, body: &str) {
 ///
 /// macOS always goes through `macos_notify`, clickable or not.
 pub(crate) fn notify_desktop_for_pane(title: Option<&str>, body: &str, pane: Option<EntityId>) {
-    let summary = sanitize_notification_text(title.unwrap_or("tty7"), NOTIFY_TITLE_MAX);
+    let summary = sanitize_notification_text(title.unwrap_or("xtty"), NOTIFY_TITLE_MAX);
     let body = sanitize_notification_text(body, NOTIFY_BODY_MAX);
     macos_notify::deliver(summary, body, pane.map(|p| p.as_u64()));
 }

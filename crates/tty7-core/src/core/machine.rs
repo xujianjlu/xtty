@@ -2395,7 +2395,7 @@ mod tests {
     /// later.
     #[test]
     fn only_the_machines_own_instance_inherits_the_legacy_tree() {
-        let machines = PathBuf::from("/home/u/.config/tty7");
+        let machines = PathBuf::from("/home/u/.config/xtty");
         assert!(is_the_machines_instance(
             Some(&machines),
             Some(&machines.clone())

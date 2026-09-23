@@ -1,10 +1,27 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha512};
 
-pub const SERVICE_PASSWORD: &str = "tty7-ssh";
-pub const SERVICE_KEY_PASSPHRASE: &str = "tty7-ssh-key";
+pub const SERVICE_PASSWORD: &str = "xtty-ssh";
+pub const SERVICE_KEY_PASSPHRASE: &str = "xtty-ssh-key";
 /// Secrets sent by output-driven terminal triggers.
-pub const SERVICE_PASSWORD_TRIGGER: &str = "tty7-password-trigger";
+pub const SERVICE_PASSWORD_TRIGGER: &str = "xtty-password-trigger";
+
+/// Pre-rebrand Keychain service names; reads fall back and copy forward.
+pub const LEGACY_SERVICE_PASSWORD: &str = "tty7-ssh";
+pub const LEGACY_SERVICE_KEY_PASSPHRASE: &str = "tty7-ssh-key";
+pub const LEGACY_SERVICE_PASSWORD_TRIGGER: &str = "tty7-password-trigger";
+
+pub fn legacy_keychain_service(service: &str) -> Option<&'static str> {
+    if service == SERVICE_PASSWORD {
+        Some(LEGACY_SERVICE_PASSWORD)
+    } else if service == SERVICE_KEY_PASSPHRASE {
+        Some(LEGACY_SERVICE_KEY_PASSPHRASE)
+    } else if service == SERVICE_PASSWORD_TRIGGER {
+        Some(LEGACY_SERVICE_PASSWORD_TRIGGER)
+    } else {
+        None
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -102,8 +119,8 @@ mod tests {
 
     #[test]
     fn credential_kind_selects_service() {
-        assert_eq!(CredentialKind::Password.service(), "tty7-ssh");
-        assert_eq!(CredentialKind::KeyPassphrase.service(), "tty7-ssh-key");
+        assert_eq!(CredentialKind::Password.service(), "xtty-ssh");
+        assert_eq!(CredentialKind::KeyPassphrase.service(), "xtty-ssh-key");
     }
 
     #[test]

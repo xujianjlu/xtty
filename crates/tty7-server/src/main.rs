@@ -53,6 +53,7 @@ fn main() -> ExitCode {
     }
 
     apply_config_dir_arg(&args);
+    tty7_core::core::config::migrate_legacy_config_dir();
 
     tty7_core::core::crash::install("server");
     tty7_core::core::logfile::install("server");

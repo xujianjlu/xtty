@@ -162,7 +162,7 @@ pub struct NativeSshParts {
 }
 
 /// What a pane is called when nothing running in it has said otherwise.
-pub(crate) const DEFAULT_TITLE: &str = "tty7";
+pub(crate) const DEFAULT_TITLE: &str = "xtty";
 
 /// What a pane is *saying* about itself, if anything — the reading behind
 /// [`TerminalView::stated_title`], split out so it can be pinned without a
@@ -719,7 +719,7 @@ fn compose_notification_title(
     match (lead.or(host), workspace) {
         (Some(lead), Some(workspace)) => format!("{lead} · {workspace}"),
         (Some(only), None) | (None, Some(only)) => only,
-        (None, None) => "tty7".to_string(),
+        (None, None) => "xtty".to_string(),
     }
 }
 
@@ -1012,7 +1012,7 @@ fn staged_path_for_pane(local: &str, _shares_localhost: bool) -> String {
 /// world-writable `/tmp`, where any local account could pre-create the
 /// directory, read what lands in it, or swap a pasted screenshot for one of
 /// its own before the pane's agent opens it.
-const REMOTE_CLIPBOARD_PATH: [&str; 3] = [".cache", "tty7", "clipboard"];
+const REMOTE_CLIPBOARD_PATH: [&str; 3] = [".cache", "xtty", "clipboard"];
 
 /// Owner-only, and *only* owner: a staging directory anyone else can enter is
 /// one anyone else can read the pasted screenshots out of.
@@ -8328,7 +8328,7 @@ mod tests {
         use super::stated_title;
 
         // Nothing has spoken — this is the pane a directory stands in for.
-        assert_eq!(stated_title("tty7"), None);
+        assert_eq!(stated_title("xtty"), None);
         assert_eq!(stated_title("  tty7  "), None);
         assert_eq!(stated_title("   "), None);
 
@@ -8492,12 +8492,12 @@ mod tests {
             "Claude · tty7"
         );
         // A local pane has no machine label; a nameless workspace has no name.
-        assert_eq!(compose_notification_title(None, None, ws()), "tty7");
+        assert_eq!(compose_notification_title(None, None, ws()), "xtty");
         assert_eq!(
             compose_notification_title(Some("Claude".into()), None, None),
             "Claude"
         );
-        assert_eq!(compose_notification_title(None, None, None), "tty7");
+        assert_eq!(compose_notification_title(None, None, None), "xtty");
     }
 
     #[test]
@@ -8874,8 +8874,8 @@ mod tests {
     #[test]
     fn a_failed_staging_preparation_is_retried_rather_than_latched() {
         assert_eq!(
-            staging_cache(&Ok("/home/me/.cache/tty7/clipboard".to_string())),
-            Some("/home/me/.cache/tty7/clipboard".to_string())
+            staging_cache(&Ok("/home/me/.cache/xtty/clipboard".to_string())),
+            Some("/home/me/.cache/xtty/clipboard".to_string())
         );
         // Nothing was created, so the next paste must try again instead of
         // handing out a path under a directory that does not exist.
@@ -8888,7 +8888,7 @@ mod tests {
         for component in super::REMOTE_CLIPBOARD_PATH {
             dir = crate::daemon::ssh::sftp::remote_join(&dir, component);
         }
-        assert_eq!(dir, "/home/me/.cache/tty7/clipboard");
+        assert_eq!(dir, "/home/me/.cache/xtty/clipboard");
         assert!(
             !dir.starts_with("/tmp"),
             "a world-writable staging dir is exactly what this avoids"
@@ -11615,7 +11615,7 @@ mod gpui_tests {
         let (window, _daemon) = harness(cx);
         window
             .update(cx, |view, _, cx| {
-                assert_eq!(view.title, "tty7");
+                assert_eq!(view.title, "xtty");
                 view.handle_event(AlacEvent::Title("vim — main.rs".into()), cx);
             })
             .unwrap();
@@ -11628,7 +11628,7 @@ mod gpui_tests {
             .unwrap();
         settle(cx);
         window
-            .update(cx, |view, _, _| assert_eq!(view.title, "tty7"))
+            .update(cx, |view, _, _| assert_eq!(view.title, "xtty"))
             .unwrap();
     }
 
@@ -14844,7 +14844,7 @@ mod gpui_tests {
                 )
                 .expect("the swap itself cannot fail");
                 assert_eq!(
-                    view.title, "tty7",
+                    view.title, "xtty",
                     "a relinked pane is not \"process exited\""
                 );
             })

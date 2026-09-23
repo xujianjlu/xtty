@@ -414,7 +414,7 @@ mod strip_layout_tests {
         let long = "the remote tty7-server did not start: \
                     /home/hw/.local/share/tty7/bin/tty7-server-c8p6 exited with status 1 before \
                     it answered on the control socket; last probe said: no control server at \
-                    /home/hw/.config/tty7/control.sock";
+                    /home/hw/.config/xtty/control.sock";
 
         let mut short = home_strip(cx, 1440.0, None, Some("connection refused"));
         let short_card = short

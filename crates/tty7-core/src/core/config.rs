@@ -961,7 +961,94 @@ pub fn machine_config_dir() -> Option<PathBuf> {
 #[cfg(unix)]
 pub fn default_config_dir() -> Option<PathBuf> {
     let home = std::env::var_os("HOME").filter(|h| !h.is_empty())?;
+    Some(PathBuf::from(home).join(".config/xtty"))
+}
+
+/// Previous default before the tty7 → xtty rebrand.
+#[cfg(unix)]
+fn legacy_default_config_dir() -> Option<PathBuf> {
+    let home = std::env::var_os("HOME").filter(|h| !h.is_empty())?;
     Some(PathBuf::from(home).join(".config/tty7"))
+}
+
+/// One-time: if `~/.config/tty7` exists and `~/.config/xtty` does not, move
+/// (prefer) or copy the directory so an upgrade keeps settings.
+///
+/// Skipped when `--config-dir` / `TTY7_CONFIG_DIR` already redirects the
+/// instance, so a scratch or second install never steals the machine tree.
+pub fn migrate_legacy_config_dir() {
+    static DONE: OnceLock<()> = OnceLock::new();
+    if DONE.set(()).is_err() {
+        return;
+    }
+    if CONFIG_DIR_OVERRIDE.get().is_some() {
+        return;
+    }
+    if std::env::var_os("TTY7_CONFIG_DIR")
+        .filter(|d| !d.is_empty())
+        .is_some()
+    {
+        return;
+    }
+    let Some(new_dir) = default_config_dir() else {
+        return;
+    };
+    let Some(old_dir) = legacy_default_config_dir() else {
+        return;
+    };
+    if new_dir.exists() || !old_dir.exists() {
+        return;
+    }
+    if let Some(parent) = new_dir.parent()
+        && let Err(e) = std::fs::create_dir_all(parent)
+    {
+        log::warn!(
+            "could not create {} to migrate config from {}: {e}",
+            parent.display(),
+            old_dir.display()
+        );
+        return;
+    }
+    match std::fs::rename(&old_dir, &new_dir) {
+        Ok(()) => {
+            log::info!(
+                "migrated config directory {} → {}",
+                old_dir.display(),
+                new_dir.display()
+            );
+        }
+        Err(rename_err) => match copy_dir_recursive(&old_dir, &new_dir) {
+            Ok(()) => log::info!(
+                "copied config directory {} → {} (rename failed: {rename_err}); left the original in place",
+                old_dir.display(),
+                new_dir.display()
+            ),
+            Err(copy_err) => log::warn!(
+                "could not migrate config directory {} → {}: rename={rename_err}; copy={copy_err}",
+                old_dir.display(),
+                new_dir.display()
+            ),
+        },
+    }
+}
+
+fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let from = entry.path();
+        let to = dst.join(entry.file_name());
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() {
+            copy_dir_recursive(&from, &to)?;
+        } else if file_type.is_symlink() {
+            // Live sockets / locks: skip; the new process recreates them.
+            continue;
+        } else {
+            std::fs::copy(&from, &to)?;
+        }
+    }
+    Ok(())
 }
 
 pub fn config_path(file: &str) -> Option<PathBuf> {

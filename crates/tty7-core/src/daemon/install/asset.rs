@@ -14,7 +14,7 @@ pub const CHECKSUMS_ASSET: &str = "checksums.txt";
 
 pub const RELEASE_BASE: &str = "https://github.com/xujianjlu/tty7/releases/download";
 
-pub const INSTALL_DIR_COMPONENTS: [&str; 4] = [".local", "share", "tty7", "bin"];
+pub const INSTALL_DIR_COMPONENTS: [&str; 4] = [".local", "share", "xtty", "bin"];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UnsupportedTarget {

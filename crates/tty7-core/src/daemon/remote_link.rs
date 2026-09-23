@@ -159,14 +159,14 @@ pub fn remote_control_socket(env: &RemoteEnv) -> Option<String> {
 
     // The remote server is launched with `--stdio` and no `--config-dir`, so it
     // opens its control socket in the config dir — `$TTY7_CONFIG_DIR` if the
-    // remote sets one, otherwise `$HOME/.config/tty7`. This has to mirror
+    // remote sets one, otherwise `$HOME/.config/xtty`. This has to mirror
     // `host::server::control_socket_path` exactly: it is the same rule applied
     // to an environment we probed instead of our own.
     let dir = match env.config_dir.as_deref().filter(|d| !d.is_empty()) {
         Some(cfg) => cfg.to_string(),
         None => {
             let home = env.home.as_deref().filter(|h| !h.is_empty())?;
-            posix_join(&posix_join(home, ".config"), "tty7")
+            posix_join(&posix_join(home, ".config"), "xtty")
         }
     };
     let runtime = env.xdg_runtime_dir.as_deref().filter(|d| !d.is_empty());

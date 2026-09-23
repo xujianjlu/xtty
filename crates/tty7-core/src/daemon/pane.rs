@@ -332,7 +332,7 @@ fn system_locale_identifier() -> Option<String> {
     }
 }
 
-const TERM_PROGRAM_NAME: &str = "tty7";
+const TERM_PROGRAM_NAME: &str = "xtty";
 
 /// The config dir this server runs on, not a socket path.
 ///
@@ -6116,7 +6116,7 @@ mod tests {
         .collect();
         let version = env!("CARGO_PKG_VERSION");
 
-        assert_eq!(env.get("TERM_PROGRAM").map(String::as_str), Some("tty7"));
+        assert_eq!(env.get("TERM_PROGRAM").map(String::as_str), Some("xtty"));
         assert_eq!(
             env.get("TERM_PROGRAM_VERSION").map(String::as_str),
             Some(version)
