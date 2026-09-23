@@ -10,9 +10,9 @@
 
 <br />
 
-[![CI](https://github.com/xujianjlu/tty7/actions/workflows/ci.yml/badge.svg)](https://github.com/xujianjlu/tty7/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/github/v/release/xujianjlu/tty7?label=version&color=3FDD8C)](https://github.com/xujianjlu/tty7/releases)
-[![Platforms](https://img.shields.io/badge/platforms-macOS-blue)](https://github.com/xujianjlu/tty7/releases)
+[![CI](https://github.com/xujianjlu/xtty/actions/workflows/ci.yml/badge.svg)](https://github.com/xujianjlu/xtty/actions/workflows/ci.yml)
+[![Version](https://img.shields.io/github/v/release/xujianjlu/xtty?label=version&color=3FDD8C)](https://github.com/xujianjlu/xtty/releases)
+[![Platforms](https://img.shields.io/badge/platforms-macOS-blue)](https://github.com/xujianjlu/xtty/releases)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 [![Discord](https://img.shields.io/badge/Discord-%E5%8A%A0%E5%85%A5%E8%AE%A8%E8%AE%BA-5865F2?logo=discord&logoColor=white)](https://discord.gg/s3dethqz2V)
 
@@ -38,7 +38,7 @@
 
 ## 安装
 
-macOS 的原生构建在 [**Releases**](https://github.com/xujianjlu/tty7/releases)：
+macOS 的原生构建在 [**Releases**](https://github.com/xujianjlu/xtty/releases)：
 
 | | | |
 |---|---|---|
@@ -105,7 +105,7 @@ agent 如何调用这套 CLI，另见 [skills/tty7/SKILL.md](skills/tty7/SKILL.m
 安装 skill：
 
 ```sh
-npx skills add xujianjlu/tty7    # 安装
+npx skills add xujianjlu/xtty    # 安装
 npx skills update tty7           # 后续更新
 ```
 

@@ -61,9 +61,9 @@ mod macos {
     }
 
     fn usage() -> String {
-        "usage: tty7-updater verify <current.app> <archive.zip> <checksums.txt> \
+        "usage: xtty-updater verify <current.app> <archive.zip> <checksums.txt> \
          <asset-name> <stage-dir> <version>\n\
-         or: tty7-updater install <parent-pid> <current.app> <archive.zip> <checksums.txt> \
+         or: xtty-updater install <parent-pid> <current.app> <archive.zip> <checksums.txt> \
          <asset-name> <stage-dir> <version> <log-path> \
          [--config-dir <dir>] [--result-file <path>]"
             .to_string()
@@ -163,7 +163,7 @@ mod macos {
     }
 
     fn install_inner(plan: &InstallPlan) -> Result<(), String> {
-        let replacement = plan.stage.join("unpacked/tty7.app");
+        let replacement = plan.stage.join("unpacked/xtty.app");
         wait_for_exit(plan.parent_pid);
         log_line(&plan.log, "re-verifying staged tty7 update");
         let verification = verify_archive(&plan.archive, &plan.checksums, &plan.asset_name)
@@ -217,7 +217,7 @@ mod macos {
                 .arg(&unpacked),
             "extracting the update archive",
         )?;
-        Ok(unpacked.join("tty7.app"))
+        Ok(unpacked.join("xtty.app"))
     }
 
     fn verify_update(
@@ -225,11 +225,11 @@ mod macos {
         replacement: &Path,
         expected_version: &str,
     ) -> Result<(), String> {
-        let executable = replacement.join("Contents/MacOS/tty7-app");
-        let updater = replacement.join("Contents/MacOS/tty7-updater");
+        let executable = replacement.join("Contents/MacOS/xtty-app");
+        let updater = replacement.join("Contents/MacOS/xtty-updater");
         if !replacement.is_dir() || !executable.is_file() || !updater.is_file() {
             return Err(
-                "the staged bundle is missing tty7-app or tty7-updater under Contents/MacOS"
+                "the staged bundle is missing xtty-app or xtty-updater under Contents/MacOS"
                     .to_string(),
             );
         }
@@ -385,7 +385,7 @@ mod macos {
     }
 
     fn launch_app(app: &Path) -> Result<(), String> {
-        let executable = app.join("Contents/MacOS/tty7-app");
+        let executable = app.join("Contents/MacOS/xtty-app");
         let mut child = Command::new(&executable)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -531,9 +531,9 @@ mod macos {
         #[test]
         fn successful_launch_commits_the_replacement() {
             let root = tempfile::tempdir().unwrap();
-            let current = root.path().join("tty7.app");
+            let current = root.path().join("xtty.app");
             let stage = root.path().join("stage");
-            let replacement = stage.join("tty7.app");
+            let replacement = stage.join("xtty.app");
             bundle(&current, "old");
             bundle(&replacement, "new");
 
@@ -541,15 +541,15 @@ mod macos {
 
             assert_eq!(fs::read_to_string(current.join("marker")).unwrap(), "new");
             assert!(!stage.exists());
-            assert!(!root.path().join(".tty7.app.tty7-update-backup").exists());
+            assert!(!root.path().join(".xtty.app.tty7-update-backup").exists());
         }
 
         #[test]
         fn failed_launch_restores_and_relaunches_the_previous_app() {
             let root = tempfile::tempdir().unwrap();
-            let current = root.path().join("tty7.app");
+            let current = root.path().join("xtty.app");
             let stage = root.path().join("stage");
-            let replacement = stage.join("tty7.app");
+            let replacement = stage.join("xtty.app");
             bundle(&current, "old");
             bundle(&replacement, "new");
             let launches = std::cell::Cell::new(0);
@@ -584,10 +584,10 @@ mod macos {
         #[test]
         fn replacement_does_not_remove_a_fixed_name_sibling() {
             let root = tempfile::tempdir().unwrap();
-            let current = root.path().join("tty7.app");
+            let current = root.path().join("xtty.app");
             let stage = root.path().join("stage");
-            let replacement = stage.join("tty7.app");
-            let sibling = root.path().join(".tty7.app.tty7-update-backup");
+            let replacement = stage.join("xtty.app");
+            let sibling = root.path().join(".xtty.app.tty7-update-backup");
             bundle(&current, "old");
             bundle(&replacement, "new");
             bundle(&sibling, "keep");
@@ -605,11 +605,11 @@ mod macos {
             let replacement = root.path().join("replacement.app");
             bundle(&current, "old");
             fs::create_dir_all(replacement.join("Contents/MacOS")).unwrap();
-            fs::write(replacement.join("Contents/MacOS/tty7-app"), b"app").unwrap();
+            fs::write(replacement.join("Contents/MacOS/xtty-app"), b"app").unwrap();
 
             let error = verify_update(&current, &replacement, "1.0.0").unwrap_err();
             assert!(
-                error.contains("missing tty7-app or tty7-updater"),
+                error.contains("missing xtty-app or xtty-updater"),
                 "{error}"
             );
         }
@@ -638,7 +638,7 @@ mod macos {
         #[test]
         fn bundle_version_preserves_the_complete_nightly_identity() {
             let root = tempfile::tempdir().unwrap();
-            let app = root.path().join("tty7.app");
+            let app = root.path().join("xtty.app");
             let contents = app.join("Contents");
             fs::create_dir_all(&contents).unwrap();
             fs::write(
@@ -662,13 +662,13 @@ mod macos {
 #[cfg(target_os = "macos")]
 fn main() {
     if let Err(error) = macos::run() {
-        eprintln!("tty7-updater: {error}");
+        eprintln!("xtty-updater: {error}");
         std::process::exit(1);
     }
 }
 
 #[cfg(not(target_os = "macos"))]
 fn main() {
-    eprintln!("tty7-updater is only available on macOS");
+    eprintln!("xtty-updater is only available on macOS");
     std::process::exit(1);
 }

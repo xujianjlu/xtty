@@ -639,7 +639,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::SettingsCommandLineDesc => {
             "把自带的 xtty 命令加入 PATH，让脚本和 agent 能从任意终端驱动 xtty——在 xtty 窗格内两种情况都可用。自己构建的 xtty 不想被遮蔽就关掉。下次启动生效。"
         }
-        L10nKey::SettingsInstallCliOnPath => "将 `tty7` 命令安装到 PATH",
+        L10nKey::SettingsInstallCliOnPath => "将 `xtty` 命令安装到 PATH",
         L10nKey::SettingsServer => "Server",
         L10nKey::SettingsServerDesc => {
             "重启在后台维持 shell 运行的 server。这台计算机上所有 shell 都会结束；标签页和布局会以全新的 shell 重新打开。"

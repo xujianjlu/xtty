@@ -3,18 +3,18 @@ name = "tty7"
 version.workspace = true
 edition = "2024"
 description = "A terminal workbench: shells, persistent sessions, SSH, coding agents — GPU-rendered on Zed's gpui, pure Rust"
-repository = "https://github.com/xujianjlu/tty7"
+repository = "https://github.com/xujianjlu/xtty"
 license = "Apache-2.0"
 readme = "README.md"
 publish = false
-default-run = "tty7-app"
+default-run = "xtty-app"
 
 [[bin]]
-name = "tty7-app"
+name = "xtty-app"
 path = "src/main.rs"
 
 [[bin]]
-name = "tty7-updater"
+name = "xtty-updater"
 path = "src/bin/tty7-updater.rs"
 required-features = ["updater"]
 

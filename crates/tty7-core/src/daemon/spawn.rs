@@ -161,7 +161,15 @@ enum VersionProbe {
     Unresponsive,
 }
 
-const DAEMON_EXE_STEMS: [&str; 3] = ["tty7-app", "tty7-server", "tty7"];
+const DAEMON_EXE_STEMS: [&str; 6] = [
+    "xtty-app",
+    "xtty-server",
+    "xtty",
+    // Pre-rebrand names: still reap an old daemon after an in-place upgrade.
+    "tty7-app",
+    "tty7-server",
+    "tty7",
+];
 
 fn strip_exe_suffix(name: &str) -> &str {
     match name.len().checked_sub(4) {
@@ -1133,6 +1141,12 @@ mod exe_name_tests {
     #[test]
     fn every_legitimate_daemon_name_is_reapable_with_and_without_exe() {
         for name in [
+            "xtty-app",
+            "xtty-server",
+            "xtty",
+            "xtty-app.exe",
+            "xtty-server.exe",
+            "xtty.exe",
             "tty7-app",
             "tty7-server",
             "tty7",
@@ -1163,6 +1177,10 @@ mod exe_name_tests {
         for name in [
             "explorer.exe",
             "sleep",
+            "xttyd",
+            "notxtty",
+            "xtty-app2",
+            "xtty.",
             "tty7d",
             "nottty7",
             "tty7-app2",

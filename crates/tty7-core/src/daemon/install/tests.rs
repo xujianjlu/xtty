@@ -1308,6 +1308,7 @@ fn the_launch_command_quotes_its_binary() {
 fn the_running_exe_probe_cannot_fail_the_command() {
     assert!(RUNNING_EXE_COMMAND.trim_end().ends_with("true"));
     assert!(TERMINATE_RUNNING_COMMAND.trim_end().ends_with("true"));
+    assert!(TERMINATE_RUNNING_COMMAND.contains("*/xtty-server-*"));
     assert!(TERMINATE_RUNNING_COMMAND.contains("*/tty7-server-*"));
 }
 

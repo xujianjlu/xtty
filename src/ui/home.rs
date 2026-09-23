@@ -12,11 +12,12 @@ use crate::core::session::{SessionPane, SessionTab};
 use crate::ui::app::Tty7App;
 use crate::ui::i18n::{L10nKey, t, t_fmt, t_plural};
 
+// Block letter "xtty" — replaces the old TTY7 splash glyph.
 const LOGO: [&str; 4] = [
-    " ▄▄▄ ▄▄▄ ▄  ▄ ▄▄▄▄",
-    "  █   █  █  █    █",
-    "  █   █  ▀▄▄█   █",
-    "  ▀▄  ▀▄ ▄▄▄▀  █  ",
+    "█ █ ▀█▀ ▀█▀ █ █",
+    "▄▀▄  █   █   █ ",
+    "█ █  █   █   █ ",
+    "▀ ▀  ▀   ▀   ▀ ",
 ];
 
 const LOGO_PX: f32 = 20.0;

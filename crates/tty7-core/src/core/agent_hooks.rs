@@ -5,6 +5,9 @@ use std::path::{Path, PathBuf};
 use crate::core::cli_agent::{AGENT_EVENT_SENTINEL, CLIAgent};
 use crate::host::Host;
 
+pub const XTTY_ENV_MARKER: &str = "XTTY";
+/// Pre-rebrand pane marker; still set alongside [`XTTY_ENV_MARKER`] so older
+/// agent hooks keep recognizing panes until they are regenerated.
 pub const TTY7_ENV_MARKER: &str = "TTY7";
 
 const GROK_HOOK_ENV: &str = "GROK_HOOK_EVENT";
@@ -13,7 +16,8 @@ const MAX_STDIN: u64 = 64 * 1024;
 
 pub fn run_agent_hook(agent: &str, event: &str) {
     detach_console();
-    if std::env::var_os(TTY7_ENV_MARKER).is_none() {
+    if std::env::var_os(XTTY_ENV_MARKER).is_none() && std::env::var_os(TTY7_ENV_MARKER).is_none()
+    {
         return;
     }
     let agent = effective_agent(agent, std::env::var_os(GROK_HOOK_ENV).is_some());
@@ -1247,7 +1251,7 @@ fn opencode_plugin_js(target: &HookTarget) -> Option<String> {
 // Bridges OpenCode plugin events onto `tty7 agent-hook opencode <event>`,
 // which is inert outside tty7 (gated on the TTY7 env var).
 export const Tty7Presence = async ({{ $ }}) => {{
-  if (!process.env["TTY7"]) return {{}}
+  if (!process.env["XTTY"] && !process.env["TTY7"]) return {{}}
   const cmd = {prefix}
   let sessionId = ""
   let announced = ""
@@ -1353,7 +1357,7 @@ function emit(event: string, ctx?: SessionCtx): void {{
 }}
 
 export default function (pi: ExtensionAPI) {{
-  if (!process.env["TTY7"]) return;
+  if (!process.env["XTTY"] && !process.env["TTY7"]) return;
   // Extension load = the agent is running in this pane. No context here yet,
   // so the id rides on session_start instead.
   emit("session-start");
@@ -2115,7 +2119,7 @@ mod tests {
         let opencode = opencode_plugin_js(&target).expect("opencode content builds");
         assert!(opencode.contains("agent-hook opencode"));
         assert!(opencode.contains(hook_exe));
-        assert!(opencode.contains(r#"process.env["TTY7"]"#));
+        assert!(opencode.contains(r#"process.env["XTTY"] || process.env["TTY7"]"#));
         for (needle, message) in [
             (
                 "properties.sessionID",
@@ -2155,7 +2159,7 @@ mod tests {
             assert!(bridge.contains(&format!(r#"["agent-hook", "{slug}", event]"#)));
             assert!(bridge.contains(&format!(r#"from "{package}""#)));
             assert!(bridge.contains(&exe));
-            assert!(bridge.contains(r#"process.env["TTY7"]"#));
+            assert!(bridge.contains(r#"process.env["XTTY"] || process.env["TTY7"]"#));
             assert!(bridge.contains("getSessionId"));
             assert!(bridge.contains("session_id"));
             assert!(bridge.contains(r#"stdio: ["pipe", "ignore", "ignore"]"#));

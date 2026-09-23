@@ -15,7 +15,8 @@ const START_TIMEOUT: Duration = Duration::from_secs(10);
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
 const LOG_TAIL_LINES: usize = 40;
 
-pub const SERVER_EXE_ENV: &str = "TTY7_SERVER_EXE";
+pub const SERVER_EXE_ENV: &str = "XTTY_SERVER_EXE";
+pub const SERVER_EXE_ENV_LEGACY: &str = "TTY7_SERVER_EXE";
 
 fn report(human: impl Into<String>, json: serde_json::Value) -> Result<Outcome> {
     Ok(Outcome::Report(Report {
@@ -278,31 +279,41 @@ pub fn logs() -> Result<Outcome> {
 }
 
 fn server_exe() -> Result<PathBuf> {
-    let name = server_exe_name();
     let own_dir = std::env::current_exe()
         .ok()
         .and_then(|own| own.parent().map(Path::to_path_buf));
     let path_dirs: Vec<PathBuf> = std::env::var_os("PATH")
         .map(|p| std::env::split_paths(&p).collect())
         .unwrap_or_default();
-    resolve_server_exe(
-        std::env::var_os(SERVER_EXE_ENV)
-            .filter(|v| !v.is_empty())
-            .as_deref(),
-        own_dir.as_deref(),
-        &path_dirs,
-        name,
-        |p| p.is_file(),
+    let explicit = tty7_core::core::config::env_os_prefer(SERVER_EXE_ENV, SERVER_EXE_ENV_LEGACY);
+    for name in [server_exe_name(), server_exe_name_legacy()] {
+        if let Some(path) = resolve_server_exe(
+            explicit.as_deref(),
+            own_dir.as_deref(),
+            &path_dirs,
+            name,
+            |p| p.is_file(),
+        ) {
+            return Ok(path);
+        }
+        // An explicit override is taken at its word for the primary name only;
+        // do not silently fall through to a different binary.
+        if explicit.is_some() {
+            break;
+        }
+    }
+    let name = server_exe_name();
+    bail!(
+        "could not find {name} next to this binary or on PATH — install it, or point \
+         {SERVER_EXE_ENV} at it"
     )
-    .ok_or_else(|| {
-        anyhow::anyhow!(
-            "could not find {name} next to this binary or on PATH — install it, or point \
-             {SERVER_EXE_ENV} at it"
-        )
-    })
 }
 
 fn server_exe_name() -> &'static str {
+    "xtty-server"
+}
+
+fn server_exe_name_legacy() -> &'static str {
     "tty7-server"
 }
 

@@ -345,8 +345,11 @@ const TERM_PROGRAM_NAME: &str = "xtty";
 /// Publishing the directory instead means a CLI in this shell resolves both
 /// endpoints with the very same functions the server used to open them.
 const TTY7_CONFIG_DIR_ENV: &str = "TTY7_CONFIG_DIR";
+const XTTY_CONFIG_DIR_ENV: &str = "XTTY_CONFIG_DIR";
 const TTY7_PANE_ENV: &str = "TTY7_PANE";
+const XTTY_PANE_ENV: &str = "XTTY_PANE";
 const TTY7_WS_ENV: &str = "TTY7_WS";
+const XTTY_WS_ENV: &str = "XTTY_WS";
 
 fn config_dir_env() -> Option<String> {
     crate::core::config::config_dir_path().map(|p| p.display().to_string())
@@ -424,17 +427,25 @@ fn pane_environment(
         ("TERM".to_string(), "xterm-256color".to_string()),
         ("COLORTERM".to_string(), "truecolor".to_string()),
         (
+            crate::core::agent_hooks::XTTY_ENV_MARKER.to_string(),
+            version.to_string(),
+        ),
+        // Legacy marker so pre-rebrand agent hooks still fire.
+        (
             crate::core::agent_hooks::TTY7_ENV_MARKER.to_string(),
             version.to_string(),
         ),
         ("TERM_PROGRAM".to_string(), TERM_PROGRAM_NAME.to_string()),
         ("TERM_PROGRAM_VERSION".to_string(), version.to_string()),
+        (XTTY_PANE_ENV.to_string(), pane.to_string()),
         (TTY7_PANE_ENV.to_string(), pane.to_string()),
     ];
     if let Some(ws) = workspace {
+        env.push((XTTY_WS_ENV.to_string(), ws.to_string()));
         env.push((TTY7_WS_ENV.to_string(), ws.to_string()));
     }
     if let Some(dir) = config_dir_env() {
+        env.push((XTTY_CONFIG_DIR_ENV.to_string(), dir.clone()));
         env.push((TTY7_CONFIG_DIR_ENV.to_string(), dir));
     }
     // Names the pane's own history file; the integration snippet is what

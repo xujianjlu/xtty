@@ -31,15 +31,15 @@ APP="dist/xtty.app"
 
 rm -rf dist
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp "target/${TARGET}/release/tty7-app" "$APP/Contents/MacOS/tty7-app"
-chmod +x "$APP/Contents/MacOS/tty7-app"
+cp "target/${TARGET}/release/xtty-app" "$APP/Contents/MacOS/xtty-app"
+chmod +x "$APP/Contents/MacOS/xtty-app"
 # The CLI rides inside the bundle rather than beside it: a DMG is drag-to-
 # Applications, so anything not in the .app never reaches the user's disk. The
 # GUI symlinks it onto PATH at launch (see core::cli_install), which is why it
 # sits next to tty7-app under MacOS/ — that is the directory the GUI resolves
 # relative to its own executable.
-cp "target/${TARGET}/release/tty7" "$APP/Contents/MacOS/tty7"
-chmod +x "$APP/Contents/MacOS/tty7"
+cp "target/${TARGET}/release/xtty" "$APP/Contents/MacOS/xtty"
+chmod +x "$APP/Contents/MacOS/xtty"
 if [[ "$PACKAGE_UPDATE_ZIP" != "0" ]]; then
     # A focused out-of-process updater can replace the bundle after the GUI
     # exits, then relaunch or roll back without teaching the GUI to mutate
@@ -47,8 +47,8 @@ if [[ "$PACKAGE_UPDATE_ZIP" != "0" ]]; then
     # is covered by the outer bundle — including Nightly, whose users are
     # offered the stable release that supersedes their prerelease and need a
     # working helper to get there.
-    cp "target/${TARGET}/release/tty7-updater" "$APP/Contents/MacOS/tty7-updater"
-    chmod +x "$APP/Contents/MacOS/tty7-updater"
+    cp "target/${TARGET}/release/xtty-updater" "$APP/Contents/MacOS/xtty-updater"
+    chmod +x "$APP/Contents/MacOS/xtty-updater"
 fi
 cp assets/xtty.icns "$APP/Contents/Resources/xtty.icns"
 # Completion signatures are loaded at runtime (not embedded), resolved relative
@@ -67,7 +67,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>CFBundleIdentifier</key><string>com.xujian.xtty</string>
     <key>CFBundleVersion</key><string>${VERSION}</string>
     <key>CFBundleShortVersionString</key><string>${VERSION}</string>
-    <key>CFBundleExecutable</key><string>tty7-app</string>
+    <key>CFBundleExecutable</key><string>xtty-app</string>
     <key>CFBundleIconFile</key><string>xtty</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>NSHighResolutionCapable</key><true/>
@@ -206,13 +206,13 @@ ENT
     # Metal path, and a CLI that never renders anything has no business holding
     # them.
     codesign --force --options runtime --timestamp \
-        --sign "$SIGN_ID" "$APP/Contents/MacOS/tty7"
+        --sign "$SIGN_ID" "$APP/Contents/MacOS/xtty"
     if [[ "$PACKAGE_UPDATE_ZIP" != "0" ]]; then
         codesign --force --options runtime --timestamp \
-            --sign "$SIGN_ID" "$APP/Contents/MacOS/tty7-updater"
+            --sign "$SIGN_ID" "$APP/Contents/MacOS/xtty-updater"
     fi
     codesign --force --options runtime --timestamp --entitlements "$ENTITLEMENTS" \
-        --sign "$SIGN_ID" "$APP/Contents/MacOS/tty7-app"
+        --sign "$SIGN_ID" "$APP/Contents/MacOS/xtty-app"
     codesign --force --options runtime --timestamp --entitlements "$ENTITLEMENTS" \
         --sign "$SIGN_ID" "$APP"
     codesign --verify --strict --verbose=2 "$APP"
@@ -254,9 +254,9 @@ fi
 # cheap next to carrying a second copy of this block inside each branch.
 BUNDLE_FAIL=0
 ASSERT_MACHO="$(dirname "$0")/assert-macho.sh"
-BUNDLED_BINS=(tty7-app tty7)
+BUNDLED_BINS=(xtty-app xtty)
 if [[ "$PACKAGE_UPDATE_ZIP" != "0" ]]; then
-    BUNDLED_BINS+=(tty7-updater)
+    BUNDLED_BINS+=(xtty-updater)
 fi
 # First the binaries we staged ourselves, held to the full standard the server
 # asset is: the right arch, links nothing macOS does not ship, carries a

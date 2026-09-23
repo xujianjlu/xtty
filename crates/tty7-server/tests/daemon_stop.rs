@@ -17,7 +17,7 @@ const READY_WITHIN: Duration = Duration::from_secs(30);
 const EXIT_WITHIN: Duration = Duration::from_secs(10);
 
 fn spawn_daemon(dir: &Path) -> Child {
-    Command::new(env!("CARGO_BIN_EXE_tty7-server"))
+    Command::new(env!("CARGO_BIN_EXE_xtty-server"))
         .arg("--daemon")
         .arg("--config-dir")
         .arg(dir)

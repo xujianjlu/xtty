@@ -104,7 +104,7 @@ impl UpdateInstallHint {
     #[cfg_attr(not(test), allow(dead_code))]
     fn english(&self) -> String {
         match self {
-            Self::UnsupportedMacos => "This copy is not running from a writable tty7.app bundle, so replacing it would be unsafe. Move tty7 to Applications or another writable folder, or open the release page to install the update.".to_string(),
+            Self::UnsupportedMacos => "This copy is not running from a writable xtty.app bundle, so replacing it would be unsafe. Move tty7 to Applications or another writable folder, or open the release page to install the update.".to_string(),
             Self::MissingPackage(name) => format!(
                 "The release has no {name} package for this installation. Open the release page to choose another package."
             ),
@@ -1596,7 +1596,7 @@ impl PreparedUpdate {
             .inspect_err(|_| {
                 let _ = std::fs::remove_dir_all(&self.stage);
             })
-            .context("launching tty7-updater")?;
+            .context("launching xtty-updater")?;
         Ok(())
     }
 }
@@ -1650,8 +1650,8 @@ fn prepare_macos_update(
         current_macos_app_bundle().context("tty7 is not running from an application bundle")?;
     let parent = current
         .parent()
-        .context("tty7.app has no parent directory")?;
-    let updater = bundled_updater().context("tty7-updater is not bundled with this app")?;
+        .context("xtty.app has no parent directory")?;
+    let updater = bundled_updater().context("xtty-updater is not bundled with this app")?;
     let staging = update_staging_dir(parent)?;
     let dir = staging.path().to_path_buf();
     let archive = write_staged_asset(&dir, asset_name, archive)?;
@@ -1703,7 +1703,7 @@ fn is_macos_update_writable(app: &Path) -> bool {
 }
 
 fn bundled_updater() -> Option<PathBuf> {
-    let updater = current_macos_app_bundle()?.join("Contents/MacOS/tty7-updater");
+    let updater = current_macos_app_bundle()?.join("Contents/MacOS/xtty-updater");
     updater.is_file().then_some(updater)
 }
 
@@ -1719,10 +1719,10 @@ fn run_updater(updater: &Path, args: impl IntoIterator<Item = PathBuf>) -> Resul
     command.args(args);
     let output = tty7_core::core::proc::hide_console(&mut command)
         .output()
-        .context("running tty7-updater verification")?;
+        .context("running xtty-updater verification")?;
     if !output.status.success() {
         anyhow::bail!(
-            "tty7-updater verification failed: {}",
+            "xtty-updater verification failed: {}",
             String::from_utf8_lossy(&output.stderr).trim()
         )
     }
@@ -2166,7 +2166,7 @@ mod tests {
                 version: "27.0.0".into(),
                 apply_on_launch: true,
                 plan_version: PLAN_VERSION,
-                updater: PathBuf::from("/tmp/tty7-updater"),
+                updater: PathBuf::from("/tmp/xtty-updater"),
                 command: "install".into(),
                 rest: vec![PathBuf::from("/tmp/stage/tty7.zip")],
                 config_dir: None,
@@ -2397,7 +2397,7 @@ mod tests {
     fn only_our_own_staging_directories_are_swept() {
         assert!(is_stage_name(".tty7-update-abc123"));
         assert!(is_stage_name("tty7-update-abc123"));
-        assert!(!is_stage_name("tty7.app"));
+        assert!(!is_stage_name("xtty.app"));
         assert!(!is_stage_name(".Trash"));
         assert!(!is_stage_name("tty7-update"));
     }
@@ -2405,7 +2405,7 @@ mod tests {
     #[test]
     fn a_staged_plan_supplies_a_fresh_parent_pid() {
         let prepared = PreparedUpdate {
-            updater: PathBuf::from("/tmp/tty7-updater"),
+            updater: PathBuf::from("/tmp/xtty-updater"),
             command: "install".into(),
             rest: vec![PathBuf::from("/tmp/stage/tty7.zip")],
             config_dir: None,
@@ -2429,7 +2429,7 @@ mod tests {
     #[test]
     fn a_plan_from_another_protocol_version_is_not_usable() {
         let root = tempfile::tempdir().unwrap();
-        let updater = root.path().join("tty7-updater");
+        let updater = root.path().join("xtty-updater");
         std::fs::write(&updater, b"test updater").unwrap();
         let stage = root.path().join("stage");
         std::fs::create_dir(&stage).unwrap();

@@ -1,10 +1,10 @@
-//! Putting the bundled `tty7` CLI on PATH, without asking and without an entry
-//! point to click.
+//! Putting the bundled CLI on PATH as `xtty` (with a `tty7` alias), without
+//! asking and without an entry point to click.
 //!
 //! The GUI and the CLI ship as one artifact but are two binaries: the installer
-//! lays `tty7` down beside `tty7-app` (inside `Contents/MacOS/` on macOS, in the
-//! install directory elsewhere) and neither one is on PATH by virtue of being
-//! there. Rather than a "Install shell command…" menu item that most people
+//! lays the CLI binary down beside `tty7-app` (inside `Contents/MacOS/` on macOS,
+//! in the install directory elsewhere) and neither one is on PATH by virtue of
+//! being there. Rather than a "Install shell command…" menu item that most people
 //! never find, the GUI links it up itself on every launch — cheap enough to run
 //! unconditionally, idempotent once it has succeeded.
 //!
@@ -15,12 +15,12 @@
 //! symlink.
 //!
 //! Nothing here is fatal. Every failure path logs and returns; a user whose
-//! system resists all of it still has a working GUI, just no `tty7` on PATH.
+//! system resists all of it still has a working GUI, just no `xtty` on PATH.
 //!
 //! Dragging the `.app` to the Trash leaves the symlink behind, dangling. An
-//! upgrade heals it (a dangling link still names `tty7`, so the next launch
-//! repoints it); a real uninstall leaves one broken entry the user removes by
-//! hand.
+//! upgrade heals it (a dangling link still names `xtty`/`tty7`, so the next
+//! launch repoints it); a real uninstall leaves one broken entry the user
+//! removes by hand.
 
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
@@ -35,23 +35,28 @@ pub enum Outcome {
     /// A debug build, or a binary sitting in a cargo build tree: panes were
     /// wired up, the system was left untouched.
     DevBuild,
-    /// Already reachable as `tty7`, pointing at this install.
+    /// Already reachable as `xtty`, pointing at this install.
     AlreadyInstalled(PathBuf),
     /// Freshly linked into a directory on PATH.
     Installed(PathBuf),
     /// Installed somewhere the user's PATH does not currently cover.
     InstalledOffPath(PathBuf),
-    /// Installed, but an earlier PATH entry holds a different `tty7` that keeps
+    /// Installed, but an earlier PATH entry holds a different `xtty` that keeps
     /// winning the lookup.
     InstalledShadowed { ours: PathBuf, winner: PathBuf },
     /// Every directory we would write to is already taken by someone else's
-    /// `tty7`, and none of them is ours to move.
+    /// `xtty`, and none of them is ours to move.
     Occupied(PathBuf),
     /// Nowhere to write.
     Failed(String),
 }
 
-const CLI_NAME: &str = "tty7";
+/// User-facing PATH command after the xtty rebrand.
+const CLI_NAME: &str = "xtty";
+/// Legacy PATH name kept so existing scripts / agents keep working.
+const CLI_ALIAS: &str = "tty7";
+/// On-disk binary name inside the app bundle (matches the `xtty` cargo bin).
+const BUNDLED_CLI: &str = "xtty";
 
 /// Link the bundled CLI onto PATH, and make it reachable from panes right away.
 ///
@@ -69,24 +74,24 @@ pub fn install(enabled: bool) -> Outcome {
         Outcome::Disabled | Outcome::NoBundledCli | Outcome::DevBuild => {
             log::debug!("cli install skipped: {outcome:?}")
         }
-        Outcome::AlreadyInstalled(p) => log::debug!("tty7 CLI already on PATH at {}", p.display()),
-        Outcome::Installed(p) => log::info!("put the tty7 CLI on PATH at {}", p.display()),
+        Outcome::AlreadyInstalled(p) => log::debug!("xtty CLI already on PATH at {}", p.display()),
+        Outcome::Installed(p) => log::info!("put the xtty CLI on PATH at {}", p.display()),
         Outcome::InstalledOffPath(p) => log::warn!(
-            "installed the tty7 CLI at {}, which is not on your PATH — add it to use `tty7` \
-             outside a tty7 pane",
+            "installed the xtty CLI at {}, which is not on your PATH — add it to use `xtty` \
+             outside an xtty pane",
             p.display()
         ),
         Outcome::InstalledShadowed { ours, winner } => log::warn!(
-            "installed the tty7 CLI at {}, but `tty7` outside a tty7 pane still resolves to {} — \
+            "installed the xtty CLI at {}, but `xtty` outside an xtty pane still resolves to {} — \
              remove that one, or reorder your PATH, to reach the bundled CLI",
             ours.display(),
             winner.display()
         ),
         Outcome::Occupied(p) => log::info!(
-            "leaving the existing `tty7` at {} alone; the bundled CLI was not installed",
+            "leaving the existing `xtty` at {} alone; the bundled CLI was not installed",
             p.display()
         ),
-        Outcome::Failed(e) => log::warn!("could not put the tty7 CLI on PATH: {e}"),
+        Outcome::Failed(e) => log::warn!("could not put the xtty CLI on PATH: {e}"),
     }
     outcome
 }
@@ -137,7 +142,7 @@ fn install_inner(enabled: bool) -> Outcome {
     }
 }
 
-/// The first `tty7` the user's shell would find, if any.
+/// The first `xtty` the user's shell would find, if any.
 ///
 /// `is_file` follows symlinks on purpose: a dangling link left by an install
 /// that has since been deleted is not something that wins a lookup, so it must
@@ -162,7 +167,7 @@ fn path_dirs() -> Vec<PathBuf> {
 /// which would then chase its own tail.
 fn bundled_cli() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
-    let cli = exe.parent()?.join(CLI_NAME);
+    let cli = exe.parent()?.join(BUNDLED_CLI);
     // `is_file` and not `exists`: on Unix the answer must be a real binary we
     // can exec, and a stale directory of that name should read as "absent".
     cli.is_file().then_some(cli)
@@ -329,13 +334,17 @@ fn place(dir: &Path, cli: &Path, mode: Mode) -> std::io::Result<Placement> {
         Ok(meta) if meta.file_type().is_symlink() => {
             let points_at = std::fs::read_link(&target)?;
             if points_at == cli {
+                ensure_alias(dir, cli);
                 return Ok(Placement::Already(target));
             }
-            // Replace only a link that is still aimed at something named
-            // `tty7`. Anything else under this name was pointed somewhere
-            // deliberate by its owner, and an auto-installer is not the thing
-            // that gets to overrule that.
-            if points_at.file_name() != Some(CLI_NAME.as_ref()) {
+            // Replace only a link that is still aimed at our bundled CLI
+            // (`tty7`) or the new PATH name (`xtty`). Anything else under this
+            // name was pointed somewhere deliberate by its owner.
+            let name = points_at.file_name();
+            if name != Some(BUNDLED_CLI.as_ref())
+                && name != Some(CLI_NAME.as_ref())
+                && name != Some(CLI_ALIAS.as_ref())
+            {
                 return Ok(Placement::Occupied(target));
             }
         }
@@ -347,7 +356,35 @@ fn place(dir: &Path, cli: &Path, mode: Mode) -> std::io::Result<Placement> {
     }
 
     write_atomically(dir, &target, cli)?;
+    ensure_alias(dir, cli);
     Ok(Placement::Wrote(target))
+}
+
+/// Best-effort legacy `tty7` PATH entry pointing at the same binary as `xtty`.
+#[cfg(unix)]
+fn ensure_alias(dir: &Path, cli: &Path) {
+    let alias = dir.join(CLI_ALIAS);
+    match std::fs::symlink_metadata(&alias) {
+        Ok(meta) if meta.file_type().is_symlink() => {
+            if std::fs::read_link(&alias).ok().as_deref() == Some(cli) {
+                return;
+            }
+            let Ok(points_at) = std::fs::read_link(&alias) else {
+                return;
+            };
+            let name = points_at.file_name();
+            if name != Some(BUNDLED_CLI.as_ref())
+                && name != Some(CLI_NAME.as_ref())
+                && name != Some(CLI_ALIAS.as_ref())
+            {
+                return;
+            }
+        }
+        Ok(_) => return, // real file named tty7 — leave alone
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => return,
+    }
+    let _ = write_atomically(dir, &alias, cli);
 }
 
 /// Write through a temporary name and rename over the target.
@@ -381,18 +418,18 @@ mod tests {
     #[test]
     fn a_build_tree_binary_is_recognised_under_both_profile_layouts() {
         for p in [
-            "/home/dev/tty7/target/debug/tty7",
-            "/home/dev/tty7/target/release/tty7",
-            "/home/dev/tty7/target/aarch64-apple-darwin/release/tty7",
+            "/home/dev/tty7/target/debug/xtty",
+            "/home/dev/tty7/target/release/xtty",
+            "/home/dev/tty7/target/aarch64-apple-darwin/release/xtty",
         ] {
             assert!(in_a_build_tree(Path::new(p)), "{p} should read as a build");
         }
         for p in [
-            "/Applications/xtty.app/Contents/MacOS/tty7",
-            "/opt/tty7/tty7",
-            "/usr/local/bin/tty7",
+            "/Applications/xtty.app/Contents/MacOS/xtty",
+            "/opt/xtty/xtty",
+            "/usr/local/bin/xtty",
             // `release` with no `target` above it is somebody's install prefix.
-            "/opt/tty7/release/tty7",
+            "/opt/xtty/release/xtty",
         ] {
             assert!(!in_a_build_tree(Path::new(p)), "{p} should read as shipped");
         }
@@ -443,15 +480,15 @@ mod unix_tests {
     }
 
     #[test]
-    fn an_unrelated_binary_named_tty7_is_left_alone() {
+    fn an_unrelated_binary_named_xtty_is_left_alone() {
         let dir = tmpdir("occupied");
-        let bin = tmpdir("occupied-src").join("tty7");
+        let bin = tmpdir("occupied-src").join("xtty");
         touch(&bin);
         // Someone's own build, installed by hand.
-        touch(&dir.join("tty7"));
+        touch(&dir.join("xtty"));
 
         match place(&dir, &bin, Mode::Symlink).unwrap() {
-            Placement::Occupied(p) => assert_eq!(p, dir.join("tty7")),
+            Placement::Occupied(p) => assert_eq!(p, dir.join("xtty")),
             Placement::Already(_) => panic!("claimed someone else's binary as ours"),
             Placement::Wrote(_) => panic!("clobbered a real binary"),
         }
@@ -460,8 +497,8 @@ mod unix_tests {
     #[test]
     fn our_own_link_is_recognised_and_then_repointed_on_upgrade() {
         let dir = tmpdir("relink");
-        let v1 = tmpdir("relink-v1").join("tty7");
-        let v2 = tmpdir("relink-v2").join("tty7");
+        let v1 = tmpdir("relink-v1").join("xtty");
+        let v2 = tmpdir("relink-v2").join("xtty");
         touch(&v1);
         touch(&v2);
 
@@ -474,17 +511,17 @@ mod unix_tests {
         ));
         // Upgraded install: the link follows it rather than reporting a clash.
         assert!(matches!(place(&dir, &v2, m).unwrap(), Placement::Wrote(_)));
-        assert_eq!(std::fs::read_link(dir.join("tty7")).unwrap(), v2);
+        assert_eq!(std::fs::read_link(dir.join("xtty")).unwrap(), v2);
     }
 
     #[test]
     fn a_link_aimed_somewhere_deliberate_is_not_hijacked() {
         let dir = tmpdir("deliberate");
-        let bin = tmpdir("deliberate-src").join("tty7");
+        let bin = tmpdir("deliberate-src").join("xtty");
         touch(&bin);
         let elsewhere = tmpdir("deliberate-other").join("my-terminal");
         touch(&elsewhere);
-        std::os::unix::fs::symlink(&elsewhere, dir.join("tty7")).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, dir.join("xtty")).unwrap();
 
         assert!(matches!(
             place(&dir, &bin, Mode::Symlink).unwrap(),
@@ -496,9 +533,9 @@ mod unix_tests {
     fn an_occupied_directory_does_not_end_the_search() {
         let taken = tmpdir("scan-taken");
         let free = tmpdir("scan-free");
-        let bin = tmpdir("scan-src").join("tty7");
+        let bin = tmpdir("scan-src").join("xtty");
         touch(&bin);
-        touch(&taken.join("tty7"));
+        touch(&taken.join("xtty"));
 
         // Stand in for the candidate loop: the first directory is somebody
         // else's, and the second one must still get the link.
@@ -509,30 +546,30 @@ mod unix_tests {
                 break;
             }
         }
-        assert_eq!(wrote, Some(free.join("tty7")));
+        assert_eq!(wrote, Some(free.join("xtty")));
     }
 
     #[test]
     fn the_shadow_check_names_whoever_wins_the_lookup() {
         let early = tmpdir("shadow-early");
         let ours = tmpdir("shadow-ours");
-        touch(&early.join("tty7"));
-        touch(&ours.join("tty7"));
+        touch(&early.join("xtty"));
+        touch(&ours.join("xtty"));
 
         let path = vec![early.clone(), ours.clone()];
-        assert_eq!(first_cli_on(&path), Some(early.join("tty7")));
+        assert_eq!(first_cli_on(&path), Some(early.join("xtty")));
         // Our own directory first: no shadow.
         assert_eq!(
             first_cli_on(&[ours.clone(), early.clone()]),
-            Some(ours.join("tty7"))
+            Some(ours.join("xtty"))
         );
 
         // A dangling link is not something that wins a lookup.
         let dangling = tmpdir("shadow-dangling");
-        std::os::unix::fs::symlink(dangling.join("gone"), dangling.join("tty7")).unwrap();
+        std::os::unix::fs::symlink(dangling.join("gone"), dangling.join("xtty")).unwrap();
         assert_eq!(
             first_cli_on(&[dangling, ours.clone()]),
-            Some(ours.join("tty7"))
+            Some(ours.join("xtty"))
         );
     }
 }

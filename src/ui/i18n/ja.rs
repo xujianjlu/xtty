@@ -734,7 +734,7 @@ pub fn translate_ja(key: L10nKey) -> Option<&'static str> {
         L10nKey::SettingsCommandLineDesc => {
             "同梱の xtty コマンドを PATH に入れ、スクリプトやエージェントが任意のターミナルから xtty を操作できるようにします（ペイン内ではどちらでも動きます）。自分でビルドした xtty を優先したい場合はオフに。次回起動時に有効"
         }
-        L10nKey::SettingsInstallCliOnPath => "`tty7` コマンドを PATH にインストール",
+        L10nKey::SettingsInstallCliOnPath => "`xtty` コマンドを PATH にインストール",
         L10nKey::SettingsServer => "デーモンサーバー",
         L10nKey::SettingsServerDesc => {
             "シェルを動かし続けているバックグラウンドサーバーを再起動します。このコンピュータ上のすべてのシェルが終了し、タブとレイアウトは新しいシェルで開き直します"

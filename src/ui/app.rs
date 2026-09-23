@@ -6432,6 +6432,14 @@ impl Tty7App {
         };
         let shell = if program.is_empty() {
             None
+        } else if !tty7_core::core::config::shell_program_is_usable(&program) {
+            // Refuse to persist a Program the daemon cannot exec — the home
+            // page then sticks on "Unable to spawn … not found in PATH".
+            log::warn!(
+                "refusing to save shell program {program:?}: not a spawnable binary"
+            );
+            cx.notify();
+            return;
         } else {
             Some(ShellConfig { program, args })
         };

@@ -229,7 +229,7 @@ impl Daemon {
     }
 
     fn cli(&self, args: &[&str]) -> Command {
-        let mut cmd = Command::new(env!("CARGO_BIN_EXE_tty7"));
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_xtty"));
         cmd.args(args)
             .env("TTY7_CONFIG_DIR", self.dir.path())
             .env("TTY7_DATA_DIR", self.dir.path())
@@ -468,7 +468,7 @@ fn run_keep_files_the_pane_so_ls_shows_it(daemon: &Daemon) {
 }
 
 fn config_dir_alone_resolves_both_endpoints(daemon: &Daemon) {
-    let out = Command::new(env!("CARGO_BIN_EXE_tty7"))
+    let out = Command::new(env!("CARGO_BIN_EXE_xtty"))
         .args(["status", "--json"])
         .env_remove("TTY7_DATA_DIR")
         .env_remove("TTY7_CONTROL_SOCK")
@@ -496,7 +496,7 @@ fn config_dir_alone_resolves_both_endpoints(daemon: &Daemon) {
     // working while every pane verb reached the wrong socket, because the two
     // endpoints were derived by different rules. Exercise a pane verb over the
     // same lone variable.
-    let out = Command::new(env!("CARGO_BIN_EXE_tty7"))
+    let out = Command::new(env!("CARGO_BIN_EXE_xtty"))
         .args(["run", "--json", "--", "sh", "-c", "exit 9"])
         .env_remove("TTY7_DATA_DIR")
         .env_remove("TTY7_CONTROL_SOCK")
