@@ -2341,6 +2341,7 @@ impl TerminalView {
                         }
                         self.zmodem = Some(session);
                         self.zmodem_picker_open = false;
+                        self.arm_zmodem_watchdog(cx);
                     }
                     Err(err) => {
                         log::warn!("zmodem receive failed to start: {err}");
@@ -2350,29 +2351,47 @@ impl TerminalView {
                 },
                 ZmodemRole::Send => {
                     let initial = pipe.take_inbound();
-                    self.zmodem = Some(ZmodemSession::start_awaiting_picker(initial));
-                    if !self.zmodem_picker_open {
-                        self.zmodem_picker_open = true;
-                        self.open_zmodem_send_picker(cx);
+                    match ZmodemSession::start_send_handshake(initial) {
+                        Ok((session, wire)) => {
+                            if !wire.is_empty() {
+                                self.terminal.write(wire);
+                            }
+                            self.zmodem = Some(session);
+                            self.arm_zmodem_watchdog(cx);
+                            if !self.zmodem_picker_open {
+                                self.zmodem_picker_open = true;
+                                self.open_zmodem_send_picker(cx);
+                            }
+                        }
+                        Err(err) => {
+                            log::warn!("zmodem send handshake failed: {err}");
+                            pipe.end();
+                            self.terminal.write(cancel_sequence());
+                        }
                     }
                 }
             }
         }
 
-        let inbound = pipe.take_inbound();
         if self.zmodem.is_none() {
             return;
         }
 
-        if let Some(session) = self.zmodem.as_mut() {
-            if session.is_awaiting_picker() {
-                if !inbound.is_empty() {
-                    session.buffer_while_awaiting(&inbound);
-                }
-                return;
-            }
+        if self
+            .zmodem
+            .as_ref()
+            .is_some_and(|session| session.timed_out())
+        {
+            let detail = if self.zmodem.as_ref().is_some_and(|s| s.is_awaiting_picker()) {
+                "file picker timed out".to_string()
+            } else {
+                "transfer timed out".to_string()
+            };
+            self.finish_zmodem(ZmodemUiAction::Failed { detail }, cx);
+            return;
         }
 
+        let inbound = pipe.take_inbound();
         let Some(session) = self.zmodem.as_mut() else {
             return;
         };
@@ -2390,6 +2409,31 @@ impl TerminalView {
                 self.finish_zmodem(ZmodemUiAction::Failed { detail: err }, cx);
             }
         }
+    }
+
+    /// Wake `poll_zmodem` on a timer so idle / picker timeouts fire even when
+    /// the remote has gone quiet (no further `Wakeup` from diverted output).
+    fn arm_zmodem_watchdog(&mut self, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_secs(5))
+                    .await;
+                let keep = this
+                    .update(cx, |this, cx| {
+                        if this.zmodem.is_none() {
+                            return false;
+                        }
+                        this.poll_zmodem(cx);
+                        this.zmodem.is_some()
+                    })
+                    .unwrap_or(false);
+                if !keep {
+                    break;
+                }
+            }
+        })
+        .detach();
     }
 
     fn open_zmodem_send_picker(&mut self, cx: &mut Context<Self>) {
