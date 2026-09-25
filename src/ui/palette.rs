@@ -425,7 +425,6 @@ impl Command {
         let cfg = cx.global::<Config>();
         let tab_bar_left = cfg.tab_bar_position == TabBarPosition::Left;
         let sidebar_hidden = chrome.rail_collapsed || !tab_bar_left;
-        let right_panel_open = chrome.right_panel_visible;
         let document_filled = chrome.document_filled;
 
         let tabs = [
@@ -472,6 +471,8 @@ impl Command {
                 .with_subtitle(t(L10nKey::CmdDeleteWorkspaceSubtitle)),
         ];
 
+        // Right-panel open/show verbs stay as bindable actions, but are not
+        // listed here: the Files/SCM/Info column is not a primary View surface.
         let view = [
             Command::localized(
                 if sidebar_hidden {
@@ -480,14 +481,6 @@ impl Command {
                     L10nKey::CmdHideLeftSidebar
                 },
                 ToggleLeftPanel,
-            ),
-            Command::localized(
-                if right_panel_open {
-                    L10nKey::CmdHideRightPanel
-                } else {
-                    L10nKey::CmdShowRightPanel
-                },
-                ToggleRightPanel,
             ),
             Command::localized(L10nKey::CmdShowCodePanel, ToggleCodePanel),
             Command::localized(
@@ -508,18 +501,6 @@ impl Command {
                     L10nKey::CmdTabBarMoveToLeftSidebar
                 },
                 ToggleTabSidebar,
-            ),
-            Command::localized(
-                L10nKey::CmdRightPanelInfo,
-                ShowRightPanel(RightPanelTab::Info),
-            ),
-            Command::localized(
-                L10nKey::CmdRightPanelChanges,
-                ShowRightPanel(RightPanelTab::Scm),
-            ),
-            Command::localized(
-                L10nKey::CmdRightPanelFiles,
-                ShowRightPanel(RightPanelTab::Files),
             ),
             Command::localized(L10nKey::CmdChangeTheme, OpenThemePicker),
             Command::localized(L10nKey::CmdResetFontSize, ResetFontSize),
@@ -559,8 +540,8 @@ impl Command {
             Command::localized(L10nKey::CmdSshAddConnection, OpenSshConnectInput),
             Command::localized(L10nKey::CmdSshManageProfiles, OpenSshProfiles),
             Command::localized(L10nKey::CmdSshReconnect, RestartSshSession),
-            Command::localized(L10nKey::CmdSshRemoteFiles, ToggleSftp),
-            Command::localized(L10nKey::CmdSshPortForwarding, ShowSshForwards),
+            // ToggleSftp / ShowSshForwards open the right column — not listed;
+            // both actions remain bindable for advanced use.
         ];
 
         let agents = [

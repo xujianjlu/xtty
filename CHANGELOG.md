@@ -22,6 +22,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `input_chrome_suppressed` are gone. Product stance: plain bash echo. Ctrl/Cmd+R
   history overlay and password triggers are separate paths and remain.
 
+- **Right panel UI entry removed.** Files / SCM / Info stay off by default
+  (`right_panel_visible: false`). Title-bar open tile, View-menu items (Right
+  Panel, SSH Remote Files, Port Forwarding), palette rows that opened that
+  column, and the default ⌘J binding are gone so new installs have no main path
+  onto it. Panel chrome still closes it when somehow open; actions and
+  SFTP/git plumbing remain for Native / `config.json` / Keybindings.
+
 ### Fixed
 
 

@@ -1148,43 +1148,39 @@ impl Tty7App {
             .gap(px(2.))
             .pr(px(tile_trailing_inset()))
             .when(!cfg!(target_os = "macos"), |this| this.pr_1())
-            .child(
-                div().occlude().flex_shrink_0().child(
-                    // Match the sidebar's top chrome: these panel toggles sat
-                    // at [`TILE_GLYPH`] and read as ornaments next to the
-                    // title-bar text around them.
-                    chrome_tile_sized(
-                        Button::new("titlebar-right-panel")
-                            .icon(Icon::empty().path("icons/panel-right.svg")),
-                        TILE_SIZE,
-                        TILE_GLYPH_LINE,
-                        false,
-                        cx,
-                    )
-                    .rounded_lg()
-                    .tooltip_element(chord_tooltip(
-                        match panel_open {
-                            true => t(L10nKey::TabTooltipHideDetailPanel),
-                            false => t(L10nKey::TabTooltipShowDetailPanel),
-                        },
-                        "ToggleRightPanel",
-                        cx,
-                    ))
-                    // On macOS this tile is drawn inside the panel's own
-                    // titlebar while the panel is open, so closing from it
-                    // destroys the element holding the focus — and a keymap
-                    // scoped to a focused thing goes quiet with it, leaving the
-                    // ⌘J that would undo this doing nothing. Hand the terminal
-                    // back what it lost, the same way the tab tiles below do.
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        let closing = this.right_panel_open(cx);
-                        this.toggle_right_panel(cx);
-                        if closing {
+            // Product stance: the Files/SCM/Info right column is not a primary
+            // surface. No title-bar affordance opens it; the tile appears only
+            // while the panel is already open so it can be dismissed (and so
+            // macOS panel chrome still has a close control). Advanced reopen
+            // stays on action/`config.json` — not on chrome.
+            .when(panel_open, |row| {
+                row.child(
+                    div().occlude().flex_shrink_0().child(
+                        chrome_tile_sized(
+                            Button::new("titlebar-right-panel")
+                                .icon(Icon::empty().path("icons/panel-right.svg")),
+                            TILE_SIZE,
+                            TILE_GLYPH_LINE,
+                            false,
+                            cx,
+                        )
+                        .rounded_lg()
+                        .tooltip_element(chord_tooltip(
+                            t(L10nKey::TabTooltipHideDetailPanel),
+                            "ToggleRightPanel",
+                            cx,
+                        ))
+                        // On macOS this tile lives in the panel's own titlebar,
+                        // so closing destroys the focused element and a scoped
+                        // keymap would go quiet. Hand focus back to the
+                        // terminal, same as the tab tiles below.
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.toggle_right_panel(cx);
                             this.focus_active(window, cx);
-                        }
-                    })),
-                ),
-            )
+                        })),
+                    ),
+                )
+            })
             .child(self.app_menu_tile(window, cx))
     }
 

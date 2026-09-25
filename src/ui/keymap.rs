@@ -417,10 +417,9 @@ pub(crate) fn default_bindings() -> Vec<(&'static str, &'static str)> {
             "ToggleLeftPanel",
             per_platform("secondary-b", "secondary-shift-b"),
         ),
-        (
-            "ToggleRightPanel",
-            per_platform("secondary-j", "secondary-shift-j"),
-        ),
+        // Unbound by default: the right Files/SCM/Info column is not a primary
+        // surface. Still listed so Keybindings / `set_binding` can reassign it.
+        ("ToggleRightPanel", ""),
         (
             "FindInTerminal",
             if cfg!(target_os = "macos") {

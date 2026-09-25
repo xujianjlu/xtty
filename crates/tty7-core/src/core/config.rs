@@ -240,6 +240,9 @@ pub struct Config {
     pub sidebar_width: f32,
     #[serde(default)]
     pub sidebar_collapsed: bool,
+    /// Files / SCM / Info column. Off by default and not a primary surface —
+    /// chrome / View menu / palette do not push it open. Set true in
+    /// `config.json` or bind `ToggleRightPanel` for advanced use.
     #[serde(default)]
     pub right_panel_visible: bool,
     #[serde(default = "default_right_panel_width")]
@@ -2035,6 +2038,7 @@ mod tests {
         let cfg = Config::default();
         assert!(cfg.restore_session);
         assert!(cfg.mouse_reporting);
+        assert!(!cfg.right_panel_visible);
         assert!(cfg.tab_completion);
         assert!(cfg.history_search);
         assert_eq!(cfg.notify_threshold_secs, 10);
@@ -2043,6 +2047,7 @@ mod tests {
         let cfg: Config = serde_json::from_str(r#"{"font_size": 15.0}"#).unwrap();
         assert!(cfg.restore_session);
         assert!(cfg.mouse_reporting);
+        assert!(!cfg.right_panel_visible);
         assert!(cfg.tab_completion);
         assert!(cfg.history_search);
         assert_eq!(cfg.notify_threshold_secs, 10);
