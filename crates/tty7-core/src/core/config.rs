@@ -328,19 +328,6 @@ pub struct Config {
     pub show_tray_icon: bool,
     #[serde(default, deserialize_with = "de_lenient")]
     pub bell: BellMode,
-    /// Whether tty7 edits the shell prompt itself. Off by default: most people
-    /// want the shell's own line editor (ZLE / readline / fish) and its
-    /// keybindings. Turn it on in Settings when you want selection, undo, and
-    /// tty7's completion menu at the prompt — it needs shell integration
-    /// (OSC 133) to engage.
-    ///
-    /// Off hands ordinary keystrokes at the prompt straight to the PTY. Shell
-    /// integration itself stays on: prompt boundaries, cwd, exit status and
-    /// notifications are unaffected. `tab_completion` is tty7's own menu and
-    /// is moot while this is off; `history_search` is independent — ⌃R / ⌘R
-    /// still open tty7's history overlay when this flag is false.
-    #[serde(default)]
-    pub prompt_editor: bool,
     #[serde(default = "default_true")]
     pub tab_completion: bool,
     #[serde(default = "default_true")]
@@ -679,7 +666,6 @@ impl Default for Config {
             restore_session: true,
             show_tray_icon: true,
             bell: BellMode::Visual,
-            prompt_editor: false,
             tab_completion: true,
             history_search: true,
             cursor_style: CursorStyle::Block,
@@ -2053,7 +2039,6 @@ mod tests {
         assert!(cfg.restore_session);
         assert!(cfg.mouse_reporting);
         assert!(!cfg.right_panel_visible);
-        assert!(!cfg.prompt_editor);
         assert!(cfg.tab_completion);
         assert!(cfg.history_search);
         assert_eq!(cfg.notify_threshold_secs, 10);
@@ -2063,7 +2048,6 @@ mod tests {
         assert!(cfg.restore_session);
         assert!(cfg.mouse_reporting);
         assert!(!cfg.right_panel_visible);
-        assert!(!cfg.prompt_editor);
         assert!(cfg.tab_completion);
         assert!(cfg.history_search);
         assert_eq!(cfg.notify_threshold_secs, 10);
@@ -2073,11 +2057,6 @@ mod tests {
         assert!(!cfg.tab_completion);
         let cfg: Config = serde_json::from_str(r#"{"history_search": false}"#).unwrap();
         assert!(!cfg.history_search);
-        let cfg: Config = serde_json::from_str(r#"{"prompt_editor": false}"#).unwrap();
-        assert!(!cfg.prompt_editor);
-        let cfg: Config = serde_json::from_str(r#"{"prompt_editor": true}"#).unwrap();
-        assert!(cfg.prompt_editor);
-
         let cfg: Config = serde_json::from_str(
             r#"{"restore_session": false, "mouse_reporting": false, "bell": "audible"}"#,
         )

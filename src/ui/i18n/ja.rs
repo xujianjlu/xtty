@@ -501,22 +501,11 @@ pub fn translate_ja(key: L10nKey) -> Option<&'static str> {
         L10nKey::SettingsBellModeBoth => "点滅 + 音声",
         L10nKey::SettingsPrompt => "プロンプト",
         L10nKey::SettingsPromptIntro => {
-            "シェルプロンプトでの xtty 独自のエディターとメニュー。オフにするとその分がシェルに渡されます"
-        }
-        L10nKey::SettingsPromptEditor => "プロンプトエディター",
-        L10nKey::SettingsPromptEditorDesc => {
-            "上級向け — シェル連携が必要。プロンプト入力行を xtty が編集（選択・取り消し・下のメニュー）。既定はオフ：シェル自身の行エディター（ZLE、readline、fish）がキーを受け取ります"
-        }
-        L10nKey::SettingsNeedsPromptEditor => {
-            "プロンプトエディターが必要です。オフの間、このキーはすでにシェルのものです"
-        }
-        L10nKey::SettingsTabCompletion => "タブ補完",
-        L10nKey::SettingsTabCompletionDesc => {
-            "プロンプトで Tab を押すと xtty の補完メニューが開きます。オフの場合、Tab はシェル自身の補完に渡されます"
+            "プロンプト関連の xtty メニュー（履歴検索など）。"
         }
         L10nKey::SettingsHistorySearch => "履歴検索",
         L10nKey::SettingsHistorySearchDesc => {
-            "⌃R / ⌘R で xtty のファジー履歴メニューを開きます（プロンプトエディタがオフでも可）。オフなら ⌃R はシェルへ — 逆方向検索や、そこでバインドしたもの（fzf、percol）"
+            "⌃R / ⌘R で xtty のファジー履歴メニューを開きます。オフなら ⌃R はシェルへ — 逆方向検索や、そこでバインドしたもの（fzf、percol）"
         }
         L10nKey::SettingsSelectionClipboard => "選択とクリップボード",
         L10nKey::SettingsSmartSelection => "スマート選択",
@@ -1022,14 +1011,8 @@ pub fn translate_ja(key: L10nKey) -> Option<&'static str> {
         L10nKey::SettingsSearchLegiblePaletteKeywords => {
             "可読 コントラスト 明色 パレット パラメーター 修正 legible bright contrast palette parameter"
         }
-        L10nKey::SettingsSearchPromptEditorKeywords => {
-            "プロンプト エディター ネイティブ シェル 入力 行編集 キーバインド 貼り付け prompt editor native shell input zle readline"
-        }
         L10nKey::SettingsSearchTabBarPositionKeywords => {
             "タブ 垂直 サイドバー 左 上 レイアウト レール tab bar position tabs vertical sidebar left top rail"
-        }
-        L10nKey::SettingsSearchTabCompletionKeywords => {
-            "補完 メニュー サジェスト タブ プロンプト tab completion menu suggestions prompt"
         }
         L10nKey::SettingsSearchTerminalBellKeywords => {
             "ベル 可聴 視覚 フラッシュ サウンド サイレント ビープ 両方 ^g terminal bell audible visual flash sound silence beep both"

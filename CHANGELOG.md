@@ -9,25 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Prompt editor is off by default.** New installs and missing `prompt_editor`
-  keys leave the shell's own line editor in charge. The Settings → Input →
-  Prompt switch remains so power users can turn tty7's editor back on (needs
-  shell integration). Password triggers are unchanged.
+- **Prompt editor removed.** The shell always owns the prompt line (plain PTY
+  echo). The Settings → Input → Prompt editor / Tab completion switches are
+  gone. Password triggers are unchanged.
 
-- **⌃R / ⌘R history overlay no longer requires the prompt editor.** With
-  `prompt_editor: false` and `history_search: true`, the fuzzy history menu
-  still opens and the chord is not forwarded to shell reverse-i-search. Tab
-  completion stays gated on the prompt editor; Settings → History search is
-  no longer greyed out when the editor is off.
+- **⌃R / ⌘R history overlay stays.** With `history_search: true`, the fuzzy
+  history menu opens and the chord is not forwarded to shell reverse-i-search,
+  even though the prompt editor is gone. Accept pastes into the shell line.
 
-- **Command-line keyword chrome is off (26.9.14).** The prompt editor no longer
-  paints tokenizer colors or ghost tint on the current input line, and the
-  anti-flicker `input_chrome_suppressed` / handoff recolor path is removed.
-  Product stance for bash (local + remote): plain echo, no terminal keyword
-  paint and no reliance on shell plugins such as zsh-syntax-highlighting.
-  Typing still uses the local editor when Prompt editor is on, but the line
-  reads as plain theme foreground. **Ctrl/Cmd+R history overlay and password
-  triggers are unchanged** — they do not share the keyword-paint path.
+- **Command-line keyword chrome / ghost tint / handoff recolor deleted.** No
+  tokenizer colors on the input line; `highlight` module and
+  `input_chrome_suppressed` are gone. Product stance: plain bash echo. Ctrl/Cmd+R
+  history overlay and password triggers are separate paths and remain.
 
 - **Right panel UI entry removed.** Files / SCM / Info stay off by default
   (`right_panel_visible: false`). Title-bar open tile, View-menu items (Right
@@ -35,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   column, and the default ⌘J binding are gone so new installs have no main path
   onto it. Panel chrome still closes it when somehow open; actions and
   SFTP/git plumbing remain for Native / `config.json` / Keybindings.
+
 
 ### Fixed
 

@@ -552,16 +552,6 @@ fn settings_search_entries() -> &'static [SearchEntry] {
         },
         SearchEntry {
             section: Input,
-            title: SettingsPromptEditor,
-            keywords: SettingsSearchPromptEditorKeywords,
-        },
-        SearchEntry {
-            section: Input,
-            title: SettingsTabCompletion,
-            keywords: SettingsSearchTabCompletionKeywords,
-        },
-        SearchEntry {
-            section: Input,
             title: SettingsHistorySearch,
             keywords: SettingsSearchHistorySearchKeywords,
         },
@@ -6173,32 +6163,14 @@ impl Tty7App {
     fn render_settings_input(&self, cx: &mut Context<Self>) -> AnyElement {
         let cfg = cx.global::<Config>();
         let option_as_alt = cfg.macos_option_as_alt;
-        let prompt_editor = cfg.prompt_editor;
-        let tab_completion = cfg.tab_completion;
         let history_search = cfg.history_search;
         let per_pane_history = cfg.per_pane_history;
         let smart_select = cfg.smart_select;
         let copy_on_select = cfg.copy_on_select;
         let clip_trim = cfg.clipboard_trim_trailing_spaces;
 
-        // Tab completion is a menu tty7 opens *inside* its own prompt editor.
-        // With the editor off, Tab already belongs to the shell, so grey that
-        // switch out and say why. History search is independent: ⌃R still opens
-        // tty7's overlay when the editor is off, so its switch stays live.
-        let gated = |desc: L10nKey| match prompt_editor {
-            true => t(desc).to_string(),
-            false => format!("{} {}", t(desc), t(L10nKey::SettingsNeedsPromptEditor)),
-        };
-
-        let prompt_editor_switch = crate::ui::theme::switch("term-prompt-editor", cx)
-            .checked(prompt_editor)
-            .on_click(cx.listener(|this, on: &bool, _w, cx| this.set_prompt_editor(*on, cx)))
-            .into_any_element();
-        let tab_completion_switch = crate::ui::theme::switch("term-tab-completion", cx)
-            .checked(tab_completion)
-            .disabled(!prompt_editor)
-            .on_click(cx.listener(|this, on: &bool, _w, cx| this.set_tab_completion(*on, cx)))
-            .into_any_element();
+        // Prompt editor removed: Tab always goes to the shell. History search
+        // stays a first-class switch — ⌃R opens tty7's overlay independently.
         let history_search_switch = crate::ui::theme::switch("term-history-search", cx)
             .checked(history_search)
             .on_click(cx.listener(|this, on: &bool, _w, cx| this.set_history_search(*on, cx)))
@@ -6238,19 +6210,6 @@ impl Tty7App {
             .child(self.section_intro(
                 t(L10nKey::SettingsPrompt),
                 t(L10nKey::SettingsPromptIntro),
-                cx,
-            ))
-            .child(self.settings_row(
-                t(L10nKey::SettingsPromptEditor),
-                t(L10nKey::SettingsPromptEditorDesc),
-                prompt_editor_switch,
-                cx,
-            ))
-            .child(self.settings_row_gated_when(
-                t(L10nKey::SettingsTabCompletion),
-                gated(L10nKey::SettingsTabCompletionDesc),
-                tab_completion_switch,
-                !prompt_editor,
                 cx,
             ))
             .child(self.settings_row(
@@ -8558,7 +8517,6 @@ mod tests {
         let mut cases: Vec<(&str, SettingsSection)> = vec![
             ("opacity", Appearance),
             ("blur", Appearance),
-            ("completion", Input),
             ("ctrl-r", Input),
             ("grouping", WindowTabs),
             ("threshold", WindowTabs),
@@ -8619,7 +8577,6 @@ mod tests {
             "Report mouse to apps",
             "Open files with",
             "Sidebar grouping",
-            "Tab completion",
             "History search",
             "Dim inactive panes",
             "Option (⌥) acts as Meta",
@@ -9055,44 +9012,4 @@ mod gpui_tests {
         assert_eq!(modifier, MouseZoomModifier::None, "and the pick sticks");
     }
 
-    /// The Input page paints with the prompt editor off — Tab completion is
-    /// greyed out and disabled, but history search stays live (⌃R no longer
-    /// depends on the editor). Greying Tab must not rewrite what it holds.
-    #[gpui::test]
-    fn the_prompt_editor_greys_tab_completion_without_rewriting_it(cx: &mut TestAppContext) {
-        crate::core::config::pin_test_config_dir();
-        let (app, mut vcx) = harness(cx);
-        app.update_in(&mut vcx, |app, window, cx| {
-            app.open_settings_section(SettingsSection::Input, window, cx);
-            app.set_tab_completion(false, cx);
-            app.set_history_search(true, cx);
-            app.set_prompt_editor(false, cx);
-        });
-        vcx.simulate_resize(size(px(1100.), px(800.)));
-        vcx.run_until_parked();
-
-        let (prompt_editor, tab_completion, history_search) = vcx.update(|_, cx| {
-            let cfg = cx.global::<Config>();
-            (cfg.prompt_editor, cfg.tab_completion, cfg.history_search)
-        });
-        assert!(!prompt_editor, "the switch stuck");
-        assert!(
-            !tab_completion,
-            "a greyed-out Tab row keeps the value the user turned off"
-        );
-        assert!(
-            history_search,
-            "history search stays independent of the prompt editor"
-        );
-
-        app.update_in(&mut vcx, |app, _, cx| app.set_prompt_editor(true, cx));
-        vcx.run_until_parked();
-        let (prompt_editor, tab_completion, history_search) = vcx.update(|_, cx| {
-            let cfg = cx.global::<Config>();
-            (cfg.prompt_editor, cfg.tab_completion, cfg.history_search)
-        });
-        assert!(prompt_editor);
-        assert!(!tab_completion, "Tab stays off until the user flips it");
-        assert!(history_search);
-    }
 }
