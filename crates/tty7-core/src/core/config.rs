@@ -331,11 +331,11 @@ pub struct Config {
     /// tty7's completion menu at the prompt — it needs shell integration
     /// (OSC 133) to engage.
     ///
-    /// Off hands every keystroke at the prompt straight to the PTY. Shell
+    /// Off hands ordinary keystrokes at the prompt straight to the PTY. Shell
     /// integration itself stays on: prompt boundaries, cwd, exit status and
     /// notifications are unaffected. `tab_completion` is tty7's own menu and
-    /// is moot while this is off; `history_search` remains a separate switch
-    /// but today's key path still gates ⌃R on this flag.
+    /// is moot while this is off; `history_search` is independent — ⌃R / ⌘R
+    /// still open tty7's history overlay when this flag is false.
     #[serde(default)]
     pub prompt_editor: bool,
     #[serde(default = "default_true")]

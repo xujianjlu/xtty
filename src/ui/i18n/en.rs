@@ -505,7 +505,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         }
         L10nKey::SettingsHistorySearch => "History search",
         L10nKey::SettingsHistorySearchDesc => {
-            "⌃R at the prompt opens xtty's fuzzy history menu. Off sends ⌃R to the shell — its own reverse-i-search, or whatever you bound there (fzf, percol)."
+            "⌃R / ⌘R opens xtty's fuzzy history menu even when the prompt editor is off. Off sends ⌃R to the shell — its own reverse-i-search, or whatever you bound there (fzf, percol)."
         }
         L10nKey::SettingsSelectionClipboard => "Selection & clipboard",
         L10nKey::SettingsSmartSelection => "Smart selection",
