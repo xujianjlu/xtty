@@ -3,11 +3,12 @@ title: "The side panel"
 description: "Info, Source Control, and Files — plus the built-in editor."
 ---
 
-<kbd>⌘ J</kbd> opens a panel on the right of the window with three tabs. It is
-hidden by default; whichever tab you leave it on is where it opens next time.
-
-The three icons at the top switch tabs, and clicking the lit one puts the panel
-away again.
+The right-hand Info / Source Control / Files column is **not** a primary
+surface in current xtty builds: it stays off by default, has no title-bar or
+View-menu open control, and no default shortcut. Power users can still set
+`right_panel_visible: true` in `config.json` or bind `ToggleRightPanel` on the
+Keybindings page. When open, the three tab icons switch tabs, and clicking the
+lit one (or the panel chrome tile) puts it away again.
 
 <Frame caption="Placeholder — screenshot: the side panel showing the Info tab beside a terminal">
   <img src="/images/placeholder.svg" alt="The tty7 side panel" />
