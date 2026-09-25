@@ -2584,15 +2584,16 @@ impl TerminalView {
         }
 
         // History search is a window feature, not a privilege granted by the
-        // shell integration. A second ssh/su/jumper entered inside a pane
-        // cannot emit tty7's OSC prompt marks, but Cmd/Ctrl+R must still open
-        // the same history UI there — and keep owning keys until the menu
-        // closes. Full-screen applications keep the shortcut.
+        // shell integration *or* the inline prompt editor. A second ssh/su/
+        // jumper entered inside a pane cannot emit tty7's OSC prompt marks,
+        // and `prompt_editor: false` hands ordinary typing to the shell — but
+        // Cmd/Ctrl+R must still open the same history UI in both cases and
+        // keep owning keys until the menu closes (so the shell never sees
+        // reverse-i-search). Full-screen applications keep the shortcut.
         let history_shortcut =
             ks.key == "r" && !m.alt && ((m.control && !m.platform) || (m.platform && !m.control));
         if history_shortcut
             && cx.global::<Config>().history_search
-            && self.prompt_editor
             && self.accepts_input(cx)
             && !self.on_alt_screen()
         {
@@ -2665,14 +2666,14 @@ impl TerminalView {
             return;
         }
 
-        // Ctrl-R landing on the PTY is only worth a notice when the user still
-        // expects tty7's menu. With the prompt editor off, the shell owning
-        // Ctrl-R is exactly what was asked for.
+        // Ctrl-R landing on the PTY is only worth a notice when history_search
+        // is on but the chord still fell through (e.g. the link is down). The
+        // prompt editor is unrelated: ⌃R owns the overlay whenever
+        // `history_search` is enabled.
         if m.control
             && !m.platform
             && !m.alt
             && ks.key == "r"
-            && self.prompt_editor
             && cx.global::<Config>().history_search
         {
             self.note_integration_gap(cx);
@@ -4715,9 +4716,11 @@ impl TerminalView {
     fn input_inactive_reason(&self) -> Option<&'static str> {
         // The one gate for `prompt_editor: false`. Every path that could take a
         // prompt away from the shell — keys, IME commits, paste, Tab, the
-        // completion and reverse-search menus, the input bar itself — asks this
-        // first, so answering here is what makes the mode whole instead of a
-        // special case per key.
+        // completion menu, the input bar itself — asks this first, so answering
+        // here is what makes the mode whole instead of a special case per key.
+        // History search (⌃R) deliberately does *not* ask: it is keyed off
+        // `history_search` alone and already pastes into the shell when the
+        // inline editor is off.
         if !self.prompt_editor {
             return Some("the inline prompt editor is turned off");
         }
@@ -14037,8 +14040,8 @@ mod gpui_tests {
 
     /// The whole point of `prompt_editor: false`: a prefix and an arrow key
     /// reach the PTY at a live OSC 133 prompt, so the shell's own line editor
-    /// (zsh's ZLE, readline) runs the widget bound there — including a history
-    /// widget reading the shell's own, shared history.
+    /// (zsh's ZLE, readline) runs the widget bound there. ⌃R is separate —
+    /// gated only by `history_search`, not this flag.
     #[gpui::test]
     fn prompt_editor_off_hands_typing_and_arrows_to_the_shell(cx: &mut TestAppContext) {
         let (window, mut daemon) = harness(cx);
@@ -14101,12 +14104,12 @@ mod gpui_tests {
             .unwrap();
     }
 
-    /// Tab and Ctrl-R are the two keys with their own opt-outs; turning the
-    /// editor off has to hand them over too, without the missing-integration
-    /// notice that Ctrl-R raises when tty7 *wanted* the key and could not have
-    /// it.
+    /// Tab still belongs to the shell when the prompt editor is off (its own
+    /// opt-out). ⌃R does not: `history_search` is independent, so the overlay
+    /// must open and the raw ^R must never reach the PTY — otherwise the shell
+    /// starts reverse-i-search under the menu.
     #[gpui::test]
-    fn prompt_editor_off_hands_over_tab_and_ctrl_r(cx: &mut TestAppContext) {
+    fn prompt_editor_off_hands_over_tab_but_keeps_ctrl_r(cx: &mut TestAppContext) {
         let (window, mut daemon) = harness(cx);
         DaemonMsg::Prompt {
             active: true,
@@ -14130,16 +14133,102 @@ mod gpui_tests {
                 };
                 view.on_key_down(&ctrl_r, window, cx);
                 assert!(view.completion.is_none(), "no tty7 completion menu");
-                assert!(view.reverse_search.is_none(), "no tty7 history menu");
+                assert!(
+                    view.reverse_search.is_some(),
+                    "history overlay stays available with the editor off"
+                );
                 assert!(
                     view.integration_notice.is_none(),
-                    "the shell owning ^R is what was asked for, not a gap to report"
+                    "⌃R was consumed — nothing to report as a gap"
                 );
             })
             .unwrap();
 
         assert_eq!(next_input_until_timeout(&mut daemon), Some(b"\t".to_vec()));
-        assert_eq!(next_input_until_timeout(&mut daemon), Some(vec![0x12]));
+        // First write after Tab may be Ctrl+G (abort leaked isearch) then the
+        // history probe — never raw ^R (0x12).
+        let first = next_input_until_timeout(&mut daemon).expect("PTY traffic after Ctrl+R");
+        assert_ne!(first, vec![0x12], "must not forward Ctrl+R to shell isearch");
+        if first == vec![0x07] {
+            let probe = next_input_until_timeout(&mut daemon).expect("history probe");
+            assert_ne!(probe, vec![0x12]);
+            assert_eq!(probe.first(), Some(&0x15));
+        } else {
+            assert_eq!(
+                first.first(),
+                Some(&0x15),
+                "expected history probe, got {first:?}"
+            );
+        }
+    }
+
+    /// With the editor off and history_search still on, Accept pastes into the
+    /// shell's own line (same path as nested ssh without OSC marks).
+    #[gpui::test]
+    fn prompt_editor_off_ctrl_r_accept_pastes_into_the_shell(cx: &mut TestAppContext) {
+        crate::core::config::pin_test_config_dir();
+
+        let (window, mut daemon) = harness(cx);
+        DaemonMsg::Prompt {
+            active: true,
+            at_prompt: true,
+            last_exit: None,
+        }
+        .encode(&mut daemon)
+        .unwrap();
+        wait_for_input_active(&window, cx);
+
+        window
+            .update(cx, |view, window, cx| {
+                view.set_prompt_editor(false, cx);
+                assert!(!view.input_active());
+                view.on_key_down(
+                    &KeyDownEvent {
+                        keystroke: key("ctrl-r"),
+                        is_held: false,
+                        prefer_character_input: false,
+                    },
+                    window,
+                    cx,
+                );
+                assert!(view.reverse_search.is_some());
+            })
+            .unwrap();
+
+        drain_history_probe_write(&mut daemon);
+        inject_pty_history_dump(&mut daemon, &["git status", "cargo build"]);
+        wait_history_probe_ready(&window, cx);
+
+        window
+            .update(cx, |view, window, cx| {
+                type_char(view, "g", window, cx);
+                type_char(view, "i", window, cx);
+                type_char(view, "t", window, cx);
+                assert_eq!(
+                    view.reverse_search
+                        .as_ref()
+                        .and_then(|rs| rs.selected_line()),
+                    Some("git status")
+                );
+                view.on_key_down(
+                    &KeyDownEvent {
+                        keystroke: key("enter"),
+                        is_held: false,
+                        prefer_character_input: false,
+                    },
+                    window,
+                    cx,
+                );
+                assert!(view.reverse_search.is_none());
+                assert_eq!(view.cmd.text(), "", "editor stays empty when off");
+            })
+            .unwrap();
+
+        assert_eq!(
+            next_input_until_timeout(&mut daemon),
+            Some(b"git status".to_vec()),
+            "Accept pastes the selection into the shell prompt"
+        );
     }
 
     /// Turning the setting off mid-line must not eat what is already typed —

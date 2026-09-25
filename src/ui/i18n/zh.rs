@@ -443,7 +443,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         }
         L10nKey::SettingsHistorySearch => "历史搜索",
         L10nKey::SettingsHistorySearchDesc => {
-            "在提示符按 ⌃R 打开 xtty 的模糊历史菜单。关闭后 ⌃R 交给 shell——它自带的反向搜索，或你绑定的其它功能（fzf、percol）。"
+            "按 ⌃R / ⌘R 打开 xtty 的模糊历史菜单——即使提示符编辑器关闭也可用。关闭本项后 ⌃R 交给 shell——它自带的反向搜索，或你绑定的其它功能（fzf、percol）。"
         }
         L10nKey::SettingsSelectionClipboard => "选择与剪贴板",
         L10nKey::SettingsSmartSelection => "智能选择",

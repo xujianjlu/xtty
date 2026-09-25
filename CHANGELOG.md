@@ -12,8 +12,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Prompt editor is off by default.** New installs and missing `prompt_editor`
   keys leave the shell's own line editor in charge. The Settings → Input →
   Prompt switch remains so power users can turn tty7's editor back on (needs
-  shell integration). Password triggers and the history-search preference are
-  unchanged; ⌃R's live key path still follows `prompt_editor` today.
+  shell integration). Password triggers are unchanged.
+
+- **⌃R / ⌘R history overlay no longer requires the prompt editor.** With
+  `prompt_editor: false` and `history_search: true`, the fuzzy history menu
+  still opens and the chord is not forwarded to shell reverse-i-search. Tab
+  completion stays gated on the prompt editor; Settings → History search is
+  no longer greyed out when the editor is off.
 
 - **Command-line keyword chrome is off (26.9.14).** The prompt editor no longer
   paints tokenizer colors or ghost tint on the current input line, and the
