@@ -1824,6 +1824,16 @@ impl TerminalView {
                 &self.sftp_route_for_host().connection_key(),
             );
         }
+        // Nested process-table ssh/jumper: key git status by the hop target so
+        // it does not collide with this machine's repos under LOCAL.
+        if let Some(ctx) = self.remote_context()
+            && ctx.kind == crate::daemon::protocol::RemoteKind::Ssh
+        {
+            return crate::ui::host_ops::HostId::from_connection_key(&format!(
+                "shell-ssh:{}",
+                ctx.target
+            ));
+        }
         self.host_id
     }
 
@@ -1910,7 +1920,21 @@ impl TerminalView {
     }
 
     fn cwd_is_on_host(&self) -> bool {
+        // Nested process-table ssh: paths live on a third machine with no Host
+        // — even though `host_id()` is a synthetic shell-ssh key (not LOCAL).
+        if self
+            .remote_context()
+            .is_some_and(|c| c.kind == crate::daemon::protocol::RemoteKind::Ssh)
+        {
+            return false;
+        }
         cwd_is_on_host(!self.paths_are_local(), self.host_id().is_local())
+    }
+
+    /// Process-table nested `ssh` / jumper (no SFTP / `Host::git` to the hop).
+    fn is_nested_shell_ssh(&self) -> bool {
+        self.remote_context()
+            .is_some_and(|c| c.kind == crate::daemon::protocol::RemoteKind::Ssh)
     }
 
     pub fn agent(&self) -> Option<crate::core::cli_agent::CLIAgent> {
@@ -2229,7 +2253,16 @@ impl TerminalView {
                 self.poll_password_triggers(cx);
                 self.poll_zmodem(cx);
                 self.poll_history_probe(cx);
+                self.poll_git_probe(cx);
                 self.sync_identity_with_remote(cx);
+                // Nested hop cwd arrives as DaemonMsg::Cwd → Wakeup; do not wait
+                // for the 300 ms poll_foreground tick to track it for tab/git.
+                if self.is_nested_shell_ssh() {
+                    let cwd = self.cwd();
+                    if cwd.as_ref() != self.git_status_cwd.as_ref() {
+                        self.refresh_git_status(cwd, GitRefresh::Edge, cx);
+                    }
+                }
                 // The grid moved under whatever the search bar last measured.
                 self.note_output_under_search(cx);
                 // Only a pane that is on screen repaints on output. The
@@ -4082,15 +4115,20 @@ impl TerminalView {
                 false
             }
         };
-        let cwd_now = self
-            .cwd_is_on_host()
-            .then(|| {
-                session
-                    .as_ref()
-                    .and_then(|s| s.cwd.clone())
-                    .or_else(|| self.cwd())
-            })
-            .flatten();
+        let cwd_now = if self.is_nested_shell_ssh() {
+            // Far-side OSC 7 / probe cwd — Host cannot resolve it, but Tab /
+            // git badges still need the path the hop is sitting in.
+            self.cwd()
+        } else {
+            self.cwd_is_on_host()
+                .then(|| {
+                    session
+                        .as_ref()
+                        .and_then(|s| s.cwd.clone())
+                        .or_else(|| self.cwd())
+                })
+                .flatten()
+        };
         if cwd_now.as_ref() != self.git_status_cwd.as_ref() || cmd_finished || turn_finished {
             if cmd_finished || turn_finished {
                 self.mark_repo_changed(cwd_now.as_deref(), cx);
@@ -4206,6 +4244,7 @@ impl TerminalView {
         // Drop any in-flight dump for the previous hop so its bytes cannot
         // land on this scope.
         self.terminal.history_probe_pipe().cancel();
+        self.terminal.git_probe_pipe().cancel();
         self.history_probe_error = None;
         let ranked_cwd = self.ranked_cwd.clone();
         self.rerank_history(ranked_cwd.as_deref());
@@ -4353,6 +4392,12 @@ impl TerminalView {
             let (corpus, frecency) = self.reverse_search_corpus();
             self.reverse_search = Some(ReverseSearch::new(&corpus, &frecency));
         }
+        // History divert just freed the PTY — if this is a nested hop, ask
+        // for git status next (Host cannot reach the inner box).
+        if self.is_nested_shell_ssh() {
+            let cwd = self.git_status_cwd.clone().or_else(|| self.cwd());
+            self.refresh_git_status(cwd, GitRefresh::Edge, cx);
+        }
         cx.notify();
     }
 
@@ -4405,6 +4450,29 @@ impl TerminalView {
             return;
         };
         let id = self.host_id();
+
+        // Nested ssh/jumper: no Host to the hop — probe via PTY divert.
+        if self.is_nested_shell_ssh() {
+            if !self.can_start_pty_git_probe() {
+                if changed {
+                    cx.notify();
+                }
+                return;
+            }
+            cx.default_global::<GitStatusCache>();
+            let claimed = cx.update_global::<GitStatusCache, _>(|cache, _| match trigger {
+                GitRefresh::Edge => cache.begin_probe(id, &cwd),
+                GitRefresh::Opportunistic => {
+                    cache.begin_probe_throttled(id, &cwd, OPPORTUNISTIC_GIT_GAP)
+                }
+            });
+            if !claimed {
+                return;
+            }
+            self.start_pty_git_probe(cwd, id, cx);
+            return;
+        }
+
         let Some(host) = self.host(cx) else {
             if changed {
                 cx.notify();
@@ -4446,6 +4514,82 @@ impl TerminalView {
                 }
             },
         );
+    }
+
+    fn can_start_pty_git_probe(&self) -> bool {
+        if self.terminal.history_probe_pipe().is_active() {
+            return false;
+        }
+        if self.terminal.git_probe_pipe().is_diverting() {
+            return false;
+        }
+        if self.terminal.zmodem_pipe().is_diverting() {
+            return false;
+        }
+        true
+    }
+
+    /// Dump remote `git` identity + numstat over the PTY and divert the reply
+    /// (same pattern as [`Self::start_pty_history_probe`]). Never scrapes PS1.
+    fn start_pty_git_probe(
+        &mut self,
+        cwd: std::path::PathBuf,
+        host: crate::ui::host_ops::HostId,
+        cx: &mut Context<Self>,
+    ) {
+        let pipe = self.terminal.git_probe_pipe();
+        let _ = pipe.take_if_complete();
+        pipe.arm();
+        self.terminal
+            .write(super::git_probe::probe_command_bytes());
+        cx.notify();
+        let probe_cwd = cwd.clone();
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(std::time::Duration::from_secs(8))
+                .await;
+            let _ = this.update(cx, |view, cx| {
+                if view.git_status_cwd.as_deref() != Some(probe_cwd.as_path()) {
+                    return;
+                }
+                if view.host_id() != host {
+                    return;
+                }
+                let pipe = view.terminal.git_probe_pipe();
+                if pipe.is_diverting() {
+                    pipe.cancel();
+                    // Timed out — record "no repo" so we do not spin forever.
+                    cx.update_global::<crate::terminal::git_status::GitStatusCache, _>(
+                        |cache, _| {
+                            let _ = cache.finish_probe(host, &probe_cwd, None);
+                        },
+                    );
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn poll_git_probe(&mut self, cx: &mut Context<Self>) {
+        use crate::terminal::git_status::GitStatusCache;
+
+        let pipe = self.terminal.git_probe_pipe();
+        let Some(dump) = pipe.take_if_complete() else {
+            return;
+        };
+        let Some(cwd) = self.git_status_cwd.clone() else {
+            return;
+        };
+        let id = self.host_id();
+        let snapshot = super::git_probe::parse_git_probe_dump(&dump);
+        let rerun = cx.update_global::<GitStatusCache, _>(|cache, _| {
+            cache.finish_probe(id, &cwd, snapshot)
+        });
+        if rerun && self.git_status_cwd.as_deref() == Some(cwd.as_path()) {
+            self.refresh_git_status(Some(cwd), GitRefresh::Edge, cx);
+        }
+        cx.notify();
     }
 
     fn poll_agent_status(
@@ -6724,7 +6868,7 @@ impl TerminalView {
         // pane to one root forever.
         let cached = cx
             .try_global::<crate::terminal::git_status::GitStatusCache>()
-            .and_then(|cache| cache.repo_root_for(self.host_id, cwd))
+            .and_then(|cache| cache.repo_root_for(self.host_id(), cwd))
             .map(std::path::Path::to_path_buf);
         if let Some(root) = cached {
             self.link_repo_root = Some((cwd.to_path_buf(), Some(root)));
@@ -10332,6 +10476,24 @@ mod gpui_tests {
         );
     }
 
+    fn drain_until_git_probe_write(daemon: &mut Stream) {
+        for _ in 0..4 {
+            let Some(probe) = next_input_until_timeout(daemon) else {
+                return;
+            };
+            if probe.is_empty() {
+                continue;
+            }
+            let text = String::from_utf8_lossy(&probe);
+            if text.contains("TTY7_GIT") {
+                assert_eq!(probe.first(), Some(&0x15), "git probe clears the current line");
+                return;
+            }
+            // History / other injects may land first on a hop — keep draining.
+        }
+        panic!("expected a TTY7_GIT probe write on the PTY");
+    }
+
     /// The same pane, but hung under a `gpui_component::Root` the way the real
     /// window hangs it.
     ///
@@ -11453,8 +11615,8 @@ mod gpui_tests {
             .unwrap();
         DaemonMsg::RemoteContext(Some(crate::daemon::protocol::RemoteContext {
             kind: crate::daemon::protocol::RemoteKind::Ssh,
-            argv: vec!["ssh".into(), "box".into()],
-            target: "box".into(),
+            argv: vec!["ssh".into(), "carol@box".into()],
+            target: "carol@box".into(),
         }))
         .encode(&mut daemon)
         .unwrap();
@@ -11467,12 +11629,39 @@ mod gpui_tests {
             }
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
+        // Wakeup (from RemoteContext) syncs tab identity off the hop target.
+        for _ in 0..50 {
+            cx.run_until_parked();
+            let titled = window
+                .update(cx, |view, _, cx| {
+                    view.handle_event(AlacEvent::Wakeup, cx);
+                    view.stated_title().is_some()
+                })
+                .unwrap();
+            if titled {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
 
         window
             .update(cx, |view, _, cx| {
                 assert!(
                     !view.cwd_is_on_host(),
                     "a local host cannot answer for the far side of an ssh session"
+                );
+                assert!(
+                    !view.host_id().is_local(),
+                    "nested shell-ssh must not share LOCAL's git cache key"
+                );
+                assert_eq!(
+                    view.host_id(),
+                    crate::ui::host_ops::HostId::from_connection_key("shell-ssh:carol@box")
+                );
+                assert_eq!(
+                    view.stated_title(),
+                    Some("carol@box"),
+                    "process-table hop seeds tab identity like Native user@host"
                 );
                 assert!(
                     !view.hover_link_at(6, 0, true, cx),
@@ -12637,6 +12826,114 @@ mod gpui_tests {
                     "open search refreshed onto host history"
                 );
                 assert!(view.render_reverse_search_menu(cx).is_some());
+            })
+            .unwrap();
+    }
+
+    /// Nested ssh has no Host/SFTP — git status is a PTY divert probe (not PS1).
+    #[gpui::test]
+    fn nested_ssh_git_status_uses_pty_divert_probe(cx: &mut TestAppContext) {
+        crate::core::config::pin_test_config_dir();
+        let (window, mut daemon) = harness(cx);
+
+        DaemonMsg::RemoteContext(Some(crate::daemon::protocol::RemoteContext {
+            kind: crate::daemon::protocol::RemoteKind::Ssh,
+            argv: vec!["ssh".into(), "carol@dev-box".into()],
+            target: "carol@dev-box".into(),
+        }))
+        .encode(&mut daemon)
+        .unwrap();
+        DaemonMsg::Cwd(std::path::PathBuf::from("/home/carol/src/app"))
+            .encode(&mut daemon)
+            .unwrap();
+        for _ in 0..200 {
+            let ready = window
+                .update(cx, |view, _, _| {
+                    view.remote_context().is_some()
+                        && view.cwd() == Some(std::path::PathBuf::from("/home/carol/src/app"))
+                })
+                .unwrap();
+            if ready {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        for _ in 0..50 {
+            cx.run_until_parked();
+            let titled = window
+                .update(cx, |view, _, cx| {
+                    view.handle_event(AlacEvent::Wakeup, cx);
+                    view.stated_title().is_some()
+                })
+                .unwrap();
+            if titled {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+
+        window
+            .update(cx, |view, _, cx| {
+                // Free the PTY if a hop history dump still owns it.
+                view.terminal.history_probe_pipe().cancel();
+                assert_eq!(
+                    view.stated_title(),
+                    Some("carol@dev-box"),
+                    "chip identity aligns with Native user@host"
+                );
+                if !view.terminal.git_probe_pipe().is_diverting() {
+                    view.refresh_git_status(
+                        Some(std::path::PathBuf::from("/home/carol/src/app")),
+                        GitRefresh::Edge,
+                        cx,
+                    );
+                }
+                assert!(
+                    view.terminal.git_probe_pipe().is_diverting(),
+                    "nested hop arms a PTY git dump"
+                );
+                assert_eq!(
+                    view.git_status_cwd(),
+                    Some(std::path::Path::new("/home/carol/src/app")),
+                    "cwd tracked for tab/git even when Host cannot resolve it"
+                );
+            })
+            .unwrap();
+
+        // Hop may have injected history first; skip until the git probe line.
+        drain_until_git_probe_write(&mut daemon);
+
+        let mut dump = Vec::new();
+        dump.extend_from_slice(super::super::git_probe::BEGIN_MARK);
+        dump.extend_from_slice(b"\n/home/carol/src/app\n/home/carol/src/app/.git\n/home/carol/src/app/.git\n");
+        dump.extend_from_slice(super::super::git_probe::SEP_MARK);
+        dump.extend_from_slice(b"\nfeat/x\n");
+        dump.extend_from_slice(super::super::git_probe::SEP_MARK);
+        dump.extend_from_slice(b"\n2\t1\tmain.rs\n");
+        dump.extend_from_slice(super::super::git_probe::END_MARK);
+        dump.extend_from_slice(b"\r\n");
+        DaemonMsg::Output(dump).encode(&mut daemon).unwrap();
+
+        for _ in 0..400 {
+            cx.run_until_parked();
+            let ready = window
+                .update(cx, |view, _, cx| view.git_status(cx).is_some())
+                .unwrap();
+            if ready {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+
+        window
+            .update(cx, |view, _, cx| {
+                let status = view.git_status(cx).expect("PTY git probe landed");
+                assert_eq!(status.branch, "feat/x");
+                assert_eq!((status.added, status.removed), (2, 1));
+                assert!(
+                    !view.host_id().is_local(),
+                    "status is keyed under shell-ssh host, not LOCAL"
+                );
             })
             .unwrap();
     }

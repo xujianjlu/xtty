@@ -7,6 +7,7 @@ mod fuzzy;
 mod generator;
 pub(crate) mod git_data;
 pub(crate) mod git_diff;
+mod git_probe;
 pub(crate) mod git_status;
 mod history;
 mod history_probe;
