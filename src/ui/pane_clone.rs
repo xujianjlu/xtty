@@ -154,10 +154,9 @@ mod tests {
 
     #[test]
     fn login_script_cd_quotes_spaces() {
-        let mut spec: NativeSshSpec = serde_json::from_str(
-            r#"{"host":"h","port":22,"user":"u","auth_mode":"auto"}"#,
-        )
-        .unwrap();
+        let mut spec: NativeSshSpec =
+            serde_json::from_str(r#"{"host":"h","port":22,"user":"u","auth_mode":"auto"}"#)
+                .unwrap();
         push_cd_login(&mut spec, Path::new("/tmp/a b"));
         assert_eq!(spec.login_script, vec!["cd '/tmp/a b'".to_string()]);
     }

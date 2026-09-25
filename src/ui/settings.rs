@@ -9011,5 +9011,4 @@ mod gpui_tests {
         let modifier = vcx.update(|_, cx| cx.global::<Config>().mouse_zoom_modifier);
         assert_eq!(modifier, MouseZoomModifier::None, "and the pick sticks");
     }
-
 }

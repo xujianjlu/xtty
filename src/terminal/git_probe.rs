@@ -290,8 +290,7 @@ fn find_subslice(hay: &[u8], needle: &[u8]) -> Option<usize> {
     if needle.is_empty() || hay.len() < needle.len() {
         return None;
     }
-    hay.windows(needle.len())
-        .position(|w| w == needle)
+    hay.windows(needle.len()).position(|w| w == needle)
 }
 
 #[cfg(test)]
@@ -342,10 +341,7 @@ mod tests {
         body.extend_from_slice(SEP_MARK);
         body.extend_from_slice(b"\n");
         let env = parse_env_probe_dump(&framed(&body)).expect("env");
-        assert_eq!(
-            env.cwd,
-            Some(PathBuf::from("/home/carol/src/app/.wt/feat"))
-        );
+        assert_eq!(env.cwd, Some(PathBuf::from("/home/carol/src/app/.wt/feat")));
         let snap = env.snapshot.expect("snapshot");
         assert_eq!(snap.root, PathBuf::from("/home/carol/src/app/.wt/feat"));
         assert_eq!(snap.home, PathBuf::from("/home/carol/src/app"));

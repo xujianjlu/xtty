@@ -427,9 +427,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::SettingsBellModeAudible => "声音",
         L10nKey::SettingsBellModeBoth => "闪烁 + 声音",
         L10nKey::SettingsPrompt => "提示符",
-        L10nKey::SettingsPromptIntro => {
-            "提示符相关的 xtty 菜单（历史搜索等）。"
-        }
+        L10nKey::SettingsPromptIntro => "提示符相关的 xtty 菜单（历史搜索等）。",
         L10nKey::SettingsHistorySearch => "历史搜索",
         L10nKey::SettingsHistorySearchDesc => {
             "按 ⌃R / ⌘R 打开 xtty 的模糊历史菜单。关闭本项后 ⌃R 交给 shell——它自带的反向搜索，或你绑定的其它功能（fzf、percol）。"

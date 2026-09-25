@@ -500,9 +500,7 @@ pub fn translate_ja(key: L10nKey) -> Option<&'static str> {
         L10nKey::SettingsBellModeAudible => "音声（効果音）",
         L10nKey::SettingsBellModeBoth => "点滅 + 音声",
         L10nKey::SettingsPrompt => "プロンプト",
-        L10nKey::SettingsPromptIntro => {
-            "プロンプト関連の xtty メニュー（履歴検索など）。"
-        }
+        L10nKey::SettingsPromptIntro => "プロンプト関連の xtty メニュー（履歴検索など）。",
         L10nKey::SettingsHistorySearch => "履歴検索",
         L10nKey::SettingsHistorySearchDesc => {
             "⌃R / ⌘R で xtty のファジー履歴メニューを開きます。オフなら ⌃R はシェルへ — 逆方向検索や、そこでバインドしたもの（fzf、percol）"

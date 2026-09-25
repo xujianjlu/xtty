@@ -120,7 +120,6 @@ pub(crate) fn short_title(raw: &str, home: Option<&std::path::Path>) -> String {
     label
 }
 
-
 /// The one place a tab gets its displayed name, whichever surface is asking.
 ///
 /// `label()` ranks the evidence — a given name, then the title the pane is
@@ -2575,24 +2574,15 @@ mod tests {
         let server = Path::new("/home/deploy");
         // Chip is the leaf either way; home only decides whether the bare
         // home directory itself collapses to `~` rather than its username.
-        assert_eq!(
-            super::short_title("/home/deploy/app", Some(server)),
-            "app"
-        );
-        assert_eq!(
-            super::short_title("/home/deploy", Some(server)),
-            "~"
-        );
+        assert_eq!(super::short_title("/home/deploy/app", Some(server)), "app");
+        assert_eq!(super::short_title("/home/deploy", Some(server)), "~");
         // This machine's home is not a stand-in for the server's: the same
         // path keeps its last segment as the username, not `~`.
         assert_eq!(
             super::short_title("/home/deploy", Some(Path::new("/Users/thomas"))),
             "deploy"
         );
-        assert_eq!(
-            super::short_title("/home/deploy", None),
-            "deploy"
-        );
+        assert_eq!(super::short_title("/home/deploy", None), "deploy");
     }
 
     /// The name a freshly dialled SSH pane wears until the remote shell says
@@ -2856,10 +2846,7 @@ mod tests {
     #[test]
     fn short_title_cuts_windows_paths_on_backslashes() {
         assert_eq!(short_title(r"C:\Users\dev\projects\app"), "app");
-        assert_eq!(
-            short_title(r"C:\Users\dev\repo\deep\path\src\ui"),
-            "ui"
-        );
+        assert_eq!(short_title(r"C:\Users\dev\repo\deep\path\src\ui"), "ui");
         assert_eq!(short_title(r"C:\Users\app"), "app");
     }
 
@@ -3112,10 +3099,7 @@ mod tests {
         tab.cwd = Some("/Users/x/repo".into());
 
         assert_eq!(label_of(&tab, 0, Some(home())), "repo");
-        assert_eq!(
-            tooltip_of(&tab, 0, Some(home())).as_deref(),
-            Some("~/repo")
-        );
+        assert_eq!(tooltip_of(&tab, 0, Some(home())).as_deref(), Some("~/repo"));
 
         tab.cwd = Some("/Users/x/repo/crates/tty7-core/src".into());
         assert_eq!(label_of(&tab, 0, Some(home())), "src");
@@ -3221,7 +3205,8 @@ mod tests {
             );
 
             assert_eq!(
-                app.tab_title_tooltip(tab, index, Some(window), cx).as_deref(),
+                app.tab_title_tooltip(tab, index, Some(window), cx)
+                    .as_deref(),
                 Some("/work/repo"),
                 "hover still spells the absolute path the chip shortened"
             );

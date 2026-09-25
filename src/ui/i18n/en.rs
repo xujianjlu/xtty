@@ -489,9 +489,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::SettingsBellModeAudible => "Audible",
         L10nKey::SettingsBellModeBoth => "Both",
         L10nKey::SettingsPrompt => "Prompt",
-        L10nKey::SettingsPromptIntro => {
-            "Prompt-related xtty menus such as history search."
-        }
+        L10nKey::SettingsPromptIntro => "Prompt-related xtty menus such as history search.",
         L10nKey::SettingsHistorySearch => "History search",
         L10nKey::SettingsHistorySearchDesc => {
             "⌃R / ⌘R opens xtty's fuzzy history menu. Off sends ⌃R to the shell — its own reverse-i-search, or whatever you bound there (fzf, percol)."

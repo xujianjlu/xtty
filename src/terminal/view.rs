@@ -1686,9 +1686,7 @@ impl TerminalView {
             // Native SSH login. Path-only OSC 0 still must not displace the
             // seeded identity — cwd (OSC 7 / PTY probe) covers that case.
             match stated_title(&self.title) {
-                Some(title)
-                    if tty7_core::core::tab_view::identity_from_title(title).is_some() =>
-                {
+                Some(title) if tty7_core::core::tab_view::identity_from_title(title).is_some() => {
                     Some(title)
                 }
                 Some(_) | None => self
@@ -4585,18 +4583,14 @@ impl TerminalView {
         //
         // Direct Native SSH with no cwd yet uses the same dump so a seeded
         // `user@host` chip is not stuck without a directory forever.
-        if self.is_nested_shell_ssh()
-            || (self.native_ssh_connected() && cwd.is_none())
-        {
+        if self.is_nested_shell_ssh() || (self.native_ssh_connected() && cwd.is_none()) {
             if !self.can_start_pty_git_probe() {
                 if changed {
                     cx.notify();
                 }
                 return;
             }
-            let probe_cwd = cwd
-                .clone()
-                .unwrap_or_else(|| std::path::PathBuf::from("."));
+            let probe_cwd = cwd.clone().unwrap_or_else(|| std::path::PathBuf::from("."));
             cx.default_global::<GitStatusCache>();
             let claimed = cx.update_global::<GitStatusCache, _>(|cache, _| match trigger {
                 GitRefresh::Edge => cache.begin_probe(id, &probe_cwd),
@@ -4690,8 +4684,7 @@ impl TerminalView {
         let pipe = self.terminal.git_probe_pipe();
         let _ = pipe.take_if_complete();
         pipe.arm();
-        self.terminal
-            .write(super::git_probe::probe_command_bytes());
+        self.terminal.write(super::git_probe::probe_command_bytes());
         cx.notify();
         let probe_cwd = cwd.clone();
         cx.spawn(async move |this, cx| {
@@ -5029,14 +5022,12 @@ impl TerminalView {
         self.input_inactive_reason().is_none()
     }
 
-
     fn input_inactive_reason(&self) -> Option<&'static str> {
         // Prompt editor removed: the shell always owns the prompt line.
         // History search (⌃R) does not ask this gate — it is keyed off
         // `history_search` alone.
         Some("the inline prompt editor was removed")
     }
-
 
     fn link_inactive_reason(&self, cx: &gpui::App) -> Option<&'static str> {
         (!self.accepts_input(cx)).then_some("the remote link is not attached")
@@ -5059,7 +5050,6 @@ impl TerminalView {
         // Prompt editor removed: the shell owns every prompt, always.
         true
     }
-
 
     pub(crate) fn on_alt_screen(&self) -> bool {
         self.terminal
@@ -5461,7 +5451,6 @@ impl TerminalView {
         }
         super::history::append(&self.history_scope, &p.line, p.cwd.as_deref(), p.ts, exit);
     }
-
 
     fn note_integration_gap(&mut self, cx: &mut Context<Self>) {
         if self.integration_notice_shown
@@ -7652,7 +7641,6 @@ impl TerminalView {
         let text = self.remote_completion_notice_text()?;
         Some(Self::notice_pill(text, cx))
     }
-
 }
 
 fn typeahead_boundary(key: &str, modifiers: &Modifiers) -> Option<RawInput<'static>> {
@@ -7757,10 +7745,12 @@ impl Render for TerminalView {
         // Amber border while this pane is in the tab's broadcast group — strong
         // enough to notice, distinct from focus chrome / inactive dim.
         let broadcast_border = match broadcast_role {
-            super::broadcast::BroadcastRole::Source
-            | super::broadcast::BroadcastRole::Receiver => Some(gpui::hsla(0.08, 0.85, 0.52, 1.0)),
-            super::broadcast::BroadcastRole::OptedOut
-            | super::broadcast::BroadcastRole::Off => None,
+            super::broadcast::BroadcastRole::Source | super::broadcast::BroadcastRole::Receiver => {
+                Some(gpui::hsla(0.08, 0.85, 0.52, 1.0))
+            }
+            super::broadcast::BroadcastRole::OptedOut | super::broadcast::BroadcastRole::Off => {
+                None
+            }
         };
 
         div()
@@ -10674,7 +10664,11 @@ mod gpui_tests {
             }
             let text = String::from_utf8_lossy(&probe);
             if text.contains("TTY7_GIT") {
-                assert_eq!(probe.first(), Some(&0x15), "git probe clears the current line");
+                assert_eq!(
+                    probe.first(),
+                    Some(&0x15),
+                    "git probe clears the current line"
+                );
                 return;
             }
             // History / other injects may land first on a hop — keep draining.
@@ -12450,7 +12444,6 @@ mod gpui_tests {
         );
     }
 
-
     #[gpui::test]
     fn ctrl_v_on_the_alternate_screen_reaches_the_pty_as_syn(cx: &mut TestAppContext) {
         let (window, mut daemon) = harness(cx);
@@ -12478,14 +12471,6 @@ mod gpui_tests {
             "the clipboard must stay where it is: vim's Ctrl+V is blockwise select, not paste"
         );
     }
-
-
-
-
-
-
-
-
 
     fn dir_candidate(text: &str, start: usize, end: usize) -> completion::Candidate {
         completion::Candidate {
@@ -12643,8 +12628,6 @@ mod gpui_tests {
             })
             .unwrap();
     }
-
-
 
     fn key(spec: &str) -> gpui::Keystroke {
         gpui::Keystroke::parse(spec).expect("valid keystroke spec")
@@ -13096,7 +13079,9 @@ mod gpui_tests {
         dump.extend_from_slice(super::super::git_probe::BEGIN_MARK);
         dump.extend_from_slice(b"\n/home/carol/src/app\n");
         dump.extend_from_slice(super::super::git_probe::SEP_MARK);
-        dump.extend_from_slice(b"\n/home/carol/src/app\n/home/carol/src/app/.git\n/home/carol/src/app/.git\n");
+        dump.extend_from_slice(
+            b"\n/home/carol/src/app\n/home/carol/src/app/.git\n/home/carol/src/app/.git\n",
+        );
         dump.extend_from_slice(super::super::git_probe::SEP_MARK);
         dump.extend_from_slice(b"\nfeat/x\n");
         dump.extend_from_slice(super::super::git_probe::SEP_MARK);
@@ -13446,8 +13431,6 @@ mod gpui_tests {
             .unwrap();
     }
 
-
-
     #[gpui::test]
     fn shift_enter_reaches_a_foreground_tui_with_kitty_encoding(cx: &mut TestAppContext) {
         crate::core::config::pin_test_config_dir();
@@ -13561,7 +13544,10 @@ mod gpui_tests {
                 view.commit_text("echo a", cx);
             })
             .unwrap();
-        assert_eq!(next_input_until_timeout(&mut daemon), Some(b"echo a".to_vec()));
+        assert_eq!(
+            next_input_until_timeout(&mut daemon),
+            Some(b"echo a".to_vec())
+        );
 
         let mut vcx = gpui::VisualTestContext::from_window(window.into(), cx);
         vcx.simulate_keystrokes("shift-enter");
@@ -13581,7 +13567,10 @@ mod gpui_tests {
         cx.update(|cx| crate::ui::keymap::rebind(cx));
         vcx.simulate_keystrokes("shift-enter");
         let again = next_input_until_timeout(&mut daemon).expect("rebind still routes the chord");
-        assert!(!again.is_empty(), "rebind must still send a newline encoding");
+        assert!(
+            !again.is_empty(),
+            "rebind must still send a newline encoding"
+        );
     }
 
     /// The whole chain for #834, through the real dispatch tree: F3 is bound
@@ -13636,7 +13625,6 @@ mod gpui_tests {
             );
         }
     }
-
 
     #[gpui::test]
     fn ctrl_r_steps_matches_and_cmd_enter_runs(cx: &mut TestAppContext) {
@@ -13820,7 +13808,6 @@ mod gpui_tests {
         );
     }
 
-
     /// Prompt editor is gone: Tab belongs to the shell. ⌃R still opens the
     /// history overlay whenever `history_search` is on — raw ^R must never
     /// reach the PTY (shell reverse-i-search under the menu).
@@ -13871,7 +13858,11 @@ mod gpui_tests {
 
         assert_eq!(next_input_until_timeout(&mut daemon), Some(b"\t".to_vec()));
         let first = next_input_until_timeout(&mut daemon).expect("PTY traffic after Ctrl+R");
-        assert_ne!(first, vec![0x12], "must not forward Ctrl+R to shell isearch");
+        assert_ne!(
+            first,
+            vec![0x12],
+            "must not forward Ctrl+R to shell isearch"
+        );
         if first == vec![0x07] {
             let probe = next_input_until_timeout(&mut daemon).expect("history probe");
             assert_ne!(probe, vec![0x12]);
@@ -13960,7 +13951,6 @@ mod gpui_tests {
             "Accept pastes the selection into the shell prompt"
         );
     }
-
 
     #[gpui::test]
     fn reverse_search_menu_survives_a_real_render_pass(cx: &mut TestAppContext) {
@@ -14563,8 +14553,6 @@ mod gpui_tests {
             .unwrap();
     }
 
-
-
     #[gpui::test]
     fn an_unknown_ctrl_chord_goes_to_the_shell_with_the_line(cx: &mut TestAppContext) {
         let (window, mut daemon) = harness(cx);
@@ -14693,7 +14681,6 @@ mod gpui_tests {
             .unwrap();
     }
 
-
     #[gpui::test]
     fn meta_dot_over_a_selection_records_where_the_word_landed(cx: &mut TestAppContext) {
         let (window, _daemon) = harness(cx);
@@ -14816,7 +14803,6 @@ mod gpui_tests {
         id
     }
 
-
     #[gpui::test]
     fn a_remote_listing_says_so_while_it_runs_and_when_it_fails(cx: &mut TestAppContext) {
         let (window, _daemon) = harness(cx);
@@ -14839,7 +14825,6 @@ mod gpui_tests {
             })
             .unwrap();
     }
-
 
     #[gpui::test]
     fn a_disconnected_remote_pane_swallows_every_kind_of_typing(cx: &mut TestAppContext) {
@@ -16085,8 +16070,6 @@ mod gpui_tests {
         assert_eq!(next_input(&mut daemon), b"echo hi".to_vec());
     }
 
-
-
     /// #844: a TUI that resets DECTCEM and draws its own reverse-video caret
     /// gets no terminal caret painted over it — focused, unfocused, and after
     /// a re-attach replays its screen — and `?25h` brings the caret back.
@@ -16434,7 +16417,6 @@ mod gpui_tests {
             })
             .unwrap();
     }
-
 }
 
 // prompt_handover_tests removed: the gap-hold / prompt-editor handover

@@ -50,7 +50,10 @@ pub(crate) fn set_menus(cx: &mut App) {
             MenuItem::separator(),
             MenuItem::action(t(L10nKey::AppMenuSplitRight), SplitRight),
             MenuItem::action(t(L10nKey::AppMenuSplitDown), SplitDown),
-            MenuItem::action(t(L10nKey::AppMenuToggleBroadcastInput), ToggleBroadcastInput),
+            MenuItem::action(
+                t(L10nKey::AppMenuToggleBroadcastInput),
+                ToggleBroadcastInput,
+            ),
             MenuItem::separator(),
             MenuItem::action(t(L10nKey::AppMenuRenameTab), RenameTab),
             MenuItem::action(

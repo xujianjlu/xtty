@@ -3248,10 +3248,7 @@ impl Tty7App {
             return;
         };
         let enabled = tab.broadcast_input;
-        let focused = tab
-            .pane
-            .focused_or_first(window, cx)
-            .map(|v| v.entity_id());
+        let focused = tab.pane.focused_or_first(window, cx).map(|v| v.entity_id());
         let leaves = tab.pane.terminals();
         for leaf in leaves {
             let id = leaf.entity_id();
@@ -3279,11 +3276,12 @@ impl Tty7App {
             return;
         }
         let source_id = source.entity_id();
-        let Some(tab_idx) = self
-            .tabs
-            .iter()
-            .position(|tab| tab.pane.terminals().iter().any(|t| t.entity_id() == source_id))
-        else {
+        let Some(tab_idx) = self.tabs.iter().position(|tab| {
+            tab.pane
+                .terminals()
+                .iter()
+                .any(|t| t.entity_id() == source_id)
+        }) else {
             return;
         };
         // Only the active tab's broadcast domain is live — inactive tabs never
@@ -3304,8 +3302,7 @@ impl Tty7App {
                 (t.entity_id(), opted)
             })
             .collect();
-        let targets =
-            crate::terminal::broadcast::broadcast_receivers(true, source_id, &members);
+        let targets = crate::terminal::broadcast::broadcast_receivers(true, source_id, &members);
         if targets.is_empty() {
             return;
         }
@@ -3997,12 +3994,7 @@ impl Tty7App {
     }
 
     /// New tab that reconnects like `index`'s focused pane (Copy Tab).
-    pub(crate) fn copy_tab(
-        &mut self,
-        index: usize,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    pub(crate) fn copy_tab(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         let Some(source) = self
             .tabs
             .get(index)
