@@ -8,7 +8,6 @@ mod generator;
 pub(crate) mod git_data;
 pub(crate) mod git_diff;
 pub(crate) mod git_status;
-mod highlight;
 mod history;
 mod history_probe;
 mod hold;

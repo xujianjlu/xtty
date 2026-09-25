@@ -428,22 +428,11 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::SettingsBellModeBoth => "闪烁 + 声音",
         L10nKey::SettingsPrompt => "提示符",
         L10nKey::SettingsPromptIntro => {
-            "shell 提示符处的 xtty 自带编辑器与菜单。关闭某项即可把这部分交还给 shell。"
-        }
-        L10nKey::SettingsPromptEditor => "提示符编辑器",
-        L10nKey::SettingsPromptEditorDesc => {
-            "高级选项，需要 shell integration。由 xtty 编辑提示符上这一行（选择、撤销及下方菜单）。默认关闭：按键归 shell 自己的行编辑器——ZLE、readline、fish。"
-        }
-        L10nKey::SettingsNeedsPromptEditor => {
-            "需要提示符编辑器：它关闭时，这个按键本就归 shell 所有。"
-        }
-        L10nKey::SettingsTabCompletion => "Tab 补全",
-        L10nKey::SettingsTabCompletionDesc => {
-            "在提示符按 Tab 打开 xtty 的补全菜单。关闭后 Tab 交由 shell 自身的补全处理。"
+            "提示符相关的 xtty 菜单（历史搜索等）。"
         }
         L10nKey::SettingsHistorySearch => "历史搜索",
         L10nKey::SettingsHistorySearchDesc => {
-            "按 ⌃R / ⌘R 打开 xtty 的模糊历史菜单——即使提示符编辑器关闭也可用。关闭本项后 ⌃R 交给 shell——它自带的反向搜索，或你绑定的其它功能（fzf、percol）。"
+            "按 ⌃R / ⌘R 打开 xtty 的模糊历史菜单。关闭本项后 ⌃R 交给 shell——它自带的反向搜索，或你绑定的其它功能（fzf、percol）。"
         }
         L10nKey::SettingsSelectionClipboard => "选择与剪贴板",
         L10nKey::SettingsSmartSelection => "智能选择",
@@ -911,14 +900,8 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::SettingsSearchLegiblePaletteKeywords => {
             "颜色 低对比度 可读 纠偏 调色板 修正 contrast legible palette parameter"
         }
-        L10nKey::SettingsSearchPromptEditorKeywords => {
-            "提示符编辑器 提示符 编辑器 原生输入 行编辑 键位 快捷键 输入法 粘贴 prompt editor native shell input zle readline"
-        }
         L10nKey::SettingsSearchTabBarPositionKeywords => {
             "标签栏位置 标签栏 侧边栏 左侧 顶部 布局 tab bar position tabs sidebar left top"
-        }
-        L10nKey::SettingsSearchTabCompletionKeywords => {
-            "Tab补全 补全 菜单 建议 tab completion suggestions prompt"
         }
         L10nKey::SettingsSearchTerminalBellKeywords => {
             "终端铃声 铃声 提示音 闪烁 静音 两者 同时 beep bell terminal audible visual both"

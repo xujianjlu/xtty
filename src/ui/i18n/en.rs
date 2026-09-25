@@ -490,22 +490,11 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::SettingsBellModeBoth => "Both",
         L10nKey::SettingsPrompt => "Prompt",
         L10nKey::SettingsPromptIntro => {
-            "xtty's own editor and menus at the shell prompt. Turn one off to hand that much back to the shell."
-        }
-        L10nKey::SettingsPromptEditor => "Prompt editor",
-        L10nKey::SettingsPromptEditorDesc => {
-            "Advanced — needs shell integration. xtty edits the line at the prompt (selection, undo, menus below). Off by default: the shell's own editor — ZLE, readline, fish — keeps the keys."
-        }
-        L10nKey::SettingsNeedsPromptEditor => {
-            "Needs the prompt editor: with it off, this key already belongs to the shell."
-        }
-        L10nKey::SettingsTabCompletion => "Tab completion",
-        L10nKey::SettingsTabCompletionDesc => {
-            "Tab at the prompt opens xtty's completion menu. When off, Tab goes to the shell's own completion instead."
+            "Prompt-related xtty menus such as history search."
         }
         L10nKey::SettingsHistorySearch => "History search",
         L10nKey::SettingsHistorySearchDesc => {
-            "⌃R / ⌘R opens xtty's fuzzy history menu even when the prompt editor is off. Off sends ⌃R to the shell — its own reverse-i-search, or whatever you bound there (fzf, percol)."
+            "⌃R / ⌘R opens xtty's fuzzy history menu. Off sends ⌃R to the shell — its own reverse-i-search, or whatever you bound there (fzf, percol)."
         }
         L10nKey::SettingsSelectionClipboard => "Selection & clipboard",
         L10nKey::SettingsSmartSelection => "Smart selection",
@@ -965,14 +954,8 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::SettingsSearchLegiblePaletteKeywords => {
             "legible contrast bright palette psreadline parameter readable"
         }
-        L10nKey::SettingsSearchPromptEditorKeywords => {
-            "prompt editor native shell input line editor zle readline fish keybindings ime paste"
-        }
         L10nKey::SettingsSearchTabBarPositionKeywords => {
             "tabs vertical sidebar left top layout rail"
-        }
-        L10nKey::SettingsSearchTabCompletionKeywords => {
-            "complete completion menu suggestions tab prompt"
         }
         L10nKey::SettingsSearchTerminalBellKeywords => {
             "bell audible visual flash sound silence beep both ^g"
