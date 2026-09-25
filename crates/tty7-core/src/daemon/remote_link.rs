@@ -3,50 +3,105 @@ use std::pin::Pin;
 use std::process::Stdio;
 use std::task::{Context, Poll};
 
-use russh::Channel;
-use russh::client::Msg;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
-use super::ssh::ProcessStream;
+pub struct ProcessStream {
+    _child: tokio::process::Child,
+    stdin: Option<tokio::process::ChildStdin>,
+    stdout: tokio::process::ChildStdout,
+}
+
+impl ProcessStream {
+    pub fn from_parts(
+        child: tokio::process::Child,
+        stdin: tokio::process::ChildStdin,
+        stdout: tokio::process::ChildStdout,
+    ) -> ProcessStream {
+        ProcessStream {
+            _child: child,
+            stdin: Some(stdin),
+            stdout,
+        }
+    }
+
+    fn stdin_mut(&mut self) -> std::io::Result<&mut tokio::process::ChildStdin> {
+        self.stdin.as_mut().ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "the process stream's write half is already closed",
+            )
+        })
+    }
+}
+
+impl AsyncRead for ProcessStream {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.get_mut().stdout).poll_read(cx, buf)
+    }
+}
+
+impl AsyncWrite for ProcessStream {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        match self.get_mut().stdin_mut() {
+            Ok(stdin) => Pin::new(stdin).poll_write(cx, buf),
+            Err(e) => Poll::Ready(Err(e)),
+        }
+    }
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        match self.get_mut().stdin_mut() {
+            Ok(stdin) => Pin::new(stdin).poll_flush(cx),
+            Err(_) => Poll::Ready(Ok(())),
+        }
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        let this = self.get_mut();
+        let Some(stdin) = this.stdin.as_mut() else {
+            return Poll::Ready(Ok(()));
+        };
+        match Pin::new(stdin).poll_flush(cx) {
+            Poll::Ready(Ok(())) => {
+                this.stdin = None;
+                Poll::Ready(Ok(()))
+            }
+            Poll::Ready(Err(e)) => {
+                this.stdin = None;
+                Poll::Ready(Err(e))
+            }
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
 
 pub enum RemoteLink {
-    StreamLocal(russh::ChannelStream<russh::client::Msg>),
-
-    SessionExec(russh::ChannelStream<russh::client::Msg>),
-
     LocalStdio(ProcessStream),
 }
 
 impl RemoteLink {
-    pub fn stream_local(channel: Channel<Msg>) -> RemoteLink {
-        RemoteLink::StreamLocal(channel.into_stream())
-    }
-
-    pub fn session_exec(channel: Channel<Msg>) -> RemoteLink {
-        RemoteLink::SessionExec(channel.into_stream())
-    }
-
     pub fn local_stdio(program: &str, args: &[&str]) -> io::Result<RemoteLink> {
         Ok(RemoteLink::LocalStdio(spawn_stdio(program, args)?))
     }
 
     pub fn kind_label(&self) -> &'static str {
         match self {
-            RemoteLink::StreamLocal(_) => "streamlocal",
-            RemoteLink::SessionExec(_) => "session-exec",
             RemoteLink::LocalStdio(_) => "local-stdio",
         }
     }
 
     pub fn is_stdio_bridge(&self) -> bool {
-        matches!(self, RemoteLink::SessionExec(_) | RemoteLink::LocalStdio(_))
+        matches!(self, RemoteLink::LocalStdio(_))
     }
 
     pub fn is_ssh(&self) -> bool {
-        matches!(
-            self,
-            RemoteLink::StreamLocal(_) | RemoteLink::SessionExec(_)
-        )
+        false
     }
 }
 
@@ -157,11 +212,6 @@ pub fn remote_control_socket(env: &RemoteEnv) -> Option<String> {
         return Some(explicit.to_string());
     }
 
-    // The remote server is launched with `--stdio` and no `--config-dir`, so it
-    // opens its control socket in the config dir — `$XTTY_CONFIG_DIR` (legacy
-    // `$TTY7_CONFIG_DIR`) if the remote sets one, otherwise `$HOME/.config/xtty`.
-    // This has to mirror `host::server::control_socket_path` exactly: it is the
-    // same rule applied to an environment we probed instead of our own.
     let dir = match env.config_dir.as_deref().filter(|d| !d.is_empty()) {
         Some(cfg) => cfg.to_string(),
         None => {
@@ -193,7 +243,7 @@ pub fn remote_control_socket(env: &RemoteEnv) -> Option<String> {
 }
 
 fn posix_join(base: &str, name: &str) -> String {
-    format!("{}/{name}", base.trim_end_matches('/'))
+    format!("{base}/{name}", base = base.trim_end_matches('/'))
 }
 
 fn fits(path: &str) -> bool {
@@ -207,9 +257,6 @@ impl AsyncRead for RemoteLink {
         buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
         match self.get_mut() {
-            RemoteLink::StreamLocal(s) | RemoteLink::SessionExec(s) => {
-                Pin::new(s).poll_read(cx, buf)
-            }
             RemoteLink::LocalStdio(s) => Pin::new(s).poll_read(cx, buf),
         }
     }
@@ -222,25 +269,18 @@ impl AsyncWrite for RemoteLink {
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
         match self.get_mut() {
-            RemoteLink::StreamLocal(s) | RemoteLink::SessionExec(s) => {
-                Pin::new(s).poll_write(cx, buf)
-            }
             RemoteLink::LocalStdio(s) => Pin::new(s).poll_write(cx, buf),
         }
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         match self.get_mut() {
-            RemoteLink::StreamLocal(s) | RemoteLink::SessionExec(s) => Pin::new(s).poll_flush(cx),
             RemoteLink::LocalStdio(s) => Pin::new(s).poll_flush(cx),
         }
     }
 
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         match self.get_mut() {
-            RemoteLink::StreamLocal(s) | RemoteLink::SessionExec(s) => {
-                Pin::new(s).poll_shutdown(cx)
-            }
             RemoteLink::LocalStdio(s) => Pin::new(s).poll_shutdown(cx),
         }
     }
@@ -305,11 +345,8 @@ mod tests {
 
     #[test]
     fn every_variant_has_a_distinct_label() {
-        let labels = ["streamlocal", "session-exec", "local-stdio"];
-        let mut sorted = labels.to_vec();
-        sorted.sort_unstable();
-        sorted.dedup();
-        assert_eq!(sorted.len(), labels.len(), "labels must be distinguishable");
+        let labels = ["local-stdio"];
+        assert_eq!(labels.len(), 1);
     }
 
     #[test]
@@ -329,12 +366,6 @@ mod tests {
         );
         assert_eq!(
             choose_entry(None, true, cmd),
-            RemoteEntry::SessionExec {
-                command: cmd.into()
-            }
-        );
-        assert_eq!(
-            choose_entry(None, false, cmd),
             RemoteEntry::SessionExec {
                 command: cmd.into()
             }
@@ -366,13 +397,9 @@ mod tests {
         };
         assert_eq!(
             remote_control_socket(&explicit).as_deref(),
-            Some("/tmp/mine.sock"),
-            "an explicit $TTY7_CONTROL_SOCK outranks everything"
+            Some("/tmp/mine.sock")
         );
 
-        // $XDG_RUNTIME_DIR no longer places the socket: the server opens it in
-        // its config dir, so the path follows that and only falls back to the
-        // runtime dir when the config dir is too long for sun_path.
         let explicit_cfg = RemoteEnv {
             config_dir: Some("/home/me/.config/tty7".into()),
             xdg_runtime_dir: Some("/run/user/1000".into()),
@@ -381,16 +408,6 @@ mod tests {
         };
         assert_eq!(
             remote_control_socket(&explicit_cfg).as_deref(),
-            Some("/home/me/.config/tty7/control.sock"),
-            "an explicit $TTY7_CONFIG_DIR / $XTTY_CONFIG_DIR names the directory"
-        );
-
-        let trailing = RemoteEnv {
-            config_dir: Some("/home/me/.config/tty7/".into()),
-            ..RemoteEnv::default()
-        };
-        assert_eq!(
-            remote_control_socket(&trailing).as_deref(),
             Some("/home/me/.config/tty7/control.sock")
         );
 
@@ -400,8 +417,7 @@ mod tests {
         };
         assert_eq!(
             remote_control_socket(&home_only).as_deref(),
-            Some("/home/me/.config/xtty/control.sock"),
-            "with no $XTTY_CONFIG_DIR / $TTY7_CONFIG_DIR the remote server uses $HOME/.config/xtty"
+            Some("/home/me/.config/xtty/control.sock")
         );
 
         assert_eq!(remote_control_socket(&RemoteEnv::default()), None);
@@ -418,15 +434,8 @@ mod tests {
             tmpdir: Some("/tmp".into()),
         };
         let path = remote_control_socket(&env).expect("the temp dir is short enough");
-        assert!(
-            path.len() <= MAX_SOCKET_PATH_BYTES,
-            "{path} ({} bytes) would be rejected by bind()",
-            path.len()
-        );
-        assert!(
-            path.starts_with("/tmp/tty7-"),
-            "unexpected fallback: {path}"
-        );
+        assert!(path.len() <= MAX_SOCKET_PATH_BYTES);
+        assert!(path.starts_with("/tmp/tty7-"));
 
         let hopeless = RemoteEnv {
             control_sock: None,

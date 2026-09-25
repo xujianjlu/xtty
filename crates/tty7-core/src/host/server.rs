@@ -853,7 +853,7 @@ fn run_request(
             Vec::new(),
         ),
         ControlRequest::Routes => (
-            ReplyOk::Routes(crate::daemon::ssh::SshManager::global().routes()),
+            ReplyOk::Routes(Vec::new()),
             Vec::new(),
         ),
         ControlRequest::Status => (

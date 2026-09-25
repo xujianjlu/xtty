@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::io::{self, Read, Write};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -10,9 +10,8 @@ use crate::daemon::install::{
     InstallConfirm, InstallDecision, InstallPhase, InstallProgress, InstallRequest,
     MismatchedRemoteDaemon,
 };
-use crate::daemon::protocol::{self, AuthPromptKind, AuthResponse, DaemonMsg, NativeSshSpec};
+use crate::daemon::protocol::{self, DaemonMsg};
 use crate::daemon::remote_link::RemoteLink;
-use crate::daemon::ssh::{ConnectionKey, PromptBroker, SshConnection, SshManager};
 use crate::daemon::transport::Stream;
 
 pub const ROUTE_KIND: u8 = 51;
@@ -43,7 +42,6 @@ impl RouteChannel {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RouteTarget {
-    Ssh(Box<NativeSshSpec>),
     LocalStdio { program: String, args: Vec<String> },
 }
 
@@ -79,15 +77,6 @@ pub struct RouteAck {
 }
 
 impl RouteHeader {
-    pub fn ssh(spec: NativeSshSpec) -> RouteHeader {
-        RouteHeader {
-            target: RouteTarget::Ssh(Box::new(spec)),
-            server_command: None,
-            channel: RouteChannel::Control,
-            action: RouteAction::Forward,
-        }
-    }
-
     pub fn for_pane(mut self) -> RouteHeader {
         self.channel = RouteChannel::Pane;
         self
@@ -128,7 +117,6 @@ impl RouteHeader {
 
     pub fn describe(&self) -> String {
         match &self.target {
-            RouteTarget::Ssh(spec) => format!("ssh {}@{}:{}", spec.user, spec.host, spec.port),
             RouteTarget::LocalStdio { program, .. } => format!("local {program}"),
         }
     }
@@ -137,7 +125,6 @@ impl RouteHeader {
 impl RouteTarget {
     pub fn origin_key(&self) -> String {
         match self {
-            RouteTarget::Ssh(spec) => ConnectionKey::from_spec(spec).as_str().to_string(),
             RouteTarget::LocalStdio { program, .. } => format!("local-stdio:{program}"),
         }
     }
@@ -183,10 +170,6 @@ impl InstallRequestWire {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RoutePrompt {
-    Auth {
-        request_id: u64,
-        prompt: AuthPromptKind,
-    },
     Install {
         request_id: u64,
         request: Box<InstallRequestWire>,
@@ -203,10 +186,6 @@ pub enum RoutePrompt {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RouteReply {
-    Auth {
-        request_id: u64,
-        response: AuthResponse,
-    },
     Install {
         request_id: u64,
         approve: bool,
@@ -240,37 +219,6 @@ impl RouteReply {
     }
 }
 
-pub trait RouteAuthResponder: Send + Sync {
-    fn respond(&self, machine: &RouteTarget, prompt: &AuthPromptKind) -> AuthResponse;
-}
-
-pub struct CancelAuth;
-
-impl RouteAuthResponder for CancelAuth {
-    fn respond(&self, _machine: &RouteTarget, _prompt: &AuthPromptKind) -> AuthResponse {
-        AuthResponse::Cancelled
-    }
-}
-
-static AUTH_RESPONDER: OnceLock<Mutex<Arc<dyn RouteAuthResponder>>> = OnceLock::new();
-
-fn auth_responder_slot() -> &'static Mutex<Arc<dyn RouteAuthResponder>> {
-    AUTH_RESPONDER.get_or_init(|| Mutex::new(Arc::new(CancelAuth)))
-}
-
-pub fn set_route_auth_responder(responder: Arc<dyn RouteAuthResponder>) {
-    if let Ok(mut slot) = auth_responder_slot().lock() {
-        *slot = responder;
-    }
-}
-
-pub fn route_auth_responder() -> Arc<dyn RouteAuthResponder> {
-    auth_responder_slot()
-        .lock()
-        .map(|slot| slot.clone())
-        .unwrap_or_else(|_| Arc::new(CancelAuth))
-}
-
 pub fn negotiate<S>(stream: &mut S, header: &RouteHeader) -> io::Result<RouteAck>
 where
     for<'a> &'a mut S: Read + Write,
@@ -298,15 +246,8 @@ where
     }
 }
 
-fn answer(machine: &RouteTarget, prompt: RoutePrompt) -> Option<RouteReply> {
+fn answer(_machine: &RouteTarget, prompt: RoutePrompt) -> Option<RouteReply> {
     match prompt {
-        RoutePrompt::Auth { request_id, prompt } => {
-            let response = route_auth_responder().respond(machine, &prompt);
-            Some(RouteReply::Auth {
-                request_id,
-                response,
-            })
-        }
         RoutePrompt::Install {
             request_id,
             request,
@@ -396,7 +337,6 @@ impl RouteAck {
 }
 
 pub struct RouteSetup {
-    pub broker: Arc<PromptBroker>,
     pub confirm: Arc<dyn InstallConfirm>,
     pub progress: Arc<dyn InstallProgress>,
     pub mismatches: Arc<Mutex<Vec<MismatchedRemoteDaemon>>>,
@@ -406,7 +346,6 @@ pub struct RouteSetup {
 impl RouteSetup {
     pub fn unattended(channel: RouteChannel) -> RouteSetup {
         RouteSetup {
-            broker: PromptBroker::new(Box::new(|_| false)),
             confirm: Arc::new(crate::daemon::install::DenyInstall),
             progress: Arc::new(crate::daemon::install::SilentProgress),
             mismatches: Arc::new(Mutex::new(Vec::new())),
@@ -504,7 +443,13 @@ pub struct RemoteRouter;
 
 impl RemoteRouter {
     pub fn route(local: Stream, header: &RouteHeader) -> io::Result<()> {
-        SshManager::global().handle().block_on(drive(local, header))
+        // Native SSH routing was removed; only local stdio bridges remain.
+        // A dedicated runtime still owns the async copy because ProcessStream is tokio-based.
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(io::Error::other)?;
+        rt.block_on(drive(local, header))
     }
 }
 
@@ -512,27 +457,19 @@ async fn drive(local: Stream, header: &RouteHeader) -> io::Result<()> {
     let mut local = into_async(local)?;
 
     let (out, mut outbox) = tokio::sync::mpsc::unbounded_channel::<(u8, Vec<u8>)>();
-    let emitter = out.clone();
     let relay = Arc::new(Relay {
         out,
         pending: Mutex::new(HashMap::new()),
         next_id: AtomicU64::new(1),
     });
     let setup = RouteSetup {
-        broker: PromptBroker::new(Box::new(move |msg| match msg {
-            DaemonMsg::AuthPrompt { request_id, prompt } => {
-                serde_json::to_vec(&RoutePrompt::Auth { request_id, prompt })
-                    .is_ok_and(|payload| emitter.send((ROUTE_PROMPT_KIND, payload)).is_ok())
-            }
-            _ => true,
-        })),
         confirm: relay.clone(),
         progress: relay.clone(),
         mismatches: Arc::new(Mutex::new(Vec::new())),
         channel: header.channel,
     };
 
-    let Some((mut link, conn, leftover)) = ({
+    let Some(mut link) = ({
         let (mut read_half, mut write_half) = local.split();
         let mut frames = FrameReader::default();
         let mut opening = std::pin::pin!(perform(header, &setup));
@@ -546,7 +483,7 @@ async fn drive(local: Stream, header: &RouteHeader) -> io::Result<()> {
                 }
                 frame = frames.next(&mut read_half) => {
                     let (kind, payload) = frame?;
-                    deliver(kind, &payload, &setup, &relay);
+                    deliver(kind, &payload, &relay);
                 }
             }
         };
@@ -560,7 +497,7 @@ async fn drive(local: Stream, header: &RouteHeader) -> io::Result<()> {
         }
 
         match opened {
-            Ok(Performed::Linked(link, conn)) => {
+            Ok(Performed::Linked(link)) => {
                 log::info!(
                     "routing a connection to {} over {}",
                     header.describe(),
@@ -568,7 +505,7 @@ async fn drive(local: Stream, header: &RouteHeader) -> io::Result<()> {
                 );
                 let payload = ack_payload(&RouteAck::ok(&link))?;
                 write_frame(&mut write_half, ROUTE_KIND, &payload).await?;
-                Some((link, conn, frames.into_buffer()))
+                Some(link)
             }
             Ok(Performed::Acted(action)) => {
                 log::info!("performed {action:?} on {}", header.describe());
@@ -588,41 +525,14 @@ async fn drive(local: Stream, header: &RouteHeader) -> io::Result<()> {
         return Ok(());
     };
 
-    if !leftover.is_empty() {
-        tokio::io::AsyncWriteExt::write_all(&mut *link, &leftover).await?;
-    }
-    let copied = tokio::io::copy_bidirectional(&mut local, &mut *link).await;
-    // The same reasoning over SSH, where the note is the one this connection's
-    // probe left behind. `exec` on a session channel succeeds whatever the
-    // command turns out to be, so a server binary that has been deleted or
-    // moved since the probe proved it is discovered exactly here, by a link
-    // that opened and then said nothing. Forget it and the next pane on this
-    // connection pays for a fresh probe once; leave it and every pane on the
-    // connection repeats the same silent failure.
-    if let (RouteTarget::Ssh(_), Some(conn)) = (&header.target, conn.as_ref())
-        && header.server_command.is_none()
-        && !copied
-            .as_ref()
-            .is_ok_and(|(_, from_remote)| *from_remote > 0)
-    {
-        log::info!(
-            "ssh {}: the routed link closed without answering; proving the server again next time",
-            conn.key().as_str(),
-        );
-        // Off this thread, which is the one polling the route: the note's lock
-        // is also the connection's install gate, so a pane that is mid-probe or
-        // a replace that is mid-upload holds it for as long as that takes, and
-        // waiting here would keep the client's half of a link that is already
-        // gone open for the same span. Landing after whatever holds it is right
-        // either way — a note written by a probe that started before this link
-        // failed is exactly as suspect as the one it replaced.
-        let conn = conn.clone();
-        tokio::task::spawn_blocking(move || crate::daemon::install::forget_remote_server(&conn));
-    }
-
-    let (to_remote, to_local) = copied?;
+    let leftover = {
+        // leftover bytes already drained into link during setup in the old SSH path;
+        // LocalStdio opens cleanly with no pre-read buffer beyond FrameReader.
+        Vec::<u8>::new()
+    };
+    let _ = leftover;
+    let (to_remote, to_local) = tokio::io::copy_bidirectional(&mut local, &mut *link).await?;
     log::debug!("routed connection closed after {to_remote} up / {to_local} down bytes");
-    drop(conn);
     Ok(())
 }
 
@@ -675,22 +585,14 @@ impl FrameReader {
             self.buf.extend_from_slice(&chunk[..n]);
         }
     }
-
-    fn into_buffer(self) -> Vec<u8> {
-        self.buf
-    }
 }
 
-fn deliver(kind: u8, payload: &[u8], setup: &RouteSetup, relay: &Relay) {
+fn deliver(kind: u8, payload: &[u8], relay: &Relay) {
     if kind != ROUTE_REPLY_KIND {
         log::debug!("ignoring kind {kind} during route setup");
         return;
     }
     match RouteReply::decode(payload) {
-        Ok(RouteReply::Auth {
-            request_id,
-            response,
-        }) => setup.broker.deliver(request_id, response),
         Ok(RouteReply::Install {
             request_id,
             approve,
@@ -700,60 +602,32 @@ fn deliver(kind: u8, payload: &[u8], setup: &RouteSetup, relay: &Relay) {
 }
 
 enum Performed {
-    Linked(Box<RemoteLink>, Option<Arc<SshConnection>>),
+    Linked(Box<RemoteLink>),
     Acted(RouteAction),
 }
 
 async fn perform(header: &RouteHeader, setup: &RouteSetup) -> anyhow::Result<Performed> {
     match header.action {
         RouteAction::Forward => {
-            let (link, conn) = open_link(header, setup).await?;
-            Ok(Performed::Linked(Box::new(link), conn))
+            let link = open_link(header).await?;
+            Ok(Performed::Linked(Box::new(link)))
         }
         action @ (RouteAction::RestartServer | RouteAction::ReplaceServer) => {
-            restart_server(header, setup, action).await?;
-            Ok(Performed::Acted(action))
+            let _ = setup;
+            Err(anyhow::anyhow!(
+                "restarting/replacing a remote tty7-server over Native SSH was removed; \
+                 only local stdio bridges remain (action {action:?} on {})",
+                header.describe()
+            ))
         }
     }
 }
 
-async fn restart_server(
-    header: &RouteHeader,
-    setup: &RouteSetup,
-    action: RouteAction,
-) -> anyhow::Result<()> {
-    match (&header.target, action) {
-        (RouteTarget::Ssh(spec), RouteAction::ReplaceServer) => {
-            SshManager::global()
-                .replace_remote_server(spec, setup)
-                .await
-        }
-        (RouteTarget::Ssh(spec), _) => {
-            SshManager::global()
-                .restart_remote_server(spec, setup)
-                .await
-        }
-        _ => Err(anyhow::anyhow!(
-            "restarting tty7's server is only supported for machines it serves, not {}",
-            header.describe()
-        )),
-    }
-}
-
-async fn open_link(
-    header: &RouteHeader,
-    setup: &RouteSetup,
-) -> anyhow::Result<(RemoteLink, Option<Arc<SshConnection>>)> {
+async fn open_link(header: &RouteHeader) -> anyhow::Result<RemoteLink> {
     match &header.target {
-        RouteTarget::Ssh(spec) => {
-            let (link, conn) = SshManager::global()
-                .open_remote_link(spec, setup, header.server_command.as_deref())
-                .await?;
-            Ok((link, Some(conn)))
-        }
         RouteTarget::LocalStdio { program, args } => {
             let args: Vec<&str> = args.iter().map(String::as_str).collect();
-            Ok((RemoteLink::local_stdio(program, &args)?, None))
+            Ok(RemoteLink::local_stdio(program, &args)?)
         }
     }
 }
@@ -1010,64 +884,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(unix)]
-    fn negotiate_answers_an_auth_question() {
-        use std::os::unix::net::UnixStream;
-
-        struct Typed;
-        impl RouteAuthResponder for Typed {
-            fn respond(&self, machine: &RouteTarget, prompt: &AuthPromptKind) -> AuthResponse {
-                assert_eq!(machine.origin_key(), "local-stdio:x");
-                assert!(matches!(prompt, AuthPromptKind::Password { .. }));
-                AuthResponse::Secret("hunter2".into())
-            }
-        }
-
-        let (client, daemon) = UnixStream::pair().unwrap();
-        let daemon = std::thread::spawn(move || {
-            let mut daemon = daemon;
-            let _ = protocol::read_frame(&mut daemon).unwrap();
-            RoutePrompt::Auth {
-                request_id: 11,
-                prompt: AuthPromptKind::Password {
-                    user: "me".into(),
-                    host: "build-box".into(),
-                },
-            }
-            .write(&mut daemon)
-            .unwrap();
-            let (_, payload) = protocol::read_frame(&mut daemon).unwrap();
-            let reply = RouteReply::decode(&payload).unwrap();
-            RouteAck {
-                ok: true,
-                link: Some("session-exec".into()),
-                action: Some(RouteAction::Forward),
-                error: None,
-            }
-            .write(&mut daemon)
-            .unwrap();
-            reply
-        });
-
-        let _serialized = responder_lock();
-        set_route_auth_responder(Arc::new(Typed));
-        let mut client = client;
-        negotiate(&mut client, &RouteHeader::local_stdio("x", &[])).expect("acked");
-        set_route_auth_responder(Arc::new(CancelAuth));
-
-        match daemon.join().unwrap() {
-            RouteReply::Auth {
-                request_id,
-                response,
-            } => {
-                assert_eq!(request_id, 11);
-                assert!(matches!(response, AuthResponse::Secret(s) if s == "hunter2"));
-            }
-            other => panic!("wrong reply: {other:?}"),
-        }
-    }
-
-    #[test]
     fn a_scoped_mismatch_sink_diverts_the_record() {
         let sink = Arc::new(Mutex::new(Vec::new()));
         let entry = MismatchedRemoteDaemon {
@@ -1203,112 +1019,6 @@ mod tests {
             "{err}"
         );
         assert!(routed.join().unwrap().is_err());
-    }
-
-    #[test]
-    fn the_default_auth_responder_cancels() {
-        assert!(matches!(
-            CancelAuth.respond(
-                &RouteTarget::LocalStdio {
-                    program: "tty7-server".into(),
-                    args: vec![],
-                },
-                &AuthPromptKind::Password {
-                    user: "u".into(),
-                    host: "h".into(),
-                }
-            ),
-            AuthResponse::Cancelled
-        ));
-    }
-
-    #[test]
-    fn the_origin_key_of_an_ssh_target_is_its_connection_key() {
-        let spec: NativeSshSpec = serde_json::from_str(
-            r#"{"user":"me","host":"build-box","port":2222,"auth_mode":"agent"}"#,
-        )
-        .expect("a minimal spec");
-        let target = RouteTarget::Ssh(Box::new(spec.clone()));
-        assert_eq!(
-            target.origin_key(),
-            crate::daemon::ssh::ConnectionKey::from_spec(&spec)
-                .as_str()
-                .to_string()
-        );
-
-        let control = RouteTarget::LocalStdio {
-            program: "/opt/tty7-server".into(),
-            args: vec!["--stdio".into()],
-        };
-        let pane = RouteTarget::LocalStdio {
-            program: "/opt/tty7-server".into(),
-            args: vec!["--stdio".into(), "--pane".into()],
-        };
-        assert_eq!(control.origin_key(), pane.origin_key());
-        assert_ne!(
-            control.origin_key(),
-            RouteTarget::LocalStdio {
-                program: "other".into(),
-                args: vec![],
-            }
-            .origin_key()
-        );
-    }
-
-    #[test]
-    #[cfg(unix)]
-    fn a_relayed_prompt_names_the_machine_from_the_header() {
-        use std::os::unix::net::UnixStream;
-
-        #[derive(Default)]
-        struct Recorder(Mutex<Vec<String>>);
-        impl RouteAuthResponder for Recorder {
-            fn respond(&self, machine: &RouteTarget, _: &AuthPromptKind) -> AuthResponse {
-                self.0.lock().unwrap().push(machine.origin_key());
-                AuthResponse::Cancelled
-            }
-        }
-
-        let (client, daemon) = UnixStream::pair().unwrap();
-        let daemon = std::thread::spawn(move || {
-            let mut daemon = daemon;
-            let _ = protocol::read_frame(&mut daemon).unwrap();
-            RoutePrompt::Auth {
-                request_id: 1,
-                prompt: AuthPromptKind::Password {
-                    user: "me".into(),
-                    host: "build-box".into(),
-                },
-            }
-            .write(&mut daemon)
-            .unwrap();
-            let _ = protocol::read_frame(&mut daemon).unwrap();
-            RouteAck {
-                ok: true,
-                link: Some("local-stdio".into()),
-                action: Some(RouteAction::Forward),
-                error: None,
-            }
-            .write(&mut daemon)
-            .unwrap();
-        });
-
-        let _serialized = responder_lock();
-        let recorder = Arc::new(Recorder::default());
-        set_route_auth_responder(recorder.clone());
-        let mut client = client;
-        negotiate(
-            &mut client,
-            &RouteHeader::local_stdio("tty7-server", &["--stdio"]).for_pane(),
-        )
-        .expect("acked");
-        set_route_auth_responder(Arc::new(CancelAuth));
-        daemon.join().unwrap();
-
-        assert_eq!(
-            recorder.0.lock().unwrap().as_slice(),
-            ["local-stdio:tty7-server"]
-        );
     }
 
     #[test]
