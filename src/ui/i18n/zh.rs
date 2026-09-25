@@ -112,6 +112,35 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::SettingsCursorBlinkIntervalDesc => {
             "光标每次亮灭之间的秒数（0.1–2），可填小数。数值越大闪烁越慢。"
         }
+        L10nKey::SettingsTabStyle => "标签页",
+        L10nKey::SettingsTabShowUserHost => "显示 user@host",
+        L10nKey::SettingsTabShowUserHostDesc => {
+            "在标签芯片上显示 SSH 身份。若同时开启目录名，芯片为 user@host:文件夹。"
+        }
+        L10nKey::SettingsTabShowCwdBasename => "显示目录 basename",
+        L10nKey::SettingsTabShowCwdBasenameDesc => {
+            "芯片显示工作目录的最后一级；完整路径仍在悬停提示中。"
+        }
+        L10nKey::SettingsTabShowGitBranch => "显示 git 分支",
+        L10nKey::SettingsTabShowGitBranchDesc => {
+            "在标签上显示当前分支（侧栏另含 +/- 变更数）。"
+        }
+        L10nKey::SettingsTabShowAgentIcon => "显示 Agent 图标",
+        L10nKey::SettingsTabShowAgentIconDesc => {
+            "有 CLI Agent 运行时在标签上显示其头像。"
+        }
+        L10nKey::SettingsSearchTabShowUserHostKeywords => {
+            "标签 芯片 身份 user host ssh 跳板 tab identity"
+        }
+        L10nKey::SettingsSearchTabShowCwdBasenameKeywords => {
+            "标签 芯片 目录 basename 文件夹 路径 cwd tab"
+        }
+        L10nKey::SettingsSearchTabShowGitBranchKeywords => {
+            "标签 芯片 git 分支 状态 变更 tab branch"
+        }
+        L10nKey::SettingsSearchTabShowAgentIconKeywords => {
+            "标签 芯片 agent 头像 claude codex 图标 tab"
+        }
         L10nKey::SettingsLanguage => "语言",
         L10nKey::SettingsLanguageDesc => "选择 xtty 界面使用的语言。",
         L10nKey::SettingsLanguageEnglish => "English",

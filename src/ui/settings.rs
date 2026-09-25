@@ -472,6 +472,26 @@ fn settings_search_entries() -> &'static [SearchEntry] {
         },
         SearchEntry {
             section: Appearance,
+            title: SettingsTabShowUserHost,
+            keywords: SettingsSearchTabShowUserHostKeywords,
+        },
+        SearchEntry {
+            section: Appearance,
+            title: SettingsTabShowCwdBasename,
+            keywords: SettingsSearchTabShowCwdBasenameKeywords,
+        },
+        SearchEntry {
+            section: Appearance,
+            title: SettingsTabShowGitBranch,
+            keywords: SettingsSearchTabShowGitBranchKeywords,
+        },
+        SearchEntry {
+            section: Appearance,
+            title: SettingsTabShowAgentIcon,
+            keywords: SettingsSearchTabShowAgentIconKeywords,
+        },
+        SearchEntry {
+            section: Appearance,
             title: SettingsAnsiColors,
             keywords: SettingsSearchAnsiColorsKeywords,
         },
@@ -2722,6 +2742,52 @@ impl Tty7App {
                 t(L10nKey::SettingsCursorBlinkInterval),
                 t(L10nKey::SettingsCursorBlinkIntervalDesc),
                 blink_interval_control,
+                cx,
+            ))
+            .child(self.section_rule(cx))
+            .child(self.section_header(t(L10nKey::SettingsTabStyle), cx))
+            .child(self.settings_row(
+                t(L10nKey::SettingsTabShowUserHost),
+                t(L10nKey::SettingsTabShowUserHostDesc),
+                crate::ui::theme::switch("tab-show-user-host", cx)
+                    .checked(cx.global::<Config>().tab_show_user_host)
+                    .on_click(cx.listener(|this, on: &bool, _w, cx| {
+                        this.set_tab_show_user_host(*on, cx)
+                    }))
+                    .into_any_element(),
+                cx,
+            ))
+            .child(self.settings_row(
+                t(L10nKey::SettingsTabShowCwdBasename),
+                t(L10nKey::SettingsTabShowCwdBasenameDesc),
+                crate::ui::theme::switch("tab-show-cwd-basename", cx)
+                    .checked(cx.global::<Config>().tab_show_cwd_basename)
+                    .on_click(cx.listener(|this, on: &bool, _w, cx| {
+                        this.set_tab_show_cwd_basename(*on, cx)
+                    }))
+                    .into_any_element(),
+                cx,
+            ))
+            .child(self.settings_row(
+                t(L10nKey::SettingsTabShowGitBranch),
+                t(L10nKey::SettingsTabShowGitBranchDesc),
+                crate::ui::theme::switch("tab-show-git-branch", cx)
+                    .checked(cx.global::<Config>().tab_show_git_branch)
+                    .on_click(cx.listener(|this, on: &bool, _w, cx| {
+                        this.set_tab_show_git_branch(*on, cx)
+                    }))
+                    .into_any_element(),
+                cx,
+            ))
+            .child(self.settings_row(
+                t(L10nKey::SettingsTabShowAgentIcon),
+                t(L10nKey::SettingsTabShowAgentIconDesc),
+                crate::ui::theme::switch("tab-show-agent-icon", cx)
+                    .checked(cx.global::<Config>().tab_show_agent_icon)
+                    .on_click(cx.listener(|this, on: &bool, _w, cx| {
+                        this.set_tab_show_agent_icon(*on, cx)
+                    }))
+                    .into_any_element(),
                 cx,
             ))
             .into_any_element()

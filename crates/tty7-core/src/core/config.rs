@@ -236,6 +236,21 @@ pub struct Config {
     pub new_tab_position: NewTabPosition,
     #[serde(default, deserialize_with = "de_lenient")]
     pub tab_bar_position: TabBarPosition,
+    /// Settings → Appearance → Tabs: put `user@host` on the chip when known.
+    /// Off by default so a known cwd still reads as its basename (opt-batch);
+    /// turn on to restore `user@host` or compose `user@host:basename`.
+    #[serde(default)]
+    pub tab_show_user_host: bool,
+    /// Settings → Appearance → Tabs: show the working-directory leaf name.
+    #[serde(default = "default_true")]
+    pub tab_show_cwd_basename: bool,
+    /// Settings → Appearance → Tabs: git branch (+/−) on strip chips and the
+    /// left tab sidebar.
+    #[serde(default = "default_true")]
+    pub tab_show_git_branch: bool,
+    /// Settings → Appearance → Tabs: agent avatar on tab chips.
+    #[serde(default = "default_true")]
+    pub tab_show_agent_icon: bool,
     #[serde(default = "default_sidebar_width")]
     pub sidebar_width: f32,
     #[serde(default)]
@@ -644,6 +659,10 @@ impl Default for Config {
             scrollback_limit: 10_000,
             new_tab_position: NewTabPosition::AfterCurrent,
             tab_bar_position: TabBarPosition::Left,
+            tab_show_user_host: false,
+            tab_show_cwd_basename: true,
+            tab_show_git_branch: true,
+            tab_show_agent_icon: true,
             sidebar_width: default_sidebar_width(),
             sidebar_collapsed: false,
             right_panel_visible: false,

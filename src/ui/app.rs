@@ -3331,6 +3331,22 @@ impl Tty7App {
         }
     }
 
+    pub(crate) fn set_tab_show_user_host(&mut self, on: bool, cx: &mut Context<Self>) {
+        self.update_config(cx, |cfg| cfg.tab_show_user_host = on);
+    }
+
+    pub(crate) fn set_tab_show_cwd_basename(&mut self, on: bool, cx: &mut Context<Self>) {
+        self.update_config(cx, |cfg| cfg.tab_show_cwd_basename = on);
+    }
+
+    pub(crate) fn set_tab_show_git_branch(&mut self, on: bool, cx: &mut Context<Self>) {
+        self.update_config(cx, |cfg| cfg.tab_show_git_branch = on);
+    }
+
+    pub(crate) fn set_tab_show_agent_icon(&mut self, on: bool, cx: &mut Context<Self>) {
+        self.update_config(cx, |cfg| cfg.tab_show_agent_icon = on);
+    }
+
     pub(crate) fn set_cursor_blink_interval(&mut self, secs: f64, cx: &mut Context<Self>) {
         self.update_config(cx, |cfg| {
             let secs = if secs.is_finite() && secs > 0.0 {
