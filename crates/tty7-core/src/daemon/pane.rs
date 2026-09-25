@@ -4759,7 +4759,6 @@ mod tests {
                 PaneSeed {
                     pane: PANE,
                     cwd: Some("/work/api".to_string()),
-                    ssh_spec: None,
                     agent: Some(AgentFacts {
                         agent: CLIAgent::Claude,
                         session_id: Some("sess-1".to_string()),

@@ -348,7 +348,6 @@ fn new_workspace(path: Option<String>, open: bool, backend: &mut dyn Backend) ->
         pane: PaneSeed {
             pane,
             cwd: path,
-            ssh_spec: None,
             agent: None,
             shell: None,
         },
@@ -421,7 +420,6 @@ fn run(args: RunArgs, ctx: &Context, backend: &mut dyn Backend) -> Result<Outcom
             pane: PaneSeed {
                 pane,
                 cwd: args.cwd,
-                ssh_spec: None,
                 agent: None,
                 shell: None,
             },
@@ -476,7 +474,6 @@ fn pane_split(args: SplitArgs, ctx: &Context, backend: &mut dyn Backend) -> Resu
         new: PaneSeed {
             pane: new,
             cwd,
-            ssh_spec: None,
             agent: None,
             shell: None,
         },
@@ -735,7 +732,6 @@ fn tab_new(
         pane: PaneSeed {
             pane,
             cwd,
-            ssh_spec: None,
             agent: None,
             shell: None,
         },
@@ -2113,7 +2109,6 @@ mod tests {
                     pane: PaneSeed {
                         pane: 6,
                         cwd: Some("C:\\newproj".into()),
-                        ssh_spec: None,
                         agent: None,
                         shell: None,
                     },
@@ -2352,7 +2347,6 @@ mod tests {
                 pane: PaneSeed {
                     pane: 6,
                     cwd: Some("C:\\elsewhere".into()),
-                    ssh_spec: None,
                     agent: None,
                     shell: None,
                 },
@@ -2394,7 +2388,6 @@ mod tests {
                     // Rebuilt from the registry: the tree dropped this pane's
                     // record when the tab holding it closed.
                     cwd: Some("C:\\work".into()),
-                    ssh_spec: None,
                     agent: None,
                     shell: None,
                 },
@@ -2434,7 +2427,6 @@ mod tests {
                 pane: PaneSeed {
                     pane: 37,
                     cwd: Some("C:\\else".into()),
-                    ssh_spec: None,
                     agent: None,
                     shell: None,
                 },
@@ -2517,7 +2509,6 @@ mod tests {
                     new: PaneSeed {
                         pane: 6,
                         cwd: Some("C:\\proj".into()),
-                        ssh_spec: None,
                         agent: None,
                         shell: None,
                     },
@@ -3175,7 +3166,6 @@ mod tests {
                     pane: PaneSeed {
                         pane: 6,
                         cwd: Some("C:\\proj".into()),
-                        ssh_spec: None,
                         agent: None,
                         shell: None,
                     },
@@ -3486,7 +3476,7 @@ mod tests {
             probe: Default::default(),
             context: Some(tty7_core::daemon::protocol::PaneContext {
                 remote: Some(RemoteContext {
-                    kind: RemoteKind::NativeSsh,
+                    kind: RemoteKind::Ssh,
                     argv: Vec::new(),
                     target: "me@build-box".into(),
                 }),

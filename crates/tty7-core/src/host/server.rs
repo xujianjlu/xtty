@@ -1723,7 +1723,6 @@ mod aggregate_tests {
                 machine::PaneSeed {
                     pane: 7,
                     cwd: Some("/repo/tty7".into()),
-                    ssh_spec: None,
                     agent: None,
                     shell: None,
                 },
