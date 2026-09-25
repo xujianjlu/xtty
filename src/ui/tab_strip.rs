@@ -1431,6 +1431,35 @@ impl Tty7App {
             .into_any_element()
     }
 
+    /// Amber "B" while this tab's pane broadcast group is on — so a zoomed or
+    /// inactive chip still says input is being mirrored inside the tab.
+    pub(crate) fn broadcast_mark(
+        &self,
+        id: impl Into<gpui::ElementId>,
+        cx: &App,
+    ) -> gpui::AnyElement {
+        let tip = chord_tooltip(
+            t(L10nKey::AppMenuToggleBroadcastInput),
+            "ToggleBroadcastInput",
+            cx,
+        );
+        div()
+            .id(id)
+            .flex_shrink_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .size(px(16.))
+            .rounded(px(3.))
+            .bg(gpui::hsla(0.08, 0.85, 0.52, 0.22))
+            .text_xs()
+            .font_weight(FontWeight::BOLD)
+            .text_color(gpui::hsla(0.08, 0.85, 0.45, 1.0))
+            .child("B")
+            .tooltip(move |window, cx| tip(window, cx).into())
+            .into_any_element()
+    }
+
     /// The full title behind a shortened one, for the row to name on hover.
     ///
     /// `tab_label` hands back a path's basename (`~/a/b/c` → `c`), so a tab
@@ -1900,6 +1929,7 @@ impl Tty7App {
             let agent_status = tab.agent_status(cx);
             let agent_unread = tab.agent_unread_count(cx);
             let zoomed = self.tab_is_zoomed(i);
+            let broadcasting = tab.broadcast_input;
 
             let rename_input = self
                 .renaming
@@ -2033,6 +2063,9 @@ impl Tty7App {
                 // pointer that came to read it.
                 .when(zoomed, |chip| {
                     chip.child(self.zoom_mark(("tab-zoom", i), cx))
+                })
+                .when(broadcasting, |chip| {
+                    chip.child(self.broadcast_mark(("tab-broadcast", i), cx))
                 })
                 .child(label_region)
                 .when(show_badges && i < 9, |chip| {
