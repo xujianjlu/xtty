@@ -3141,32 +3141,41 @@ impl Tty7App {
     fn open_typed_ssh_connect(&mut self, input: &str, window: &mut Window, cx: &mut Context<Self>) {
         match parse_ssh_connect_input(input) {
             Ok(parsed) => {
-                let (profile, proxy_jump) =
-                    match ssh_config::resolve_alias_to_profile(&parsed.profile.host) {
-                        Some(resolved) => {
-                            let mut p = resolved.profile;
-                            if !parsed.profile.user.is_empty() {
-                                p.user = parsed.profile.user;
-                            }
-                            if parsed.profile.port != 22 {
-                                p.port = parsed.profile.port;
-                            }
-                            if !parsed.profile.identity_files.is_empty() {
-                                p.identity_files = parsed.profile.identity_files;
-                            }
-                            (p, parsed.proxy_jump.or(resolved.proxy_jump))
+                let profile = match ssh_config::resolve_alias_to_profile(&parsed.profile.host) {
+                    Some(resolved) => {
+                        let mut p = resolved.profile;
+                        if !parsed.profile.user.is_empty() {
+                            p.user = parsed.profile.user;
                         }
-                        None => (parsed.profile, parsed.proxy_jump),
-                    };
-                let verify = cx.global::<Config>().verify_host_keys;
-                let spec = crate::ui::ssh_connect::native_spec_from_transient_profile(
-                    &profile,
-                    proxy_jump,
-                    &crate::core::keychain::OsCredentialStore,
-                    verify,
-                    &crate::ui::ssh_connect::config_alias_resolver,
-                );
-                self.open_native_ssh_tab(Box::new(spec), window, cx);
+                        if parsed.profile.port != 22 {
+                            p.port = parsed.profile.port;
+                        }
+                        if !parsed.profile.identity_files.is_empty() {
+                            p.identity_files = parsed.profile.identity_files;
+                        }
+                        if let Some(jump) = parsed
+                            .proxy_jump
+                            .or(resolved.proxy_jump)
+                            .filter(|j| !j.is_empty())
+                        {
+                            if p.jump_host.is_none() && p.proxy_command.is_none() {
+                                p.proxy_command = Some(format!("ssh -W %h:%p {jump}"));
+                            }
+                        }
+                        p
+                    }
+                    None => {
+                        let mut p = parsed.profile;
+                        if let Some(jump) = parsed.proxy_jump.filter(|j| !j.is_empty()) {
+                            if p.proxy_command.is_none() {
+                                p.proxy_command = Some(format!("ssh -W %h:%p {jump}"));
+                            }
+                        }
+                        p
+                    }
+                };
+                let profiles = cx.global::<Config>().ssh_profiles.clone();
+                self.open_system_ssh(&profile, &profiles, SpawnWhere::NewTab, window, cx);
             }
             Err(reason) => self.push_ssh_connect_error(reason, cx),
         }

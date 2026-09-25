@@ -439,28 +439,28 @@ impl Tty7App {
                 .then(|| section.name.as_ref())
                 .flatten()
                 .and_then(|_| {
-                let rows = &visible_by_section[group_ix];
-                if rows.is_empty() {
-                    return None;
-                }
-                // Only rows that *have* a status get a vote. A tab that was
-                // just opened has none until its shell reports a directory
-                // and the poll comes back; counting it as a disagreement
-                // pulled the branch off the header and grew a branch line
-                // under every sibling for the half second it took, then
-                // folded them all back — the column jumped twice for every
-                // ⌘T. Unknown is not different; it is not yet known.
-                let mut known = rows
-                    .iter()
-                    .filter_map(|&i| Some((i, self.tabs[i].git_status(Some(window), cx)?)));
-                let (first, status) = known.next()?;
-                let same = known.all(|(_, other)| other == status);
-                same.then(|| SharedGit {
-                    status,
-                    click: git_click(&self.tabs[first], window, cx),
-                    rows: rows.clone(),
-                })
-            });
+                    let rows = &visible_by_section[group_ix];
+                    if rows.is_empty() {
+                        return None;
+                    }
+                    // Only rows that *have* a status get a vote. A tab that was
+                    // just opened has none until its shell reports a directory
+                    // and the poll comes back; counting it as a disagreement
+                    // pulled the branch off the header and grew a branch line
+                    // under every sibling for the half second it took, then
+                    // folded them all back — the column jumped twice for every
+                    // ⌘T. Unknown is not different; it is not yet known.
+                    let mut known = rows
+                        .iter()
+                        .filter_map(|&i| Some((i, self.tabs[i].git_status(Some(window), cx)?)));
+                    let (first, status) = known.next()?;
+                    let same = known.all(|(_, other)| other == status);
+                    same.then(|| SharedGit {
+                        status,
+                        click: git_click(&self.tabs[first], window, cx),
+                        rows: rows.clone(),
+                    })
+                });
             for (slot, i) in visible.into_iter().enumerate() {
                 let badge_pos = badge_pos[i];
                 let tab = &self.tabs[i];
@@ -586,7 +586,8 @@ impl Tty7App {
                 };
                 let mut branch_shown: Option<(SharedString, SharedString, u32, u32)> = None;
                 let mut cwd_shown: Option<(SharedString, SharedString)> = None;
-                let git_line = match shared_git.is_some() || !cx.global::<Config>().tab_show_git_branch
+                let git_line = match shared_git.is_some()
+                    || !cx.global::<Config>().tab_show_git_branch
                 {
                     true => None,
                     false => tab.git_status(Some(window), cx),

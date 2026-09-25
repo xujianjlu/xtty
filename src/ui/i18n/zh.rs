@@ -122,13 +122,9 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
             "芯片显示工作目录的最后一级；完整路径仍在悬停提示中。"
         }
         L10nKey::SettingsTabShowGitBranch => "显示 git 分支",
-        L10nKey::SettingsTabShowGitBranchDesc => {
-            "在标签上显示当前分支（侧栏另含 +/- 变更数）。"
-        }
+        L10nKey::SettingsTabShowGitBranchDesc => "在标签上显示当前分支（侧栏另含 +/- 变更数）。",
         L10nKey::SettingsTabShowAgentIcon => "显示 Agent 图标",
-        L10nKey::SettingsTabShowAgentIconDesc => {
-            "有 CLI Agent 运行时在标签上显示其头像。"
-        }
+        L10nKey::SettingsTabShowAgentIconDesc => "有 CLI Agent 运行时在标签上显示其头像。",
         L10nKey::SettingsSearchTabShowUserHostKeywords => {
             "标签 芯片 身份 user host ssh 跳板 tab identity"
         }

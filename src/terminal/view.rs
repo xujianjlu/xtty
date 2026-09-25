@@ -1715,6 +1715,12 @@ impl TerminalView {
         }
     }
 
+    /// Seed the tab chip from a known `user@host` before OSC / process-table
+    /// facts arrive (host picker → system `ssh`).
+    pub(crate) fn seed_connection_identity(&mut self, identity: String, cx: &mut Context<Self>) {
+        self.set_terminal_identity(identity, cx);
+    }
+
     /// Keep the tab chip on the *current* hop's `user@host`.
     ///
     /// Sources:

@@ -40,6 +40,10 @@ impl Tty7App {
     /// A saved host opened where the caller asks for it — a tab of its own, or
     /// beside the pane in front of the user when the new-tab menu's row was
     /// taken with ⌥ held.
+    ///
+    /// Opens a **local** pane running system `ssh` (not the russh Native path).
+    /// Tab identity/cwd come from session facts (process table / OSC), same as
+    /// a typed `ssh` in a shell.
     pub(crate) fn connect_ssh_profile_at(
         &mut self,
         profile_id: uuid::Uuid,
@@ -57,13 +61,8 @@ impl Tty7App {
             return;
         };
         self.bump_ssh_frecency(profile_id, cx);
-        let spec = Box::new(self.native_ssh_spec_for_profile(&profile, cx));
-        match at {
-            SpawnWhere::NewTab => self.open_native_ssh_tab(spec, window, cx),
-            SpawnWhere::Split => {
-                self.split_into(gpui::Axis::Horizontal, Some(SpawnAs::Ssh(spec)), window, cx)
-            }
-        }
+        let profiles = cx.global::<Config>().ssh_profiles.clone();
+        self.open_system_ssh(&profile, &profiles, at, window, cx);
     }
 
     pub(crate) fn quick_connect(
@@ -80,14 +79,16 @@ impl Tty7App {
             if let Some(port) = qc.port {
                 profile.port = port;
             }
-            let spec = native_spec_from_transient_profile(
-                &profile,
-                resolved.proxy_jump,
-                &OsCredentialStore,
-                cx.global::<Config>().verify_host_keys,
-                &config_alias_resolver,
-            );
-            self.open_native_ssh_tab(Box::new(spec), window, cx);
+            // Config `ProxyJump` aliases become profile jump / -J via openssh_argv
+            // when we also have a jump string — fold it into proxy_command-style
+            // only when the resolved profile has no jump_host id.
+            if let Some(jump) = resolved.proxy_jump.filter(|j| !j.is_empty()) {
+                if profile.jump_host.is_none() && profile.proxy_command.is_none() {
+                    profile.proxy_command = Some(format!("ssh -W %h:%p {jump}"));
+                }
+            }
+            let profiles = cx.global::<Config>().ssh_profiles.clone();
+            self.open_system_ssh(&profile, &profiles, SpawnWhere::NewTab, window, cx);
             return;
         }
         let port = qc.port_or_default();
@@ -97,8 +98,35 @@ impl Tty7App {
         if let Some(user) = qc.user {
             profile.user = user;
         }
-        let spec = Box::new(self.native_ssh_spec_for_profile(&profile, cx));
-        self.open_native_ssh_tab(spec, window, cx);
+        let profiles = cx.global::<Config>().ssh_profiles.clone();
+        self.open_system_ssh(&profile, &profiles, SpawnWhere::NewTab, window, cx);
+    }
+
+    /// Spawn local PTY with `ssh` argv; seed chip from profile user@host.
+    fn open_system_ssh(
+        &mut self,
+        profile: &SshProfile,
+        profiles: &[SshProfile],
+        at: SpawnWhere,
+        window: &mut gpui::Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let args = crate::core::ssh_profile::openssh_argv(profile, profiles);
+        let shell = Some(crate::daemon::protocol::ShellSpec {
+            program: "ssh".into(),
+            args,
+            args_are_tty7_defaults: false,
+        });
+        let identity = tty7_core::core::tab_view::connection_identity(
+            &profile.user,
+            &profile.host,
+        );
+        self.open_shell(shell, at, window, cx);
+        if let Some(identity) = identity {
+            if let Some(view) = self.focused_pane_view(window, cx) {
+                view.update(cx, |v, cx| v.seed_connection_identity(identity, cx));
+            }
+        }
     }
 
     pub(crate) fn restart_ssh_session(

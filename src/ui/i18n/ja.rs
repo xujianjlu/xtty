@@ -144,9 +144,7 @@ pub fn translate_ja(key: L10nKey) -> Option<&'static str> {
             "タブに現在のブランチを出します（サイドバーでは +/- も）"
         }
         L10nKey::SettingsTabShowAgentIcon => "Agent アイコンを表示",
-        L10nKey::SettingsTabShowAgentIconDesc => {
-            "CLI Agent 実行中はタブにアバターを出します"
-        }
+        L10nKey::SettingsTabShowAgentIconDesc => "CLI Agent 実行中はタブにアバターを出します",
         L10nKey::SettingsSearchTabShowUserHostKeywords => {
             "タブ チップ 身元 user host ssh hop tab identity"
         }

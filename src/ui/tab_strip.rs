@@ -204,11 +204,7 @@ pub(crate) fn label_of_with(
             return None;
         }
         let s = shortened(raw);
-        if s.trim().is_empty() {
-            None
-        } else {
-            Some(s)
-        }
+        if s.trim().is_empty() { None } else { Some(s) }
     };
     let compose_identity_basename = |identity: String, basename: Option<String>| -> String {
         match (options.show_user_host, basename) {
@@ -231,7 +227,8 @@ pub(crate) fn label_of_with(
                 let path = path.trim();
                 let basename = if !path.is_empty() && path != title.trim() {
                     basename_of(path)
-                } else if let Some(cwd) = view.cwd.as_deref().map(str::trim).filter(|c| !c.is_empty())
+                } else if let Some(cwd) =
+                    view.cwd.as_deref().map(str::trim).filter(|c| !c.is_empty())
                 {
                     basename_of(cwd)
                 } else {
@@ -2137,17 +2134,20 @@ impl Tty7App {
                             .bg(gpui::rgb(rgb)),
                     )
                 })
-                .when_some(agent.filter(|_| cx.global::<Config>().tab_show_agent_icon), |chip, agent| {
-                    chip.child(self.tab_avatar(
-                        ("tab-avatar", i),
-                        Some(agent),
-                        agent_status,
-                        agent_unread,
-                        None,
-                        18.,
-                        cx,
-                    ))
-                })
+                .when_some(
+                    agent.filter(|_| cx.global::<Config>().tab_show_agent_icon),
+                    |chip, agent| {
+                        chip.child(self.tab_avatar(
+                            ("tab-avatar", i),
+                            Some(agent),
+                            agent_status,
+                            agent_unread,
+                            None,
+                            18.,
+                            cx,
+                        ))
+                    },
+                )
                 // Leading, beside the other state marks: the trailing end of a
                 // chip belongs to the badge and to the close button that fades
                 // in over it, and a mark parked there would vanish under the

@@ -142,15 +142,11 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::SettingsTabShowAgentIconDesc => {
             "Show the CLI agent avatar on tabs when an agent is running."
         }
-        L10nKey::SettingsSearchTabShowUserHostKeywords => {
-            "tab chip identity user host ssh hop"
-        }
+        L10nKey::SettingsSearchTabShowUserHostKeywords => "tab chip identity user host ssh hop",
         L10nKey::SettingsSearchTabShowCwdBasenameKeywords => {
             "tab chip cwd directory basename folder path"
         }
-        L10nKey::SettingsSearchTabShowGitBranchKeywords => {
-            "tab chip git branch status diff"
-        }
+        L10nKey::SettingsSearchTabShowGitBranchKeywords => "tab chip git branch status diff",
         L10nKey::SettingsSearchTabShowAgentIconKeywords => {
             "tab chip agent avatar claude codex icon"
         }
