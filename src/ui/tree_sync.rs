@@ -1603,14 +1603,13 @@ fn session_pane_from_node(node: &PaneNode, panes: &[PaneRecord]) -> SessionPane 
     match node {
         PaneNode::Leaf { pane } => {
             let record = panes.iter().find(|p| p.id == *pane);
-            let (cwd, ssh_spec, agent, shell) = match record {
+            let (cwd, agent, shell) = match record {
                 Some(r) => (
                     r.cwd.clone().map(std::path::PathBuf::from),
-                    None::<Box<crate::ui::native_gone::NativeSshSpec>>,
                     r.agent.clone(),
                     r.shell.clone(),
                 ),
-                None => (None, None, None, None),
+                None => (None, None, None),
             };
             SessionPane::Leaf {
                 cwd,

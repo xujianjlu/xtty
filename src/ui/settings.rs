@@ -4843,18 +4843,6 @@ impl Tty7App {
                     .flex_shrink_0()
                     .gap_2()
                     .child(
-                        // Dials the host exactly as Connect would — proxy, jump
-                        // and all — but keeps the answer here instead of
-                        // spending a tab on finding out.
-                        Button::new("ssh-form-test")
-                            .label(t(L10nKey::SettingsTestConnection))
-                            .small()
-                            .disabled(!errors.is_empty() || testing)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.test_ssh_form_connection(window, cx)
-                            })),
-                    )
-                    .child(
                         Button::new("ssh-form-save")
                             .label(t(L10nKey::Save))
                             .small()

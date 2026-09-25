@@ -1281,11 +1281,7 @@ impl Tty7App {
                 Icon::empty().path("icons/git-branch.svg"),
                 L10nKey::PanelChangesTitle,
             ),
-            (
-                RightPanelTab::Files,
-                Icon::new(IconName::FolderClosed),
-                L10nKey::PanelFilesTitle,
-            ),
+            // Files / SFTP tab abolished with Native SSH.
         ]
         .into_iter()
         .map(|(tab, icon, label_key)| {

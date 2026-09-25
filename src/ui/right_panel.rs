@@ -1211,13 +1211,8 @@ impl Tty7App {
             .procs(Some(pane_id))
             .map(|p| (p.ports.clone(), p.probe.clone()))
             .unwrap_or_default();
-        let forwards: Vec<ManagedForward> = self
-            .loopback_panel
-            .managed
-            .iter()
-            .filter(|m| m.pane_id == pane_id)
-            .cloned()
-            .collect();
+        // Managed forwards abolished with Native SSH.
+        let forwards: Vec<ManagedForward> = Vec::new();
         let form_open = self.loopback_panel.form_pane_id == Some(pane_id);
         // A pane that cannot hold a forward and is serving nothing has no
         // section: the heading alone would be an empty promise.

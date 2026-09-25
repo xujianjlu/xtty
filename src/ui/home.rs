@@ -464,7 +464,6 @@ mod tests {
             shell: None,
             cwd: cwd.map(PathBuf::from),
             pane_id: None,
-            ssh_spec: None,
             agent: None,
             agent_session_id: None,
             agent_launch_argv: None,
