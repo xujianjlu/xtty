@@ -746,6 +746,25 @@ pub(crate) fn apply_cursor_hide_mode(cx: &mut App) {
     cx.set_cursor_hide_mode(mode);
 }
 
+/// Clear any forced app appearance so macOS `NSOpenPanel` / `NSSavePanel`
+/// render with the system Finder chrome (not our theme's DarkAqua sheet).
+///
+/// Pair with [`end_system_file_dialog_appearance`] after the dialog closes.
+pub(crate) fn begin_system_file_dialog_appearance() {
+    sync_native_appearance(None);
+}
+
+/// Restore the theme-driven native appearance after a system file dialog.
+pub(crate) fn end_system_file_dialog_appearance(cx: &App) {
+    let follow = cx.global::<Config>().theme_follow_system;
+    if follow {
+        sync_native_appearance(None);
+        return;
+    }
+    let theme = presets::by_id(cx, &effective_preset_id(cx));
+    sync_native_appearance(Some(theme.dark));
+}
+
 fn sync_native_appearance(dark: Option<bool>) {
     use objc2::MainThreadMarker;
     use objc2_app_kit::{

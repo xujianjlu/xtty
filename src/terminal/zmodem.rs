@@ -1,6 +1,7 @@
 //! In-pane ZMODEM (`rz` / `sz`) support.
 //!
-//! Remote `sz` advertises with ZRQINIT → we receive into `~/Downloads`.
+//! Remote `sz` advertises with ZRQINIT → we open a native folder picker, then
+//! receive into the chosen directory.
 //! Remote `rz` advertises with ZRINIT → we open a native file picker and send.
 //!
 //! The reader thread peels the handshake out of the VT stream so binary frames
@@ -19,7 +20,7 @@ use zmodem2::{Receiver, ReceiverEvent, Sender, SenderEvent};
 
 /// How long a live transfer may sit with no wire/file progress before we abort.
 const TRANSFER_IDLE: Duration = Duration::from_secs(45);
-/// How long the native file picker may stay open before we abort `rz`.
+/// How long a native file/folder picker may stay open before we abort.
 const PICKER_IDLE: Duration = Duration::from_secs(120);
 
 #[cfg(test)]
@@ -41,7 +42,7 @@ const MAX_INBOUND: usize = 4 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ZmodemRole {
-    /// Remote is sending (`sz`) — we receive.
+    /// Remote is sending (`sz`) — we receive after a folder picker.
     Receive = 1,
     /// Remote is receiving (`rz`) — we send after a file picker.
     Send = 2,
@@ -256,19 +257,6 @@ pub(crate) fn cancel_sequence() -> Vec<u8> {
     vec![CAN; 8]
 }
 
-fn download_dir() -> PathBuf {
-    #[cfg(test)]
-    {
-        if let Some(dir) = DOWNLOAD_DIR_OVERRIDE.with(|slot| slot.borrow().clone()) {
-            return dir;
-        }
-    }
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("Downloads")
-}
-
 fn sanitize_remote_name(raw: &[u8]) -> String {
     let lossy = String::from_utf8_lossy(raw);
     let name = Path::new(lossy.as_ref())
@@ -283,9 +271,8 @@ fn sanitize_remote_name(raw: &[u8]) -> String {
     }
 }
 
-fn free_download_path(name: &str) -> Option<PathBuf> {
-    let dir = download_dir();
-    let _ = std::fs::create_dir_all(&dir);
+fn free_download_path(dir: &Path, name: &str) -> Option<PathBuf> {
+    let _ = std::fs::create_dir_all(dir);
     let first = dir.join(name);
     if !first.exists() {
         return Some(first);
@@ -315,6 +302,7 @@ struct SendFile {
 enum SessionKind {
     Receiving {
         receiver: Receiver,
+        download_dir: PathBuf,
         file: Option<File>,
         path: Option<PathBuf>,
         last_saved: Option<PathBuf>,
@@ -324,8 +312,10 @@ enum SessionKind {
         queue: VecDeque<SendFile>,
         active: Option<SendFile>,
     },
-    /// `rz` detected; [`Sender`] already answered with ZRQINIT; picker is open.
+    /// `rz` detected; [`Sender`] already answered with ZRQINIT; file picker is open.
     AwaitingPicker { sender: Option<Sender> },
+    /// `sz` detected; [`Receiver`] already answered with ZRINIT; folder picker is open.
+    AwaitingReceiveDir { receiver: Option<Receiver> },
 }
 
 pub(crate) struct ZmodemSession {
@@ -345,12 +335,25 @@ pub(crate) enum ZmodemUiAction {
 impl ZmodemSession {
     pub(crate) fn start_receive() -> Result<Self, String> {
         let receiver = Receiver::new().map_err(|e| format!("zmodem receiver: {e:?}"))?;
+        // Unit/e2e tests inject a destination so they can skip the native folder
+        // picker (there is no GUI in `cargo test`).
+        #[cfg(test)]
+        if let Some(dir) = DOWNLOAD_DIR_OVERRIDE.with(|slot| slot.borrow().clone()) {
+            return Ok(Self {
+                kind: SessionKind::Receiving {
+                    receiver,
+                    download_dir: dir,
+                    file: None,
+                    path: None,
+                    last_saved: None,
+                },
+                leftover: Vec::new(),
+                last_progress: Instant::now(),
+            });
+        }
         Ok(Self {
-            kind: SessionKind::Receiving {
-                receiver,
-                file: None,
-                path: None,
-                last_saved: None,
+            kind: SessionKind::AwaitingReceiveDir {
+                receiver: Some(receiver),
             },
             leftover: Vec::new(),
             last_progress: Instant::now(),
@@ -384,7 +387,10 @@ impl ZmodemSession {
     }
 
     pub(crate) fn is_awaiting_picker(&self) -> bool {
-        matches!(self.kind, SessionKind::AwaitingPicker { .. })
+        matches!(
+            self.kind,
+            SessionKind::AwaitingPicker { .. } | SessionKind::AwaitingReceiveDir { .. }
+        )
     }
 
     pub(crate) fn timed_out(&self) -> bool {
@@ -462,6 +468,40 @@ impl ZmodemSession {
         Ok(wire)
     }
 
+    /// Finish the `sz` folder picker: write subsequent files under `dir`.
+    ///
+    /// Mirrors [`Self::begin_send_with_paths`] — ZRINIT already went out before
+    /// the dialog opened, and any wire that arrived while it was open stays in
+    /// `leftover` until this call pumps it.
+    pub(crate) fn begin_receive_with_dir(&mut self, dir: PathBuf) -> Result<Vec<u8>, String> {
+        if !matches!(self.kind, SessionKind::AwaitingReceiveDir { .. }) {
+            return Err("zmodem receive is not waiting for a folder".into());
+        }
+        std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+
+        let receiver = match &mut self.kind {
+            SessionKind::AwaitingReceiveDir { receiver } => receiver
+                .take()
+                .ok_or_else(|| "zmodem receive lost its handshake state".to_string())?,
+            _ => return Err("zmodem receive is not waiting for a folder".into()),
+        };
+
+        self.kind = SessionKind::Receiving {
+            receiver,
+            download_dir: dir,
+            file: None,
+            path: None,
+            last_saved: None,
+        };
+        self.last_progress = Instant::now();
+
+        let (wire, action) = self.pump(&[])?;
+        if let Some(ZmodemUiAction::Failed { detail }) = action {
+            return Err(detail);
+        }
+        Ok(wire)
+    }
+
     /// Drive the state machine with newly diverted wire bytes. Returns bytes
     /// to write back to the PTY, plus an optional UI action.
     pub(crate) fn pump(
@@ -484,12 +524,14 @@ impl ZmodemSession {
                     .ok_or_else(|| "zmodem send lost its handshake state".to_string())?;
                 pump_awaiting(sender, &input)?
             }
+            SessionKind::AwaitingReceiveDir { .. } => pump_awaiting_receive_dir(&input)?,
             SessionKind::Receiving {
                 receiver,
+                download_dir,
                 file,
                 path,
                 last_saved,
-            } => pump_receive(receiver, file, path, last_saved, &input)?,
+            } => pump_receive(receiver, download_dir, file, path, last_saved, &input)?,
             SessionKind::Sending {
                 sender,
                 queue,
@@ -498,11 +540,11 @@ impl ZmodemSession {
         };
 
         self.leftover = rest;
-        // Retransmitted ZRINIT while the picker is open must not refresh the
+        // Retransmitted handshake while a picker is open must not refresh the
         // idle clock — otherwise a stuck dialog never times out.
         let refresh = !wire.is_empty()
             || action.is_some()
-            || (!inbound.is_empty() && !matches!(self.kind, SessionKind::AwaitingPicker { .. }));
+            || (!inbound.is_empty() && !self.is_awaiting_picker());
         if refresh {
             self.last_progress = Instant::now();
         }
@@ -512,7 +554,10 @@ impl ZmodemSession {
     /// Initial outgoing after starting a receive session (ZRINIT).
     pub(crate) fn take_initial_outgoing(&mut self) -> Vec<u8> {
         match &mut self.kind {
-            SessionKind::Receiving { receiver, .. } => {
+            SessionKind::Receiving { receiver, .. }
+            | SessionKind::AwaitingReceiveDir {
+                receiver: Some(receiver),
+            } => {
                 let out = receiver.drain_outgoing().to_vec();
                 receiver.advance_outgoing(out.len());
                 if !out.is_empty() {
@@ -520,6 +565,7 @@ impl ZmodemSession {
                 }
                 out
             }
+            SessionKind::AwaitingReceiveDir { receiver: None } => Vec::new(),
             SessionKind::AwaitingPicker { sender } => {
                 let Some(sender) = sender.as_mut() else {
                     return Vec::new();
@@ -581,8 +627,27 @@ fn pump_awaiting(
     }
 }
 
+fn pump_awaiting_receive_dir(
+    inbound: &[u8],
+) -> Result<(Vec<u8>, Option<ZmodemUiAction>, Vec<u8>), String> {
+    // Hold wire until the folder picker returns. A burst of CAN still means the
+    // far side gave up — surface that so the pane un-diverts.
+    let cans = inbound.iter().filter(|&&b| b == CAN).count();
+    if cans >= 5 {
+        return Ok((
+            Vec::new(),
+            Some(ZmodemUiAction::Failed {
+                detail: "remote aborted while waiting for download folder".into(),
+            }),
+            Vec::new(),
+        ));
+    }
+    Ok((Vec::new(), None, inbound.to_vec()))
+}
+
 fn pump_receive(
     receiver: &mut Receiver,
+    download_dir: &Path,
     file: &mut Option<File>,
     path: &mut Option<PathBuf>,
     last_saved: &mut Option<PathBuf>,
@@ -615,8 +680,9 @@ fn pump_receive(
             match ev {
                 ReceiverEvent::FileStart => {
                     let name = sanitize_remote_name(receiver.file_name());
-                    let dest = free_download_path(&name)
-                        .ok_or_else(|| format!("no free name in Downloads for {name}"))?;
+                    let dest = free_download_path(download_dir, &name).ok_or_else(|| {
+                        format!("no free name in {} for {name}", download_dir.display())
+                    })?;
                     let f = OpenOptions::new()
                         .create_new(true)
                         .write(true)
@@ -862,11 +928,44 @@ mod tests {
 
     #[test]
     fn transfer_idle_times_out() {
+        let dir = std::env::temp_dir().join(format!(
+            "tty7-zmodem-idle-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
         let mut session = ZmodemSession::start_receive().expect("recv");
         let _ = session.take_initial_outgoing();
+        session
+            .begin_receive_with_dir(dir.clone())
+            .expect("choose dir");
         assert!(!session.timed_out());
         session.force_idle_for_test(TRANSFER_IDLE + Duration::from_secs(1));
         assert!(session.timed_out());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn receive_waits_for_folder_picker() {
+        let mut session = ZmodemSession::start_receive().expect("recv");
+        assert!(session.is_awaiting_picker());
+        let zrinit = session.take_initial_outgoing();
+        assert!(!zrinit.is_empty(), "ZRINIT must go out before the folder picker");
+        let dir = std::env::temp_dir().join(format!(
+            "tty7-zmodem-pick-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        session.begin_receive_with_dir(dir.clone()).expect("dir");
+        assert!(!session.is_awaiting_picker());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
