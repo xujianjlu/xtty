@@ -352,7 +352,7 @@ pub struct TerminalView {
     password_trigger: super::password_trigger::PasswordTriggerMatcher,
     /// Active in-pane ZMODEM transfer (`rz`/`sz`), if any.
     zmodem: Option<super::zmodem::ZmodemSession>,
-    /// True while the native file picker for an `rz` upload is open.
+    /// True while a native ZMODEM file/folder picker is open.
     zmodem_picker_open: bool,
     /// A title the pane has been told about but has not adopted yet — see
     /// `set_title_when_settled`. `None` means the tab is showing the newest
@@ -2369,9 +2369,13 @@ impl TerminalView {
                         if !zrinit.is_empty() {
                             self.terminal.write(zrinit);
                         }
+                        let needs_folder = session.is_awaiting_picker();
                         self.zmodem = Some(session);
-                        self.zmodem_picker_open = false;
+                        self.zmodem_picker_open = needs_folder;
                         self.arm_zmodem_watchdog(cx);
+                        if needs_folder {
+                            self.open_zmodem_receive_picker(cx);
+                        }
                     }
                     Err(err) => {
                         log::warn!("zmodem receive failed to start: {err}");
@@ -2467,6 +2471,8 @@ impl TerminalView {
     }
 
     fn open_zmodem_send_picker(&mut self, cx: &mut Context<Self>) {
+        // Drop forced DarkAqua so NSOpenPanel matches Finder, not a black sheet.
+        crate::ui::theme::begin_system_file_dialog_appearance();
         let rx = cx.prompt_for_paths(gpui::PathPromptOptions {
             files: true,
             directories: false,
@@ -2478,12 +2484,14 @@ impl TerminalView {
                 Ok(Ok(Some(paths))) if !paths.is_empty() => paths,
                 _ => {
                     let _ = this.update(cx, |this, cx| {
+                        crate::ui::theme::end_system_file_dialog_appearance(cx);
                         this.cancel_zmodem_picker(cx);
                     });
                     return;
                 }
             };
             let _ = this.update(cx, |this, cx| {
+                crate::ui::theme::end_system_file_dialog_appearance(cx);
                 this.zmodem_picker_open = false;
                 let Some(session) = this.zmodem.as_mut() else {
                     return;
@@ -2509,6 +2517,51 @@ impl TerminalView {
         .detach();
     }
 
+    /// Ask where remote `sz` should land — system folder picker, not a silent
+    /// write into `~/Downloads`.
+    fn open_zmodem_receive_picker(&mut self, cx: &mut Context<Self>) {
+        crate::ui::theme::begin_system_file_dialog_appearance();
+        let rx = cx.prompt_for_paths(gpui::PathPromptOptions {
+            files: false,
+            directories: true,
+            multiple: false,
+            prompt: None,
+        });
+        cx.spawn(async move |this, cx| {
+            let dir = match rx.await {
+                Ok(Ok(Some(paths))) => paths.into_iter().next(),
+                _ => None,
+            };
+            let _ = this.update(cx, |this, cx| {
+                crate::ui::theme::end_system_file_dialog_appearance(cx);
+                this.zmodem_picker_open = false;
+                let Some(dir) = dir else {
+                    this.cancel_zmodem_picker(cx);
+                    return;
+                };
+                let Some(session) = this.zmodem.as_mut() else {
+                    return;
+                };
+                match session.begin_receive_with_dir(dir) {
+                    Ok(wire) => {
+                        if !wire.is_empty() {
+                            this.terminal.write(wire);
+                        }
+                        this.poll_zmodem(cx);
+                    }
+                    Err(err) => {
+                        log::warn!("zmodem receive folder rejected: {err}");
+                        this.finish_zmodem(
+                            super::zmodem::ZmodemUiAction::Failed { detail: err },
+                            cx,
+                        );
+                    }
+                }
+            });
+        })
+        .detach();
+    }
+
     fn cancel_zmodem_picker(&mut self, cx: &mut Context<Self>) {
         self.zmodem_picker_open = false;
         self.finish_zmodem(
@@ -2522,6 +2575,9 @@ impl TerminalView {
     fn finish_zmodem(&mut self, action: super::zmodem::ZmodemUiAction, cx: &mut Context<Self>) {
         use super::zmodem::{ZmodemUiAction, cancel_sequence};
 
+        // Picker may have cleared NSApp appearance; put theme chrome back even
+        // when the dialog was abandoned via timeout / Ctrl-C.
+        crate::ui::theme::end_system_file_dialog_appearance(cx);
         self.zmodem = None;
         self.zmodem_picker_open = false;
         let pipe = self.terminal.zmodem_pipe();
