@@ -3732,16 +3732,24 @@ mod tests {
         view.osc_title = Some("user@host:~/repo/025/tty7".to_string());
         assert_eq!(
             tab_view_label(&view, 0, None),
-            "user@host",
-            "a shell title that carries user@host keeps the identity, not the path"
+            "tty7",
+            "a shell title that carries user@host:path shows the path basename, same as the strip"
         );
 
         view.osc_title = Some("user@host:".to_string());
         assert_eq!(
             tab_view_label(&view, 0, None),
-            "user@host",
-            "a bare user@host: identity still names the tab"
+            "tty7",
+            "a bare user@host: identity yields to a known cwd basename"
         );
+
+        let cwd = view.cwd.take();
+        assert_eq!(
+            tab_view_label(&view, 0, None),
+            "user@host",
+            "a bare user@host: identity still names the tab when no cwd is known"
+        );
+        view.cwd = cwd;
 
         view.osc_title = None;
         assert_eq!(
