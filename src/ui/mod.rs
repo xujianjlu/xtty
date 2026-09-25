@@ -7,7 +7,6 @@ pub mod diff_rows;
 pub mod document_column;
 pub mod file_copy;
 pub mod file_tree;
-pub mod forwards;
 pub mod hints;
 pub mod home;
 #[allow(dead_code)]
@@ -37,10 +36,7 @@ pub mod rounding;
 pub mod scm;
 pub mod scrollbar;
 pub mod settings;
-pub mod sftp;
-pub mod sftp_host;
 pub mod ssh_connect;
-pub mod ssh_prompt;
 pub mod switcher;
 pub mod tab_sidebar;
 pub mod tab_strip;

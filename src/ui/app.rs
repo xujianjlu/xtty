@@ -28,7 +28,6 @@ use crate::core::window_state::{WindowGeometry as _, WindowState};
 use crate::daemon::protocol::{RemoteContext, ShellSpec, ssh_option_takes_value};
 use crate::daemon::spawn::DaemonMismatch;
 use crate::terminal::view::{ChildExited, TerminalView};
-use crate::ui::forwards::{ForwardFields, added_forward, rule_of};
 use crate::ui::host_registry::HostId;
 use crate::ui::i18n::{L10nKey, set_locale, t, t_fmt, t_plural};
 use crate::ui::palette::{
@@ -45,7 +44,6 @@ use crate::ui::theme::{apply_theme, set_menus};
 pub(crate) enum SpawnAs {
     /// A local shell; `None` is whatever the default one is.
     Shell(Option<ShellSpec>),
-    Ssh(Box<crate::daemon::protocol::NativeSshSpec>),
 }
 
 /// Where a row taken out of the new-tab menu lands.
@@ -886,7 +884,7 @@ pub struct Tty7App {
     pub(crate) shells: ShellInventory,
     pub(crate) shells_host: HostId,
     pub(crate) loopback_panel: LoopbackForwardPanelState,
-    pub(crate) sftp_panel: crate::ui::sftp::SftpPanelState,
+    pub(crate) sftp_panel: (), // Native SFTP UI removed
     pub(crate) right_panel: crate::ui::right_panel::RightPanelState,
     pub(crate) scm: crate::ui::scm::ScmPanelState,
     pub(crate) diff_probes_inflight:
@@ -972,7 +970,7 @@ pub struct Tty7App {
     _sidebar_search_sub: Subscription,
     _file_search_sub: Subscription,
     settings: Option<SettingsState>,
-    pub(crate) ssh_prompt: crate::ui::ssh_prompt::SshPromptState,
+    pub(crate) ssh_prompt: (), // Native SSH prompt UI removed
     /// A close question is on screen. It carries no target: the answer acts on
     /// the tab or pane captured when the question was raised, not on whatever
     /// the app happens to be pointing at by the time it is answered.
@@ -1533,7 +1531,7 @@ impl Tty7App {
             file_search,
             _file_search_sub: file_search_sub,
             settings: None,
-            ssh_prompt: crate::ui::ssh_prompt::SshPromptState::new(cx),
+            ssh_prompt: (),
             close_prompt_open: false,
             window_bounds: window_bounds_to_remember(window),
             workspace,
@@ -3956,31 +3954,12 @@ impl Tty7App {
             None => {
                 let plan = crate::ui::pane_clone::plan_for(target.read(cx));
                 let spawn = match plan.spawn {
-                    SpawnAs::Ssh(spec) => {
-                        SpawnAs::Ssh(crate::ui::ssh_connect::resolve_persisted_ssh_spec(spec, cx))
-                    }
                     other => other,
                 };
                 (spawn, plan.cwd, plan.follow_up)
             }
         };
         let new = match spawn {
-            SpawnAs::Ssh(spec) => {
-                match new_terminal_native(self.font_size, cwd, spec, window, cx) {
-                    Ok(view) => PaneSlot::Ready(view),
-                    Err(e) => {
-                        log::error!("native SSH split spawn failed: {e}");
-                        window.push_notification(
-                            t_fmt(
-                                L10nKey::AppSshConnectionFailed,
-                                &[("error", &e.to_string())],
-                            ),
-                            cx,
-                        );
-                        return;
-                    }
-                }
-            }
             SpawnAs::Shell(shell) => {
                 match new_terminal(
                     self.window_workspace(cx),
@@ -4032,29 +4011,10 @@ impl Tty7App {
         }
         let plan = crate::ui::pane_clone::plan_for(source.read(cx));
         let spawn = match plan.spawn {
-            SpawnAs::Ssh(spec) => {
-                SpawnAs::Ssh(crate::ui::ssh_connect::resolve_persisted_ssh_spec(spec, cx))
-            }
             other => other,
         };
         let group = self.spawn_group(plan.cwd.as_deref(), cx);
         let tab_slot = match spawn {
-            SpawnAs::Ssh(spec) => {
-                match new_terminal_native(self.font_size, plan.cwd.clone(), spec, window, cx) {
-                    Ok(view) => PaneSlot::Ready(view),
-                    Err(e) => {
-                        log::error!("copy tab native SSH spawn failed: {e}");
-                        window.push_notification(
-                            t_fmt(
-                                L10nKey::AppSshConnectionFailed,
-                                &[("error", &e.to_string())],
-                            ),
-                            cx,
-                        );
-                        return;
-                    }
-                }
-            }
             SpawnAs::Shell(shell) => {
                 match new_terminal(
                     self.window_workspace(cx),

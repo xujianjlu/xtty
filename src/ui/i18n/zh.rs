@@ -1656,10 +1656,10 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::Replace => "覆盖",
         L10nKey::SftpErrorInvalidOctalMode => "无效的八进制模式",
         L10nKey::SettingsDaemonStaleDescInPlace => {
-            "xtty 是原地更新的：应用是新的，面板还跑在旧版上。server 可以不停机就换成新版，shell 直接延续下来。用 xtty 内置 SSH 客户端的面板除外——那些连接会断开，需要重新打开。"
+            "xtty 是原地更新的：应用是新的，面板还跑在旧版上。server 可以不停机就换成新版，shell 直接延续下来。（已不再使用内置 SSH；OpenSSH 会话会正常延续。）"
         }
         L10nKey::AppRestartServerBodyInPlace => {
-            "后台 server 会原地把自己换成当前这个版本：shell 继续运行，窗口稍后自动连回去。用 xtty 内置 SSH 客户端的面板除外——那些连接会断开，需要重新打开。"
+            "后台 server 会原地把自己换成当前这个版本：shell 继续运行，窗口稍后自动连回去。（已不再使用内置 SSH；OpenSSH 会话会正常延续。）"
         }
         L10nKey::PaneRestoredScreenBanner => {
             "已恢复的画面 —— 下面是新的 shell，上面的内容都已不在运行"

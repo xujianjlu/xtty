@@ -1762,10 +1762,10 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::Replace => "Replace",
         L10nKey::SftpErrorInvalidOctalMode => "invalid octal mode",
         L10nKey::SettingsDaemonStaleDescInPlace => {
-            "xtty was updated in place: the app is new, your panes still run on the old build. The server can swap itself for the new one without stopping, so your shells carry straight over. Panes on xtty's built-in SSH client are the exception — those close and need reopening."
+            "xtty was updated in place: the app is new, your panes still run on the old build. The server can swap itself for the new one without stopping, so your shells carry straight over. Native SSH panes are no longer used — OpenSSH sessions continue normally."
         }
         L10nKey::AppRestartServerBodyInPlace => {
-            "The server swaps itself for this build in place: your shells keep running, and the window reconnects a moment later. Panes on xtty's built-in SSH client are the exception — those close and need reopening."
+            "The server swaps itself for this build in place: your shells keep running, and the window reconnects a moment later. Native SSH panes are no longer used — OpenSSH sessions continue normally."
         }
         L10nKey::PaneRestoredScreenBanner => {
             "restored screen — this shell is new, nothing above it is still running"
