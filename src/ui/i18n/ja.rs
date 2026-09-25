@@ -505,7 +505,7 @@ pub fn translate_ja(key: L10nKey) -> Option<&'static str> {
         }
         L10nKey::SettingsPromptEditor => "プロンプトエディター",
         L10nKey::SettingsPromptEditorDesc => {
-            "シェルプロンプトで入力する行を xtty が編集します — 選択、取り消し、下のメニュー。オフにするとシェル自身の行エディター（ZLE、readline、fish）に戻ります"
+            "上級向け — シェル連携が必要。プロンプト入力行を xtty が編集（選択・取り消し・下のメニュー）。既定はオフ：シェル自身の行エディター（ZLE、readline、fish）がキーを受け取ります"
         }
         L10nKey::SettingsNeedsPromptEditor => {
             "プロンプトエディターが必要です。オフの間、このキーはすでにシェルのものです"

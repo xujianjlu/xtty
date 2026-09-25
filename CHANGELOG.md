@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Prompt editor is off by default.** New installs and missing `prompt_editor`
+  keys leave the shell's own line editor in charge. The Settings → Input →
+  Prompt switch remains so power users can turn tty7's editor back on (needs
+  shell integration). Password triggers and the history-search preference are
+  unchanged; ⌃R's live key path still follows `prompt_editor` today.
+
 - **Command-line keyword chrome is off (26.9.14).** The prompt editor no longer
   paints tokenizer colors or ghost tint on the current input line, and the
   anti-flicker `input_chrome_suppressed` / handoff recolor path is removed.

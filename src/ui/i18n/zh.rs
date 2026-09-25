@@ -432,7 +432,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         }
         L10nKey::SettingsPromptEditor => "提示符编辑器",
         L10nKey::SettingsPromptEditorDesc => {
-            "由 xtty 编辑你在 shell 提示符上敲的这一行：选择、撤销，以及下面这些菜单。关闭后交还给 shell 自己的行编辑器——ZLE、readline、fish。"
+            "高级选项，需要 shell integration。由 xtty 编辑提示符上这一行（选择、撤销及下方菜单）。默认关闭：按键归 shell 自己的行编辑器——ZLE、readline、fish。"
         }
         L10nKey::SettingsNeedsPromptEditor => {
             "需要提示符编辑器：它关闭时，这个按键本就归 shell 所有。"
