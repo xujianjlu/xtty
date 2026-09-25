@@ -27,7 +27,7 @@ use crate::core::actions::{
     CloseActiveTab, CopyLinkPathUnderPointer, DecreaseFontSize, ForkAgentSessionDown,
     ForkAgentSessionLeft, ForkAgentSessionRight, ForkAgentSessionUp, IncreaseFontSize, NewTab,
     OpenLinkUnderPointer, RevealLinkUnderPointer, SendBackTab, SendTab, SplitDown, SplitRight,
-    ToggleMaximizePane,
+    ToggleBroadcastInput, ToggleBroadcastPane, ToggleMaximizePane,
 };
 use crate::core::config::{BellMode, Config, LinkFileOpen, MouseZoomModifier, NotifyMode};
 use crate::core::shell_quote::quote_for_shell;
@@ -153,6 +153,8 @@ pub struct OpenFileRequested {
 }
 
 impl gpui::EventEmitter<OpenFileRequested> for TerminalView {}
+
+impl gpui::EventEmitter<super::broadcast::BroadcastInput> for TerminalView {}
 
 pub struct NativeSshParts {
     terminal: RemoteTerminal,
@@ -350,6 +352,10 @@ pub struct TerminalView {
     /// re-apply every Wakeup while it stays in `running_command`.
     last_ssh_command: Option<String>,
     password_trigger: super::password_trigger::PasswordTriggerMatcher,
+    /// When true, this pane stays out of the current tab's broadcast group.
+    broadcast_opt_out: bool,
+    /// Visual role while the tab's broadcast is on (set each frame by the app).
+    broadcast_role: super::broadcast::BroadcastRole,
     /// Active in-pane ZMODEM transfer (`rz`/`sz`), if any.
     zmodem: Option<super::zmodem::ZmodemSession>,
     /// True while a native ZMODEM file/folder picker is open.
@@ -1511,6 +1517,8 @@ impl TerminalView {
             last_remote_ssh_target: None,
             last_ssh_command: None,
             password_trigger: Default::default(),
+            broadcast_opt_out: false,
+            broadcast_role: super::broadcast::BroadcastRole::Off,
             zmodem: None,
             zmodem_picker_open: false,
             pending_title: None,
@@ -1761,6 +1769,43 @@ impl TerminalView {
     /// never a stale dim.
     pub(crate) fn set_dim(&mut self, dim: f32) {
         self.dim = dim;
+    }
+
+    pub(crate) fn broadcast_opt_out(&self) -> bool {
+        self.broadcast_opt_out
+    }
+
+    pub(crate) fn set_broadcast_role(&mut self, role: super::broadcast::BroadcastRole) {
+        self.broadcast_role = role;
+    }
+
+    pub(crate) fn toggle_broadcast_opt_out(&mut self, cx: &mut Context<Self>) {
+        self.broadcast_opt_out = !self.broadcast_opt_out;
+        cx.notify();
+    }
+
+    /// Mirror of user input for broadcast receivers. Writes straight to the
+    /// PTY and never re-emits [`BroadcastInput`], so fan-out cannot loop and
+    /// password-trigger injections (also direct writes) stay pane-local.
+    pub(crate) fn receive_broadcast_bytes(&mut self, bytes: &[u8], cx: &mut Context<Self>) {
+        if bytes.is_empty() || self.terminal.exited || !self.accepts_input(cx) {
+            return;
+        }
+        if self.zmodem.is_some() {
+            return;
+        }
+        self.terminal.write(bytes.to_vec());
+        self.cursor_visible = true;
+        cx.notify();
+    }
+
+    /// User-originated PTY bytes: write locally, then ask the app to fan out.
+    fn write_user_to_pty(&mut self, bytes: Vec<u8>, cx: &mut Context<Self>) {
+        if bytes.is_empty() {
+            return;
+        }
+        self.terminal.write(bytes.clone());
+        cx.emit(super::broadcast::BroadcastInput { bytes });
     }
 
     pub fn remote_context(&self) -> Option<RemoteContext> {
@@ -2788,14 +2833,14 @@ impl TerminalView {
                     Verdict::Passthrough => false,
                 };
             if !held {
-                self.release_hold();
+                self.release_hold(cx);
                 if let Some(boundary) = boundary.filter(|_| !shell_owns_prompt) {
                     // Ctrl-C interrupts and Ctrl-D can close the foreground reader.
                     // Discard the gap before sending either so a prompt transition
                     // cannot turn the pending record into a later Ctrl-U.
                     self.observe_typeahead(boundary);
                 }
-                self.terminal.write(bytes);
+                self.write_user_to_pty(bytes, cx);
                 if !shell_owns_prompt && !interrupt {
                     self.observe_typeahead(RawInput::Key {
                         key: ks.key.as_str(),
@@ -2812,7 +2857,7 @@ impl TerminalView {
 
     fn send_shortcut_bytes(&mut self, bytes: &[u8], key: &str, cx: &mut Context<Self>) {
         let shell_owns_prompt = self.shell_owns_prompt();
-        self.release_hold();
+        self.release_hold(cx);
         self.send_to_pty(bytes, cx);
         if !shell_owns_prompt {
             let alt = self.on_alt_screen();
@@ -3081,7 +3126,7 @@ impl TerminalView {
             }
             "backspace" => {
                 if self.cmd.is_empty() {
-                    self.terminal.write(vec![0x7f]);
+                    self.write_user_to_pty(vec![0x7f], cx);
                     self.observe_typeahead(RawInput::Key {
                         key: "backspace",
                         plain: true,
@@ -3125,7 +3170,7 @@ impl TerminalView {
             "escape" => {
                 let bytes = super::input::keystroke_to_bytes(ks, self.key_flags())
                     .unwrap_or_else(|| vec![0x1b]);
-                self.terminal.write(bytes);
+                self.write_user_to_pty(bytes, cx);
                 return;
             }
             _ => {
@@ -3210,7 +3255,7 @@ impl TerminalView {
             "d" => {
                 if self.cmd.is_empty() {
                     self.wipe_pending_typeahead();
-                    self.terminal.write(vec![0x04]);
+                    self.write_user_to_pty(vec![0x04], cx);
                 } else {
                     self.cmd.delete();
                 }
@@ -3397,7 +3442,7 @@ impl TerminalView {
             }
             return;
         }
-        self.terminal.write(bytes.to_vec());
+        self.write_user_to_pty(bytes.to_vec(), cx);
         self.cursor_visible = true;
         self.jump_to_prompt();
         cx.notify();
@@ -4978,8 +5023,8 @@ impl TerminalView {
     /// so that a paste the hold keeps for the editor still reaches it marked.
     fn write_gap_text(&mut self, text: &str, bytes: Vec<u8>, pasted: bool, cx: &mut Context<Self>) {
         if self.shell_owns_prompt() {
-            self.release_hold();
-            self.terminal.write(bytes);
+            self.release_hold(cx);
+            self.write_user_to_pty(bytes, cx);
             return;
         }
         if self.gap_holdable() && !text.chars().any(char::is_control) {
@@ -4998,9 +5043,9 @@ impl TerminalView {
                 Verdict::Passthrough => {}
             }
         } else {
-            self.release_hold();
+            self.release_hold(cx);
         }
-        self.terminal.write(bytes);
+        self.write_user_to_pty(bytes, cx);
         self.observe_gap_text(text, pasted);
     }
 
@@ -5042,10 +5087,10 @@ impl TerminalView {
         });
     }
 
-    fn release_hold(&mut self) {
+    fn release_hold(&mut self, cx: &mut Context<Self>) {
         let pasted = self.hold.pasted();
         if let Some((net, bytes)) = self.hold.release() {
-            self.terminal.write(bytes);
+            self.write_user_to_pty(bytes, cx);
             self.observe_gap_text(&net, pasted);
         }
     }
@@ -5065,7 +5110,7 @@ impl TerminalView {
         }
         let pasted = self.hold.pasted();
         if let Some((net, bytes)) = self.hold.timeout(epoch) {
-            self.terminal.write(bytes);
+            self.write_user_to_pty(bytes, cx);
             self.observe_gap_text(&net, pasted);
             cx.notify();
         }
@@ -5169,7 +5214,7 @@ impl TerminalView {
             .mode()
             .contains(TermMode::BRACKETED_PASTE);
         let pasted = self.cmd.pasted();
-        self.terminal.write(submit_bytes(&line, bracketed, pasted));
+        self.write_user_to_pty(submit_bytes(&line, bracketed, pasted), cx);
         self.cmd.clear();
         self.cursor_visible = true;
         self.jump_to_prompt();
@@ -5397,6 +5442,7 @@ impl TerminalView {
                 self.reverse_search = None;
                 if let Some(line) = line {
                     // Prompt editor removed: always paste into the shell line.
+                    // Route via write_user_to_pty so broadcast fans out Accept.
                     let bracketed = self
                         .terminal
                         .term
@@ -5404,7 +5450,7 @@ impl TerminalView {
                         .mode()
                         .contains(TermMode::BRACKETED_PASTE);
                     let framed = bracketed && !types_cleanly(&line);
-                    self.terminal.write(paste_bytes(&line, framed));
+                    self.write_user_to_pty(paste_bytes(&line, framed), cx);
                 }
             }
             reverse_search::Action::Run(line) => {
@@ -5415,8 +5461,9 @@ impl TerminalView {
                     .lock()
                     .mode()
                     .contains(TermMode::BRACKETED_PASTE);
-                // Same wire format as the old editor submit path.
-                self.terminal.write(submit_bytes(&line, bracketed, false));
+                // Same wire format as the old editor submit path; fan out via
+                // write_user_to_pty when the tab is broadcasting.
+                self.write_user_to_pty(submit_bytes(&line, bracketed, false), cx);
             }
         }
         cx.notify();
@@ -5441,14 +5488,14 @@ impl TerminalView {
         self.flush_typeahead();
         let tail = line.chars().count().saturating_sub(self.cmd.cursor());
         if !line.is_empty() {
-            self.terminal.write(line.into_bytes());
+            self.write_user_to_pty(line.into_bytes(), cx);
             if tail > 0 {
                 let left: &[u8] = if self.key_flags().app_cursor() {
                     b"\x1bOD"
                 } else {
                     b"\x1b[D"
                 };
-                self.terminal.write(left.repeat(tail));
+                self.write_user_to_pty(left.repeat(tail), cx);
             }
         }
         self.cmd.clear();
@@ -7550,9 +7597,7 @@ impl Render for TerminalView {
         self.sync_typeahead_owner();
         self.sync_scrollbar();
         if self.shell_owns_prompt() {
-            if let Some((_net, bytes)) = self.hold.release() {
-                self.terminal.write(bytes);
-            }
+            self.release_hold(cx);
             self.typeahead.drain();
         } else if self.input_active() {
             self.engage_hold_into_editor();
@@ -7586,6 +7631,17 @@ impl Render for TerminalView {
         let menu_focus = self.focus_handle.clone();
         let has_selection = self.any_selection();
         let menu_view = cx.entity();
+        let broadcast_role = self.broadcast_role;
+        let broadcast_opt_out = self.broadcast_opt_out;
+
+        // Amber border while this pane is in the tab's broadcast group — strong
+        // enough to notice, distinct from focus chrome / inactive dim.
+        let broadcast_border = match broadcast_role {
+            super::broadcast::BroadcastRole::Source
+            | super::broadcast::BroadcastRole::Receiver => Some(gpui::hsla(0.08, 0.85, 0.52, 1.0)),
+            super::broadcast::BroadcastRole::OptedOut
+            | super::broadcast::BroadcastRole::Off => None,
+        };
 
         div()
             .id("terminal-surface")
@@ -7599,6 +7655,9 @@ impl Render for TerminalView {
             .size_full()
             .relative()
             .overflow_hidden()
+            .when_some(broadcast_border, |d, color| {
+                d.border_2().border_color(color)
+            })
             .px(px(GRID_PAD_X))
             .py(px(GRID_PAD_Y))
             .text_color(cx.theme().foreground)
@@ -7808,6 +7867,19 @@ impl Render for TerminalView {
                     .menu(t(L10nKey::AppMenuSplitRight), Box::new(SplitRight))
                     .menu(t(L10nKey::AppMenuSplitDown), Box::new(SplitDown))
                     .menu(t(L10nKey::AppMenuZoomPane), Box::new(ToggleMaximizePane))
+                    .separator()
+                    .menu(
+                        t(L10nKey::AppMenuToggleBroadcastInput),
+                        Box::new(ToggleBroadcastInput),
+                    )
+                    .menu(
+                        if broadcast_opt_out {
+                            t(L10nKey::AppMenuBroadcastPaneInclude)
+                        } else {
+                            t(L10nKey::AppMenuBroadcastPaneExclude)
+                        },
+                        Box::new(ToggleBroadcastPane),
+                    )
                     .separator()
                     .menu(t(L10nKey::AppMenuNewTab), Box::new(NewTab))
                     .menu(t(L10nKey::AppMenuClosePaneTab), Box::new(CloseActiveTab))
