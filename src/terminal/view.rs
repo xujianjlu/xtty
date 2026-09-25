@@ -10288,7 +10288,11 @@ mod gpui_tests {
         let (client_side, daemon_side) = super::test_stream_pair();
         cx.update(|cx| {
             gpui_component::init(cx);
-            cx.set_global(Config::default());
+            // Production defaults leave the prompt editor off; editor-focused
+            // tests still need it on so `input_active` / wait helpers work.
+            let mut cfg = Config::default();
+            cfg.prompt_editor = true;
+            cx.set_global(cfg);
         });
         let window = cx.add_window(|window, cx| {
             let terminal =
@@ -10371,7 +10375,9 @@ mod gpui_tests {
         let (client_side, daemon_side) = super::test_stream_pair();
         cx.update(|cx| {
             gpui_component::init(cx);
-            cx.set_global(Config::default());
+            let mut cfg = Config::default();
+            cfg.prompt_editor = true;
+            cx.set_global(cfg);
         });
         let built: std::rc::Rc<std::cell::RefCell<Option<Entity<TerminalView>>>> =
             std::rc::Rc::new(std::cell::RefCell::new(None));
@@ -11337,7 +11343,9 @@ mod gpui_tests {
                     "and with link detection turned off the menu offers nothing \
                      the underline and the click both refuse"
                 );
-                cx.set_global(Config::default());
+                let mut restore = cx.global::<Config>().clone();
+                restore.link_url = true;
+                cx.set_global(restore);
 
                 // `ready (scratchpad...`: the blank between the two words.
                 assert!(!view.hover_link_at(5, 0, false, cx));
@@ -17016,7 +17024,9 @@ mod prompt_handover_tests {
         let (client_side, daemon_side) = test_stream_pair();
         cx.update(|cx| {
             gpui_component::init(cx);
-            cx.set_global(Config::default());
+            let mut cfg = Config::default();
+            cfg.prompt_editor = true;
+            cx.set_global(cfg);
         });
         let window = cx.add_window(|window, cx| {
             let terminal = RemoteTerminal::from_stream(client_side, TermSize::new(80, 24))

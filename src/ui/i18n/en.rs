@@ -494,7 +494,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         }
         L10nKey::SettingsPromptEditor => "Prompt editor",
         L10nKey::SettingsPromptEditorDesc => {
-            "xtty edits the line you type at the shell prompt: selection, undo, and the menus below. Off hands the prompt back to the shell's own editor — ZLE, readline, fish."
+            "Advanced — needs shell integration. xtty edits the line at the prompt (selection, undo, menus below). Off by default: the shell's own editor — ZLE, readline, fish — keeps the keys."
         }
         L10nKey::SettingsNeedsPromptEditor => {
             "Needs the prompt editor: with it off, this key already belongs to the shell."
