@@ -6,7 +6,6 @@ use std::sync::{Arc, Mutex};
 
 use crate::daemon::pane::DaemonPane;
 use crate::daemon::protocol::{ClientMsg, DaemonMsg, DaemonVersion, RemoteKind};
-use crate::daemon::ssh::SshConnection;
 use crate::daemon::transport::{self, Stream};
 
 struct Registry {
@@ -276,17 +275,6 @@ fn kill_pane(registry: &Registry, pane_id: u64) {
     crate::daemon::scrollback::forget(pane_id);
 }
 
-fn ssh_connection_for(
-    registry: &Registry,
-    pane_id: u64,
-) -> Result<Arc<crate::daemon::ssh::SshConnection>, String> {
-    let pane = registry
-        .get(pane_id)
-        .ok_or_else(|| format!("no such pane {pane_id}"))?;
-    pane.ssh_connection().ok_or_else(|| {
-        "pane has no native SSH connection (SFTP needs a native-SSH pane)".to_string()
-    })
-}
 
 /// `eprintln!` for a process that may have no standard error.
 ///
@@ -733,43 +721,6 @@ fn handle_conn(stream: Stream, registry: Arc<Registry>) -> anyhow::Result<()> {
             )
         }
 
-        ClientMsg::SpawnNativeSsh { cwd: _, size, spec } => {
-            let allow_remote_clipboard_write = spec.remote_clipboard_write;
-            let id = registry.alloc_id();
-            let on_dead = {
-                let registry = registry.clone();
-                move || {
-                    std::thread::Builder::new()
-                        .name("tty7-daemon-pane-reap".to_string())
-                        .spawn(move || {
-                            registry.remove(id);
-                        })
-                        .ok();
-                }
-            };
-            let pane = match DaemonPane::spawn_native_ssh(id, size, spec, on_dead) {
-                Ok(p) => p,
-                Err(e) => {
-                    let mut w = write_stream;
-                    let _ =
-                        DaemonMsg::Error(format!("native ssh spawn failed: {e}")).encode(&mut w);
-                    return Err(e);
-                }
-            };
-            registry.insert(pane.clone());
-            {
-                let mut w = &write_stream;
-                DaemonMsg::Spawned { pane_id: id }.encode(&mut w)?;
-            }
-            stream_pane(
-                pane,
-                id,
-                read_stream,
-                write_stream,
-                registry,
-                allow_remote_clipboard_write,
-            )
-        }
 
         ClientMsg::Attach {
             pane_id,
@@ -846,147 +797,12 @@ fn handle_conn(stream: Stream, registry: Arc<Registry>) -> anyhow::Result<()> {
 
         ClientMsg::EnsureLoopbackForward(req) => {
             let mut w = write_stream;
-            let Some(pane) = registry.get(req.pane_id) else {
-                DaemonMsg::Error(format!("no such pane {}", req.pane_id)).encode(&mut w)?;
-                return Ok(());
-            };
-            let Some(remote) = pane.remote_context() else {
-                DaemonMsg::Error("pane has no ssh remote context".to_string()).encode(&mut w)?;
-                return Ok(());
-            };
-            let result = if remote.kind == RemoteKind::NativeSsh {
-                match pane.ssh_connection() {
-                    Some(conn) => crate::daemon::ssh::SshManager::global()
-                        .ensure_loopback_forward(
-                            req.pane_id,
-                            conn,
-                            &remote.target,
-                            &req.remote_host,
-                            req.remote_port,
-                        )
-                        .map_err(|e| e.to_string()),
-                    None => Err("native ssh connection is not ready".to_string()),
-                }
-            } else {
-                Err("pane is not a native ssh session".to_string())
-            };
-            match result {
-                Ok(forward) => DaemonMsg::LoopbackForward(forward).encode(&mut w)?,
-                Err(e) => DaemonMsg::Error(format!("forward failed: {e}")).encode(&mut w)?,
-            }
-            Ok(())
-        }
-
-        ClientMsg::ListKnownHosts => {
-            let mut w = write_stream;
-            let list = crate::daemon::ssh::known_hosts::list();
-            DaemonMsg::KnownHostsList(list).encode(&mut w)?;
-            Ok(())
-        }
-
-        ClientMsg::TestSsh { spec } => {
-            let mut w = write_stream;
-            let report = crate::daemon::ssh::SshManager::global().test_connection(&spec);
-            DaemonMsg::SshTestResult(report).encode(&mut w)?;
-            Ok(())
-        }
-
-        ClientMsg::DeleteKnownHost(id) => {
-            let mut w = write_stream;
-            let _ = crate::daemon::ssh::known_hosts::delete(&id);
-            let list = crate::daemon::ssh::known_hosts::list();
-            DaemonMsg::KnownHostsList(list).encode(&mut w)?;
-            Ok(())
-        }
-
-        ClientMsg::SftpList { pane_id, path } => {
-            let mut w = write_stream;
-            match ssh_connection_for(&registry, pane_id) {
-                Ok(conn) => {
-                    match crate::daemon::ssh::sftp::SftpManager::global().list(&conn, &path) {
-                        Ok(entries) => DaemonMsg::SftpEntries(entries).encode(&mut w)?,
-                        Err(e) => DaemonMsg::Error(e).encode(&mut w)?,
-                    }
-                }
-                Err(e) => DaemonMsg::Error(e).encode(&mut w)?,
-            }
-            Ok(())
-        }
-
-        ClientMsg::AddForward { pane_id, rule } => {
-            let mut w = write_stream;
-            match forward_pane_connection(&registry, pane_id) {
-                Ok(conn) => {
-                    let list =
-                        crate::daemon::ssh::SshManager::global().add_forward(pane_id, conn, &rule);
-                    DaemonMsg::ForwardList(list).encode(&mut w)?;
-                }
-                Err(e) => DaemonMsg::Error(e).encode(&mut w)?,
-            }
-            Ok(())
-        }
-
-        ClientMsg::SftpOp { pane_id, op } => {
-            let mut w = write_stream;
-            match ssh_connection_for(&registry, pane_id) {
-                Ok(conn) => {
-                    let result = crate::daemon::ssh::sftp::SftpManager::global().op(&conn, &op);
-                    DaemonMsg::SftpOpResult(result).encode(&mut w)?;
-                }
-                Err(e) => DaemonMsg::Error(e).encode(&mut w)?,
-            }
-            Ok(())
-        }
-
-        ClientMsg::SftpTransferStart(spec) => {
-            let mut w = write_stream;
-            match ssh_connection_for(&registry, spec.pane_id) {
-                Ok(conn) => {
-                    match crate::daemon::ssh::sftp::SftpManager::global()
-                        .start_transfer(&conn, spec)
-                    {
-                        Ok(job_id) => DaemonMsg::SftpTransferStarted { job_id }.encode(&mut w)?,
-                        Err(e) => DaemonMsg::Error(e).encode(&mut w)?,
-                    }
-                }
-                Err(e) => DaemonMsg::Error(e).encode(&mut w)?,
-            }
-            Ok(())
-        }
-
-        ClientMsg::SftpTransferCancel { job_id } => {
-            let mut w = write_stream;
-            let jobs = crate::daemon::ssh::sftp::SftpManager::global().cancel(job_id);
-            DaemonMsg::SftpTransferProgress(jobs).encode(&mut w)?;
-            Ok(())
-        }
-
-        ClientMsg::SftpTransferList { pane_id } => {
-            let mut w = write_stream;
-            let jobs = crate::daemon::ssh::sftp::SftpManager::global().list_jobs(pane_id);
-            DaemonMsg::SftpTransferProgress(jobs).encode(&mut w)?;
-            Ok(())
-        }
-
-        ClientMsg::SshExec { pane_id, command } => {
-            let mut w = write_stream;
-            match ssh_connection_for(&registry, pane_id) {
-                Ok(conn) => match crate::daemon::ssh::SshManager::global().exec(&conn, &command) {
-                    Ok(out) => DaemonMsg::SshExecResult(out).encode(&mut w)?,
-                    Err(e) => DaemonMsg::Error(e).encode(&mut w)?,
-                },
-                Err(e) => DaemonMsg::Error(e).encode(&mut w)?,
-            }
-            Ok(())
-        }
-
-        ClientMsg::RemoveForward {
-            pane_id,
-            forward_id,
-        } => {
-            let mut w = write_stream;
-            let list = crate::daemon::ssh::SshManager::global().remove_forward(pane_id, forward_id);
-            DaemonMsg::ForwardList(list).encode(&mut w)?;
+            let _ = req;
+            DaemonMsg::Error(
+                "loopback port forwarding via Native SSH was removed; use OpenSSH -L/-R/-D"
+                    .to_string(),
+            )
+            .encode(&mut w)?;
             Ok(())
         }
 
@@ -1012,18 +828,7 @@ fn handle_conn(stream: Stream, registry: Arc<Registry>) -> anyhow::Result<()> {
             Ok(())
         }
 
-        ClientMsg::ListForwards { pane_id } => {
-            let mut w = write_stream;
-            let list = crate::daemon::ssh::SshManager::global().list_forwards(pane_id);
-            DaemonMsg::ForwardList(list).encode(&mut w)?;
-            Ok(())
-        }
 
-        ClientMsg::OnWorkspace(req) => {
-            let mut w = write_stream;
-            crate::daemon::ssh::workspace::handle(&req).encode(&mut w)?;
-            Ok(())
-        }
 
         other => {
             log::debug!("unexpected opening message: {other:?}");
@@ -1032,16 +837,6 @@ fn handle_conn(stream: Stream, registry: Arc<Registry>) -> anyhow::Result<()> {
     }
 }
 
-fn forward_pane_connection(
-    registry: &Registry,
-    pane_id: u64,
-) -> Result<Arc<SshConnection>, String> {
-    let pane = registry
-        .get(pane_id)
-        .ok_or_else(|| format!("no such pane {pane_id}"))?;
-    pane.ssh_connection()
-        .ok_or_else(|| "pane is not a ready native-ssh session".to_string())
-}
 
 fn stream_pane_with_attach(
     pane: Arc<DaemonPane>,
@@ -1148,10 +943,6 @@ fn run_stream(
                     }
                     pane.resize(size);
                 }
-                ClientMsg::AuthResponse {
-                    request_id,
-                    response,
-                } => pane.deliver_auth_response(request_id, response),
                 ClientMsg::Detach => break 'conn,
                 ClientMsg::Kill { pane_id } => {
                     if pane_id == id {

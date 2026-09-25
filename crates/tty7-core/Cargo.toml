@@ -67,9 +67,6 @@ smallvec.workspace = true
 # code path instead of hand-rolling fd/ioctl/signal code.
 portable-pty = "0.8"
 
-# Native (pure-Rust) SSH client for the daemon's russh session engine
-# (`daemon::ssh`) — see the root manifest's note for why we own this stack
-# instead of shelling out to `ssh`.
 # HTTPS client for the remote-server installer (`daemon::install::download`).
 # The GUI's own update check rides `reqwest_client`, which wraps Zed's reqwest
 # fork behind `gpui::http_client` — unavailable here, since this crate must not
@@ -86,12 +83,9 @@ ureq = { version = "3", default-features = false, features = [
     "socks-proxy",
 ], optional = true }
 
-russh = "0.62"
-russh-sftp = "2"
-
-# tokio powers only the russh session engine — a single runtime `daemon::ssh`
-# owns. The daemon's PTY/reader/writer threads remain std threads and never
-# touch it; they cross into async through bounded/unbounded channels.
+# tokio powers local-stdio remote routing (`daemon::remote_link` /
+# `daemon::router`) — ProcessStream and copy_bidirectional. The daemon's
+# PTY/reader/writer threads remain std threads.
 tokio = { version = "1", features = [
     "rt-multi-thread",
     "net",
@@ -123,7 +117,7 @@ memchr = "2"
 # Base64 for the byte fields that cross the control dialect's JSON wire
 # (`host::Output`'s stdout/stderr). JSON has no byte type — `serde_json` renders
 # a `Vec<u8>` as an array of decimal numbers, inflating a 1 MB `git diff` to
-# roughly 4 MB. Base64 costs 1.33× instead. Already in the tree via russh.
+# roughly 4 MB. Base64 costs 1.33× instead.
 base64 = "0.22"
 
 # zlib inflate for the kitty graphics protocol's `o=z` (compressed) pixel
@@ -134,9 +128,6 @@ miniz_oxide = "0.8"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
-# GSSAPI/Kerberos SSH auth — see the `gssapi` feature below for why it is
-# optional rather than an unconditional Unix dependency.
-libgssapi = { version = "0.11", optional = true }
 
 # CFStringTokenizer-adjacent CoreFoundation FFI: `daemon::pane` reads a pane's
 # foreground process name through it on macOS.
@@ -158,26 +149,8 @@ tempfile = "3"
 # broker's timeout/retry tests run instantly instead of in real time.
 tokio = { version = "1", features = ["test-util", "macros", "rt"] }
 
-# `gssapi` — GSSAPI/Kerberos `gssapi-with-mic` SSH auth (`daemon::ssh::auth`).
-#
-# Off by default, and the `tty7` GUI turns it on, so the GUI's behavior is
-# unchanged. It has to be optional because `libgssapi` binds the *system* MIT /
-# Heimdal krb5 through bindgen: a machine without krb5 headers cannot build it
-# at all, and a remote `tty7-server` pushed onto someone else's Mac (decision
-# D10) must not link Heimdal either — `assert-macho.sh` refuses stray deps.
-# Without the feature, `SshAuthMode::Gssapi` reports that the method is
-# unavailable in this build and the other auth families are untouched.
-#
-# **Test coverage.** Everything in `daemon::ssh::auth` that can be tested without
-# krb5 — the service-host list — is gated on `unix` alone, so a plain
-# `cargo test -p tty7-core` runs it. Only the libgssapi FFI half needs
-# `--features gssapi`, and it has no unit tests (it is all foreign calls). Do not
-# gate a testable helper on this feature: `cargo test --workspace` unifies it on
-# from the GUI package, so a feature-gated test looks green there and silently
-# vanishes the moment anyone narrows to `-p tty7-core`.
 [features]
 default = []
-gssapi = ["dep:libgssapi"]
 # Lets this build download a `tty7-server` release asset over HTTPS and push it
 # onto a remote machine. Off by default so `tty7-server` — which is
 # the thing being downloaded, and never the thing doing the downloading — links

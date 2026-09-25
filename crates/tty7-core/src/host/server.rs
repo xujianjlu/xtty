@@ -853,7 +853,7 @@ fn run_request(
             Vec::new(),
         ),
         ControlRequest::Routes => (
-            ReplyOk::Routes(crate::daemon::ssh::SshManager::global().routes()),
+            ReplyOk::Routes(Vec::new()),
             Vec::new(),
         ),
         ControlRequest::Status => (
@@ -1723,7 +1723,6 @@ mod aggregate_tests {
                 machine::PaneSeed {
                     pane: 7,
                     cwd: Some("/repo/tty7".into()),
-                    ssh_spec: None,
                     agent: None,
                     shell: None,
                 },

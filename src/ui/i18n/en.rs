@@ -125,6 +125,31 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::SettingsCursorBlinkIntervalDesc => {
             "Seconds between each on/off phase of the cursor (0.1–2). Decimals allowed."
         }
+        L10nKey::SettingsTabStyle => "Tabs",
+        L10nKey::SettingsTabShowUserHost => "Show user@host",
+        L10nKey::SettingsTabShowUserHostDesc => {
+            "Put the SSH identity on the tab chip. With basename on, the chip reads user@host:folder."
+        }
+        L10nKey::SettingsTabShowCwdBasename => "Show folder basename",
+        L10nKey::SettingsTabShowCwdBasenameDesc => {
+            "Show the working-directory leaf name on the chip. Full path stays on hover."
+        }
+        L10nKey::SettingsTabShowGitBranch => "Show git branch",
+        L10nKey::SettingsTabShowGitBranchDesc => {
+            "Show the current branch (and +/- counts in the sidebar) on tabs."
+        }
+        L10nKey::SettingsTabShowAgentIcon => "Show agent icon",
+        L10nKey::SettingsTabShowAgentIconDesc => {
+            "Show the CLI agent avatar on tabs when an agent is running."
+        }
+        L10nKey::SettingsSearchTabShowUserHostKeywords => "tab chip identity user host ssh hop",
+        L10nKey::SettingsSearchTabShowCwdBasenameKeywords => {
+            "tab chip cwd directory basename folder path"
+        }
+        L10nKey::SettingsSearchTabShowGitBranchKeywords => "tab chip git branch status diff",
+        L10nKey::SettingsSearchTabShowAgentIconKeywords => {
+            "tab chip agent avatar claude codex icon"
+        }
         L10nKey::SettingsLanguage => "Language",
         L10nKey::SettingsLanguageDesc => "Choose the language used for the xtty interface.",
         L10nKey::SettingsLanguageEnglish => "English",
@@ -1737,10 +1762,10 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::Replace => "Replace",
         L10nKey::SftpErrorInvalidOctalMode => "invalid octal mode",
         L10nKey::SettingsDaemonStaleDescInPlace => {
-            "xtty was updated in place: the app is new, your panes still run on the old build. The server can swap itself for the new one without stopping, so your shells carry straight over. Panes on xtty's built-in SSH client are the exception — those close and need reopening."
+            "xtty was updated in place: the app is new, your panes still run on the old build. The server can swap itself for the new one without stopping, so your shells carry straight over. Native SSH panes are no longer used — OpenSSH sessions continue normally."
         }
         L10nKey::AppRestartServerBodyInPlace => {
-            "The server swaps itself for this build in place: your shells keep running, and the window reconnects a moment later. Panes on xtty's built-in SSH client are the exception — those close and need reopening."
+            "The server swaps itself for this build in place: your shells keep running, and the window reconnects a moment later. Native SSH panes are no longer used — OpenSSH sessions continue normally."
         }
         L10nKey::PaneRestoredScreenBanner => {
             "restored screen — this shell is new, nothing above it is still running"

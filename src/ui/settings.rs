@@ -33,7 +33,8 @@ use crate::core::keychain::{
 use crate::core::ssh_profile::{
     Algorithms, AuthMode, ForwardKind, ForwardRule, HostPort, SshProfile, to_connect_string,
 };
-use crate::daemon::protocol::{SshTestNeed, SshTestReport};
+use crate::ui::native_gone::{SshTestNeed, SshTestReport};
+
 use crate::ui::app::{
     FONT_SIZE_STEP, LINE_HEIGHT_STEP, TILE_GLYPH_LINE, TILE_SIZE, TITLE_BAR_HEIGHT, ThemeEdit,
     Tty7App, UI_FONT_SIZE_STEP,
@@ -469,6 +470,26 @@ fn settings_search_entries() -> &'static [SearchEntry] {
             section: Appearance,
             title: SettingsCursorBlinkInterval,
             keywords: SettingsSearchCursorBlinkIntervalKeywords,
+        },
+        SearchEntry {
+            section: Appearance,
+            title: SettingsTabShowUserHost,
+            keywords: SettingsSearchTabShowUserHostKeywords,
+        },
+        SearchEntry {
+            section: Appearance,
+            title: SettingsTabShowCwdBasename,
+            keywords: SettingsSearchTabShowCwdBasenameKeywords,
+        },
+        SearchEntry {
+            section: Appearance,
+            title: SettingsTabShowGitBranch,
+            keywords: SettingsSearchTabShowGitBranchKeywords,
+        },
+        SearchEntry {
+            section: Appearance,
+            title: SettingsTabShowAgentIcon,
+            keywords: SettingsSearchTabShowAgentIconKeywords,
         },
         SearchEntry {
             section: Appearance,
@@ -1479,10 +1500,12 @@ fn human_millis(ms: u32) -> String {
 
 /// What the handshake stopped to ask for, as the one line explaining why a
 /// reachable host still is not a connected one.
-fn ssh_test_need_message(need: SshTestNeed) -> L10nKey {
+fn ssh_test_need_message(need: &SshTestNeed) -> L10nKey {
     match need {
         SshTestNeed::Password => L10nKey::SettingsTestNeedsPassword,
-        SshTestNeed::KeyPassphrase => L10nKey::SettingsTestNeedsPassphrase,
+        SshTestNeed::Passphrase | SshTestNeed::KeyPassphrase => {
+            L10nKey::SettingsTestNeedsPassphrase
+        }
         SshTestNeed::KeyboardInteractive => L10nKey::SettingsTestNeedsInteractive,
         SshTestNeed::HostKeyDecision => L10nKey::SettingsTestNeedsHostKey,
         SshTestNeed::HostKeyChanged => L10nKey::SettingsTestHostKeyChanged,
@@ -2724,6 +2747,60 @@ impl Tty7App {
                 blink_interval_control,
                 cx,
             ))
+            .child(self.section_rule(cx))
+            .child(self.section_header(t(L10nKey::SettingsTabStyle), cx))
+            .child(
+                self.settings_row(
+                    t(L10nKey::SettingsTabShowUserHost),
+                    t(L10nKey::SettingsTabShowUserHostDesc),
+                    crate::ui::theme::switch("tab-show-user-host", cx)
+                        .checked(cx.global::<Config>().tab_show_user_host)
+                        .on_click(cx.listener(|this, on: &bool, _w, cx| {
+                            this.set_tab_show_user_host(*on, cx)
+                        }))
+                        .into_any_element(),
+                    cx,
+                ),
+            )
+            .child(
+                self.settings_row(
+                    t(L10nKey::SettingsTabShowCwdBasename),
+                    t(L10nKey::SettingsTabShowCwdBasenameDesc),
+                    crate::ui::theme::switch("tab-show-cwd-basename", cx)
+                        .checked(cx.global::<Config>().tab_show_cwd_basename)
+                        .on_click(cx.listener(|this, on: &bool, _w, cx| {
+                            this.set_tab_show_cwd_basename(*on, cx)
+                        }))
+                        .into_any_element(),
+                    cx,
+                ),
+            )
+            .child(
+                self.settings_row(
+                    t(L10nKey::SettingsTabShowGitBranch),
+                    t(L10nKey::SettingsTabShowGitBranchDesc),
+                    crate::ui::theme::switch("tab-show-git-branch", cx)
+                        .checked(cx.global::<Config>().tab_show_git_branch)
+                        .on_click(cx.listener(|this, on: &bool, _w, cx| {
+                            this.set_tab_show_git_branch(*on, cx)
+                        }))
+                        .into_any_element(),
+                    cx,
+                ),
+            )
+            .child(
+                self.settings_row(
+                    t(L10nKey::SettingsTabShowAgentIcon),
+                    t(L10nKey::SettingsTabShowAgentIconDesc),
+                    crate::ui::theme::switch("tab-show-agent-icon", cx)
+                        .checked(cx.global::<Config>().tab_show_agent_icon)
+                        .on_click(cx.listener(|this, on: &bool, _w, cx| {
+                            this.set_tab_show_agent_icon(*on, cx)
+                        }))
+                        .into_any_element(),
+                    cx,
+                ),
+            )
             .into_any_element()
     }
 
@@ -3388,7 +3465,7 @@ impl Tty7App {
     }
 
     fn live_ssh_profiles(&self, cx: &App) -> std::collections::HashSet<Uuid> {
-        use crate::daemon::protocol::SshPhase;
+        use crate::ui::native_gone::SshPhase;
         let mut live = std::collections::HashSet::new();
         for tab in &self.tabs {
             for leaf in tab.pane.terminals() {
@@ -4309,11 +4386,16 @@ impl Tty7App {
         }
         cx.notify();
 
-        let probe = cx
-            .background_executor()
-            .spawn(async move { crate::terminal::RemoteTerminal::test_ssh(spec) });
+        let probe = cx.background_executor().spawn(async move {
+            Err::<crate::ui::native_gone::SshTestReport, String>(
+                "Native SSH test abolished".into(),
+            )
+        });
         cx.spawn_in(window, async move |this, cx| {
-            let report = probe.await;
+            let report = match probe.await {
+                Ok(r) => r,
+                Err(reason) => crate::ui::native_gone::SshTestReport::Failed { reason },
+            };
             let _ = this.update(cx, |this, cx| {
                 // The form may have been closed, or moved to another host, in
                 // the seconds the handshake took. An answer about a host nobody
@@ -4710,7 +4792,7 @@ impl Tty7App {
                     ))
                 }
                 SshTestReport::NeedsInput { need, .. } => {
-                    field_note(t(ssh_test_need_message(*need)), cx)
+                    field_note(t(ssh_test_need_message(need)), cx)
                 }
                 SshTestReport::Failed { reason } => field_error(
                     t_fmt(L10nKey::SettingsTestFailed, &[("reason", reason)]),
@@ -4760,18 +4842,6 @@ impl Tty7App {
                 h_flex()
                     .flex_shrink_0()
                     .gap_2()
-                    .child(
-                        // Dials the host exactly as Connect would — proxy, jump
-                        // and all — but keeps the answer here instead of
-                        // spending a tab on finding out.
-                        Button::new("ssh-form-test")
-                            .label(t(L10nKey::SettingsTestConnection))
-                            .small()
-                            .disabled(!errors.is_empty() || testing)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.test_ssh_form_connection(window, cx)
-                            })),
-                    )
                     .child(
                         Button::new("ssh-form-save")
                             .label(t(L10nKey::Save))
@@ -5231,7 +5301,7 @@ impl Tty7App {
                     .opacity(if needs_target {
                         1.0
                     } else {
-                        crate::ui::forwards::NO_TARGET_FADE
+                        crate::ui::native_gone::NO_TARGET_FADE
                     })
                     .when(stack_ends, |end| end.w_full())
                     .child(endpoint(&row.target_host, &row.target_port)),
@@ -7964,7 +8034,7 @@ mod tests {
             SshTestNeed::HostKeyDecision,
             SshTestNeed::HostKeyChanged,
         ];
-        let lines: Vec<&str> = needs.iter().map(|n| t(ssh_test_need_message(*n))).collect();
+        let lines: Vec<&str> = needs.iter().map(|n| t(ssh_test_need_message(n))).collect();
         assert!(lines.iter().all(|l| !l.is_empty()));
         assert_eq!(
             lines.iter().collect::<std::collections::HashSet<_>>().len(),

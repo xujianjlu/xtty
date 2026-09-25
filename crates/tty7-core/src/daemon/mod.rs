@@ -18,7 +18,6 @@ pub mod scrollback;
 pub mod server;
 pub mod singleton;
 pub mod spawn;
-pub mod ssh;
 pub mod transport;
 
 pub(crate) const DETECTED_SHELL_ENV: &str = "TTY7_DETECTED_SHELL";

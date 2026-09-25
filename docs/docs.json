@@ -60,9 +60,6 @@
           {
             "group": "Remote work",
             "pages": [
-              "remote/ssh",
-              "remote/sftp",
-              "remote/port-forwarding",
               "remote/workspaces"
             ]
           },

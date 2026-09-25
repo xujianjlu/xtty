@@ -130,6 +130,33 @@ pub fn translate_ja(key: L10nKey) -> Option<&'static str> {
         L10nKey::SettingsCursorBlinkIntervalDesc => {
             "カーソルの点滅一相にかかる秒数（0.1–2）。小数も可。大きいほどゆっくり点滅します"
         }
+        L10nKey::SettingsTabStyle => "タブ",
+        L10nKey::SettingsTabShowUserHost => "user@host を表示",
+        L10nKey::SettingsTabShowUserHostDesc => {
+            "タブチップに SSH の身元を出します。フォルダ名もオンなら user@host:folder になります"
+        }
+        L10nKey::SettingsTabShowCwdBasename => "フォルダ basename を表示",
+        L10nKey::SettingsTabShowCwdBasenameDesc => {
+            "チップに作業ディレクトリの末尾名を出します。フルパスはホバーに残します"
+        }
+        L10nKey::SettingsTabShowGitBranch => "Git ブランチを表示",
+        L10nKey::SettingsTabShowGitBranchDesc => {
+            "タブに現在のブランチを出します（サイドバーでは +/- も）"
+        }
+        L10nKey::SettingsTabShowAgentIcon => "Agent アイコンを表示",
+        L10nKey::SettingsTabShowAgentIconDesc => "CLI Agent 実行中はタブにアバターを出します",
+        L10nKey::SettingsSearchTabShowUserHostKeywords => {
+            "タブ チップ 身元 user host ssh hop tab identity"
+        }
+        L10nKey::SettingsSearchTabShowCwdBasenameKeywords => {
+            "タブ チップ ディレクトリ basename フォルダ パス cwd tab"
+        }
+        L10nKey::SettingsSearchTabShowGitBranchKeywords => {
+            "タブ チップ git ブランチ ステータス 差分 tab branch"
+        }
+        L10nKey::SettingsSearchTabShowAgentIconKeywords => {
+            "タブ チップ agent アバター claude codex アイコン tab"
+        }
         L10nKey::SettingsLanguage => "言語",
         L10nKey::SettingsLanguageDesc => "xtty の表示言語を選択します",
         L10nKey::SettingsLanguageEnglish => "English",

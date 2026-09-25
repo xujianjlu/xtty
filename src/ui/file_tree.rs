@@ -833,7 +833,7 @@ impl Tty7App {
     pub(crate) fn file_tree_on_screen(&self, cx: &App) -> bool {
         self.right_panel_open(cx)
             && self.right_panel_tab == RightPanelTab::Files
-            && self.sftp_panel.open_pane_id.is_none()
+            && None::<u64>.is_none()
     }
 
     fn file_tree_query(&self, cx: &App) -> String {

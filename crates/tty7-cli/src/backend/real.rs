@@ -2,7 +2,6 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{Context as _, Result, anyhow, bail};
-use serde_json::json;
 use tty7_core::client::{ControlClient, PaneClient, PaneSession};
 use tty7_core::core::agent_hooks::{HookAgent, HookTarget, HooksState, hooks_state};
 use tty7_core::core::session::WorkspaceId;
@@ -382,37 +381,8 @@ fn host_of(key: &str) -> Option<&str> {
 }
 
 fn target_for(route: &RouteInfo) -> Result<RouteTarget> {
-    if route.kind != "ssh" {
-        bail!(
-            "machine '{}' is a {} link — the CLI can only route over ssh links yet",
-            route.key,
-            route.kind
-        );
-    }
-    if route.key.contains('|') {
-        bail!(
-            "machine '{}' is reached through a jump/proxy chain, which the CLI cannot \
-             rebuild from the link key yet — use the GUI for this machine",
-            route.key
-        );
-    }
-    let (user, rest) = route
-        .key
-        .split_once('@')
-        .ok_or_else(|| anyhow!("unrecognized machine key '{}'", route.key))?;
-    let (host, port) = rest
-        .rsplit_once(':')
-        .ok_or_else(|| anyhow!("unrecognized machine key '{}'", route.key))?;
-    let port: u16 = port
-        .parse()
-        .map_err(|_| anyhow!("unrecognized machine key '{}'", route.key))?;
-    let spec = serde_json::from_value(json!({
-        "user": user,
-        "host": host,
-        "port": port,
-        "auth_mode": "auto",
-    }))?;
-    Ok(RouteTarget::Ssh(Box::new(spec)))
+    let _ = route;
+    bail!("Native SSH machine links were removed — use OpenSSH hosts from the GUI")
 }
 
 #[cfg(test)]
@@ -483,18 +453,13 @@ mod tests {
             route("me@build-box:22", "ssh", true),
             route("me@web-box:2222", "ssh", true),
         ];
-        for name in ["me@build-box:22", "build-box"] {
-            let RouteTarget::Ssh(spec) = resolve_route(name, &routes).unwrap() else {
-                panic!("ssh routes resolve to ssh targets");
-            };
-            assert_eq!(spec.user, "me");
-            assert_eq!(spec.host, "build-box");
-            assert_eq!(spec.port, 22);
+        for name in ["me@build-box:22", "build-box", "web-box"] {
+            let err = resolve_route(name, &routes).unwrap_err().to_string();
+            assert!(
+                err.contains("Native SSH"),
+                "ssh machine links no longer resolve to a RouteTarget: {err}"
+            );
         }
-        let RouteTarget::Ssh(spec) = resolve_route("web-box", &routes).unwrap() else {
-            panic!("ssh routes resolve to ssh targets");
-        };
-        assert_eq!(spec.port, 2222);
     }
 
     #[test]

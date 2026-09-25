@@ -6,7 +6,8 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::daemon::protocol::{NativeSshSpec, RemoteKind};
+use crate::daemon::protocol::{RemoteKind};
+
 use crate::terminal::view::TerminalView;
 use crate::ui::app::SpawnAs;
 
@@ -32,21 +33,6 @@ pub(crate) fn plan_for(view: &TerminalView) -> PaneClonePlan {
         };
     }
 
-    // Native SSH (optionally with an interactive hop still in last_ssh_command).
-    if let Some(mut spec) = view.ssh_spec() {
-        let mut follow_up = Vec::new();
-        if let Some(hop) = view.nested_ssh_command() {
-            follow_up.push(ssh_command_landing(&hop, far_cwd.as_deref()));
-        } else if let Some(cwd) = far_cwd.as_ref() {
-            push_cd_login(&mut spec, cwd);
-        }
-        return PaneClonePlan {
-            spawn: SpawnAs::Ssh(spec),
-            cwd: None,
-            follow_up,
-        };
-    }
-
     // Local pane or remote-workspace pane (daemon-local on the far machine).
     let cwd = view.spawnable_cwd().or_else(|| {
         // Workspace panes report paths on their host; spawnable_cwd allows them
@@ -60,19 +46,6 @@ pub(crate) fn plan_for(view: &TerminalView) -> PaneClonePlan {
     }
 }
 
-fn push_cd_login(spec: &mut NativeSshSpec, cwd: &Path) {
-    let path = cwd.to_string_lossy();
-    if path.is_empty() {
-        return;
-    }
-    // Absolute / home-relative only — relative scraps from a partial probe
-    // would land in the wrong place on a fresh login shell.
-    if !(path.starts_with('/') || path.starts_with('~') || looks_like_windows_abs(&path)) {
-        return;
-    }
-    spec.login_script
-        .push(format!("cd {}", posix_single_quote(&path)));
-}
 
 fn looks_like_windows_abs(path: &str) -> bool {
     let b = path.as_bytes();

@@ -511,6 +511,107 @@ if [[ $- == *i* ]] && [[ -z "$TTY7_SHELL_INTEGRATION" ]]; then
   precmd_functions=(__tty7_precmd_d "${precmd_functions[@]}")
   precmd_functions+=(__tty7_precmd)
   preexec_functions+=(__tty7_preexec)
+
+  # ── SSH wrapper (Otty-style): carry OSC into jumper hops without writing
+  # ~/.bashrc on the remote. Interactive ssh gets a temp remote rcfile; plain
+  # `ssh host cmd` / non-tty stay byte-for-byte `command ssh`.
+  if [[ "${TTY7_SSH_INTEGRATION:-1}" == "1" ]]; then
+    __tty7_ssh_blocks_inject() {
+      local tok body ch skip=0 _nc=0 _rc=1
+      shopt -q nocasematch && _nc=1
+      shopt -u nocasematch
+      for tok in "$@"; do
+        if (( skip )); then skip=0; continue; fi
+        case "$tok" in
+          --) break ;;
+          -?*) ;;
+          *) continue ;;
+        esac
+        body="${tok#-}"
+        while [[ -n "$body" ]]; do
+          ch="${body:0:1}"; body="${body:1}"
+          case "$ch" in
+            N|W|O|G|T|s) _rc=0; break 2 ;;
+            b|c|e|i|l|m|o|p|B|D|E|F|I|J|L|P|Q|R|S|w)
+              [[ -z "$body" ]] && skip=1
+              break ;;
+          esac
+        done
+      done
+      (( _nc )) && shopt -s nocasematch
+      return $_rc
+    }
+    __tty7_ssh_has_remote_cmd() {
+      local tok body ch skip=0 seen_dest=0
+      shopt -q nocasematch && local _nc=1 || local _nc=0
+      shopt -u nocasematch
+      for tok in "$@"; do
+        if (( skip )); then skip=0; continue; fi
+        if (( seen_dest )); then
+          (( _nc )) && shopt -s nocasematch
+          return 0
+        fi
+        case "$tok" in
+          --) seen_dest=1; continue ;;
+          -?*)
+            body="${tok#-}"
+            while [[ -n "$body" ]]; do
+              ch="${body:0:1}"; body="${body:1}"
+              case "$ch" in
+                b|c|e|i|l|m|o|p|B|D|E|F|I|J|L|P|Q|R|S|w)
+                  [[ -z "$body" ]] && skip=1
+                  break ;;
+              esac
+            done
+            ;;
+          *) seen_dest=1 ;;
+        esac
+      done
+      (( _nc )) && shopt -s nocasematch
+      return 1
+    }
+    # Temp remote SI: OSC 7/133 + nested ssh wrapper. Never touches ~/.bashrc.
+    __tty7_ssh_remote_bash() {
+      printf '%s' 'd=${TMPDIR:-/tmp}/tty7-si-$$; mkdir -p "$d" 2>/dev/null || exit 1; cat >"$d/bashrc" <<'\''__TTY7_SI__'\''
+# --- tty7 hop SI (temp; not ~/.bashrc) ---
+[[ $- == *i* ]] || return 0
+[[ -z "$TTY7_SHELL_INTEGRATION" ]] || return 0
+export TTY7_SHELL_INTEGRATION=1 TTY7_SSH_INTEGRATION=1
+__tty7_osc() { builtin printf "\e]%s\a" "$1"; }
+__tty7_report_cwd() { builtin printf "\e]7;file://%s%s\a" "${HOSTNAME:-localhost}" "${PWD//\%/%25}"; }
+__tty7_report_identity() { local h=${HOSTNAME:-localhost}; __tty7_osc "0;${USER:-unknown}@${h%%.*}"; }
+__tty7_precmd() { __tty7_report_cwd; __tty7_report_identity; __tty7_osc "133;A"; case "$PS1" in *'\''\[\033]133;B\a\]'\''*) ;; *) PS1="$PS1"'\''\[\033]133;B\a\]'\'' ;; esac; }
+PROMPT_COMMAND="__tty7_precmd${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
+if [[ "${TTY7_SSH_INTEGRATION:-1}" == "1" ]]; then
+  ssh() {
+    if [[ -t 0 ]]; then
+      local h; h=$(command ssh -G "$@" 2>/dev/null | awk "/^hostname /{print \$2; exit}")
+      builtin printf "\e]7;ssh://%s\a" "${h:-unknown}"
+      command ssh -t "$@" "bash --rcfile \"\$d/bashrc\" -i" 2>/dev/null || command ssh "$@"
+      local r=$?; __tty7_report_cwd; return $r
+    fi
+    command ssh "$@"
+  }
+fi
+# --- end tty7 hop SI ---
+__TTY7_SI__
+export TTY7_RM_DIR="$d"
+exec bash --rcfile "$d/bashrc" -i'
+    }
+    ssh() {
+      if [[ ! -t 0 ]] || __tty7_ssh_has_remote_cmd "$@" || __tty7_ssh_blocks_inject "$@"; then
+        command ssh "$@"
+        return $?
+      fi
+      local _h
+      _h=$(command ssh -G "$@" 2>/dev/null | awk '/^hostname /{print $2; exit}')
+      builtin printf '\e]7;ssh://%s\a' "${_h:-unknown}"
+      command ssh -t "$@" "$(__tty7_ssh_remote_bash)"
+      local _ret=$?
+      __tty7_report_cwd
+      return $_ret
+    }
+  fi
 fi
 # --- end tty7 shell integration ---
 "#;

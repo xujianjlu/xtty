@@ -13,6 +13,7 @@ use tty7_core::core::machine::TabId;
 use tty7_core::core::session::{RemoteTarget, RouteSnapshot, WorkspaceId};
 
 use crate::core::actions::{SwitcherAcross, SwitcherAcrossBack};
+use crate::core::config::Config;
 use crate::core::session::WorkspaceStore;
 use crate::daemon::install::InstallPhase;
 use crate::terminal::pane_liveness::Liveness;
@@ -1007,7 +1008,12 @@ impl Tty7App {
             .into_iter()
             .enumerate()
             .map(|(i, v)| TabRow {
-                label: tab_view_label(&v, i, home.as_deref()),
+                label: tab_view_label(
+                    &v,
+                    i,
+                    home.as_deref(),
+                    crate::ui::tab_strip::TabChipOptions::from_config(cx.global::<Config>()),
+                ),
                 // The label only stands in for the path when it came *from* the
                 // path; a name or an agent leaves the location still worth
                 // printing.
@@ -3025,8 +3031,9 @@ fn tab_view_label(
     view: &crate::ui::machine_mirror::TabView,
     index: usize,
     home: Option<&std::path::Path>,
+    options: crate::ui::tab_strip::TabChipOptions,
 ) -> String {
-    crate::ui::tab_strip::label_of(view, index, home)
+    crate::ui::tab_strip::label_of_with(view, index, home, options)
 }
 
 impl Group {
@@ -3720,32 +3727,61 @@ mod tests {
             live: true,
             panes: 1,
         };
-        assert_eq!(tab_view_label(&view, 0, None), "build", "a given name wins");
+        assert_eq!(
+            tab_view_label(
+                &view,
+                0,
+                None,
+                crate::ui::tab_strip::TabChipOptions::default()
+            ),
+            "build",
+            "a given name wins"
+        );
 
         view.name = None;
         assert_eq!(
-            tab_view_label(&view, 0, None),
+            tab_view_label(
+                &view,
+                0,
+                None,
+                crate::ui::tab_strip::TabChipOptions::default()
+            ),
             "修复 workspace switcher",
             "then the title the local strip would be showing — mark and all,              which is to say without the mark"
         );
 
         view.osc_title = Some("user@host:~/repo/025/tty7".to_string());
         assert_eq!(
-            tab_view_label(&view, 0, None),
+            tab_view_label(
+                &view,
+                0,
+                None,
+                crate::ui::tab_strip::TabChipOptions::default()
+            ),
             "tty7",
             "a shell title that carries user@host:path shows the path basename, same as the strip"
         );
 
         view.osc_title = Some("user@host:".to_string());
         assert_eq!(
-            tab_view_label(&view, 0, None),
+            tab_view_label(
+                &view,
+                0,
+                None,
+                crate::ui::tab_strip::TabChipOptions::default()
+            ),
             "tty7",
             "a bare user@host: identity yields to a known cwd basename"
         );
 
         let cwd = view.cwd.take();
         assert_eq!(
-            tab_view_label(&view, 0, None),
+            tab_view_label(
+                &view,
+                0,
+                None,
+                crate::ui::tab_strip::TabChipOptions::default()
+            ),
             "user@host",
             "a bare user@host: identity still names the tab when no cwd is known"
         );
@@ -3753,27 +3789,50 @@ mod tests {
 
         view.osc_title = None;
         assert_eq!(
-            tab_view_label(&view, 0, None),
+            tab_view_label(
+                &view,
+                0,
+                None,
+                crate::ui::tab_strip::TabChipOptions::default()
+            ),
             "Claude Code",
             "an agent names a tab that has told us nothing else"
         );
 
         view.agent = None;
         assert_eq!(
-            tab_view_label(&view, 0, None),
+            tab_view_label(
+                &view,
+                0,
+                None,
+                crate::ui::tab_strip::TabChipOptions::default()
+            ),
             crate::ui::tab_strip::short_title("/Users/x/repo/tty7", None),
             "otherwise the directory, put through the same shortener as the strip"
         );
 
         view.cwd = None;
         assert_eq!(
-            tab_view_label(&view, 0, None),
+            tab_view_label(
+                &view,
+                0,
+                None,
+                crate::ui::tab_strip::TabChipOptions::default()
+            ),
             "zsh",
             "process name is last"
         );
 
         view.title = String::new();
-        assert!(tab_view_label(&view, 2, None).contains('3'));
+        assert!(
+            tab_view_label(
+                &view,
+                2,
+                None,
+                crate::ui::tab_strip::TabChipOptions::default()
+            )
+            .contains('3')
+        );
     }
 }
 

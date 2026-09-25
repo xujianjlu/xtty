@@ -275,6 +275,135 @@ pub fn to_connect_string(profile: &SshProfile) -> String {
     out
 }
 
+/// OpenSSH argv (no leading `ssh`) for a saved/transient profile.
+///
+/// Host picker / "+" use this so a selected host opens a normal local pane
+/// that runs system `ssh`, not the russh Native path.
+pub fn openssh_argv(profile: &SshProfile, profiles: &[SshProfile]) -> Vec<String> {
+    let mut args = Vec::new();
+    if profile.port != 22 {
+        args.push("-p".into());
+        args.push(profile.port.to_string());
+    }
+    for path in profile.expanded_identity_files() {
+        args.push("-i".into());
+        args.push(path);
+    }
+    if profile.agent_forward {
+        args.push("-A".into());
+    }
+    if profile.x11 {
+        args.push("-X".into());
+    }
+    if let Some(cmd) = profile
+        .proxy_command
+        .as_ref()
+        .map(|c| c.trim())
+        .filter(|c| !c.is_empty())
+    {
+        args.push("-o".into());
+        args.push(format!("ProxyCommand={cmd}"));
+    } else if let Some(HostPort { host, port }) = &profile.socks_proxy {
+        if !host.is_empty() && *port != 0 {
+            args.push("-o".into());
+            args.push(format!("ProxyCommand=nc -X 5 -x {host}:{port} %h %p"));
+        }
+    } else if let Some(HostPort { host, port }) = &profile.http_proxy {
+        if !host.is_empty() && *port != 0 {
+            args.push("-o".into());
+            args.push(format!("ProxyCommand=nc -X connect -x {host}:{port} %h %p"));
+        }
+    }
+    if let Some(jump) = proxy_jump_csv(profile, profiles) {
+        args.push("-J".into());
+        args.push(jump);
+    }
+    if let Some(secs) = profile.connect_timeout_s {
+        args.push("-o".into());
+        args.push(format!("ConnectTimeout={secs}"));
+    }
+    if let Some(secs) = profile.keepalive_interval_s {
+        args.push("-o".into());
+        args.push(format!("ServerAliveInterval={secs}"));
+    }
+    if let Some(n) = profile.keepalive_count_max {
+        args.push("-o".into());
+        args.push(format!("ServerAliveCountMax={n}"));
+    }
+    args.push(ssh_destination(profile));
+    args
+}
+
+/// POSIX-quoted `ssh …` line for typing into a local shell (so the SI `ssh()`
+/// wrapper can wrap the hop).
+pub fn openssh_command_line(profile: &SshProfile, profiles: &[SshProfile]) -> String {
+    let mut parts = vec!["ssh".to_string()];
+    for arg in openssh_argv(profile, profiles) {
+        parts.push(posix_ssh_arg(&arg));
+    }
+    parts.join(" ")
+}
+
+fn ssh_destination(profile: &SshProfile) -> String {
+    if profile.user.is_empty() {
+        profile.host.clone()
+    } else {
+        format!("{}@{}", profile.user, profile.host)
+    }
+}
+
+fn jump_endpoint(profile: &SshProfile) -> String {
+    let mut s = ssh_destination(profile);
+    if profile.port != 22 {
+        s.push(':');
+        s.push_str(&profile.port.to_string());
+    }
+    s
+}
+
+/// `ProxyJump` CSV: deeper jumps first (`-J c,b` then dest `a` when a→b→c).
+fn proxy_jump_csv(profile: &SshProfile, profiles: &[SshProfile]) -> Option<String> {
+    let mut visited = std::collections::HashSet::new();
+    let hops = collect_proxy_jumps(profile, profiles, &mut visited);
+    if hops.is_empty() {
+        None
+    } else {
+        Some(hops.join(","))
+    }
+}
+
+fn collect_proxy_jumps(
+    profile: &SshProfile,
+    profiles: &[SshProfile],
+    visited: &mut std::collections::HashSet<Uuid>,
+) -> Vec<String> {
+    let Some(id) = profile.jump_host else {
+        return Vec::new();
+    };
+    if !visited.insert(id) {
+        return Vec::new();
+    }
+    let Some(jp) = profiles.iter().find(|p| p.id == id) else {
+        return Vec::new();
+    };
+    let mut hops = collect_proxy_jumps(jp, profiles, visited);
+    hops.push(jump_endpoint(jp));
+    hops
+}
+
+fn posix_ssh_arg(s: &str) -> String {
+    if s.is_empty() {
+        return "''".to_string();
+    }
+    if s.chars()
+        .all(|c| c.is_ascii_alphanumeric() || "/.-_~+@%=:,".contains(c))
+    {
+        s.to_string()
+    } else {
+        format!("'{}'", s.replace('\'', r"'\''"))
+    }
+}
+
 pub fn expand_identity_placeholders(path: &str, host: &str, user: &str) -> String {
     let mut out = String::with_capacity(path.len());
     let mut chars = path.chars();
@@ -600,6 +729,35 @@ mod tests {
         );
         let m: AuthMode = serde_json::from_str("\"agent\"").unwrap();
         assert_eq!(m, AuthMode::Agent);
+    }
+
+    #[test]
+    fn openssh_argv_basic_and_jump_chain() {
+        let mut bastion = SshProfile::new("bastion");
+        bastion.host = "jumper".into();
+        bastion.user = "gate".into();
+        bastion.port = 2222;
+
+        let mut app = SshProfile::new("app");
+        app.host = "app.internal".into();
+        app.user = "deploy".into();
+        app.port = 22;
+        app.jump_host = Some(bastion.id);
+        app.identity_files = vec!["~/.ssh/id_ed25519".into()];
+        app.agent_forward = true;
+
+        let profiles = vec![bastion.clone(), app.clone()];
+        let argv = openssh_argv(&app, &profiles);
+        assert_eq!(argv.last().map(String::as_str), Some("deploy@app.internal"));
+        let j = argv.windows(2).find(|w| w[0] == "-J").expect("ProxyJump");
+        assert_eq!(j[1], "gate@jumper:2222");
+        assert!(argv.windows(2).any(|w| w[0] == "-i"));
+        assert!(argv.iter().any(|a| a == "-A"));
+
+        let line = openssh_command_line(&app, &profiles);
+        assert!(line.starts_with("ssh "));
+        assert!(line.contains("deploy@app.internal"));
+        assert!(line.contains("-J"));
     }
 }
 

@@ -17,7 +17,7 @@ use crate::core::kitty_graphics::{GraphicsSniffer, Segment, Sniffed};
 use crate::core::osc::OscTokenizer;
 use crate::core::term_modes::TerminalModes;
 use crate::daemon::protocol::{
-    AuthResponse, DaemonMsg, MAX_FRAME, NativeSshSpec, PaneInfo, RemoteContext, RemoteKind,
+    DaemonMsg, MAX_FRAME, PaneInfo, RemoteContext, RemoteKind,
     ShellSpec, WinSize,
 };
 use crate::daemon::shell_integration;
@@ -781,7 +781,6 @@ fn fan_out_output(st: &mut PaneState, bytes: &[u8], frames: Vec<GraphicsFrame>, 
 
 enum PaneBackend {
     Pty(PtyBackend),
-    NativeSsh(NativeSshBackend),
 }
 
 struct ForegroundProbes {
@@ -815,10 +814,6 @@ struct PtyParts {
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
 }
 
-struct NativeSshBackend {
-    handle: Arc<crate::daemon::ssh::SshSessionHandle>,
-    connection: crate::daemon::ssh::SharedConnection,
-}
 
 pub struct DaemonPane {
     pub id: u64,
@@ -835,7 +830,6 @@ pub struct DaemonPane {
     gate: Arc<OutputGate>,
     state: Arc<Mutex<PaneState>>,
     reader: Mutex<Option<JoinHandle<()>>>,
-    broker: Option<Arc<crate::daemon::ssh::PromptBroker>>,
 }
 
 struct DeathReporter {
@@ -1458,7 +1452,6 @@ impl DaemonPane {
             gate: gate.clone(),
             state: state.clone(),
             reader: Mutex::new(None),
-            broker: None,
         });
 
         let death = Arc::new(DeathReporter::new(on_dead));
@@ -1638,133 +1631,6 @@ impl DaemonPane {
             carried.owner,
             on_dead,
         ))
-    }
-
-    pub fn spawn_native_ssh(
-        id: u64,
-        size: WinSize,
-        spec: Box<NativeSshSpec>,
-        on_dead: impl FnOnce() + Send + 'static,
-    ) -> anyhow::Result<Arc<Self>> {
-        let allow_remote_clipboard_write = spec.remote_clipboard_write;
-        let bridge = crate::daemon::ssh::session::make_bridge();
-        let reader_handle: Box<dyn Read + Send> = Box::new(bridge.reader);
-        let writer: Arc<Mutex<Box<dyn Write + Send>>> =
-            Arc::new(Mutex::new(Box::new(bridge.writer)));
-        // The connect task fills this once authenticated; the pane exposes it to
-        // WS4/WS5 via `ssh_connection()`.
-        let connection: crate::daemon::ssh::SharedConnection = Arc::new(Mutex::new(Weak::new()));
-
-        let target = spec
-            .display_name
-            .clone()
-            .unwrap_or_else(|| format!("{}@{}", spec.user, spec.host));
-        let remote = RemoteContext {
-            kind: RemoteKind::NativeSsh,
-            argv: Vec::new(),
-            target,
-        };
-        // Seed the machine-tree title with the dialled identity so the switcher
-        // and `tty7 tab ls` do not fall through to a path-only OSC title before
-        // (or instead of) shell integration reporting `user@host`.
-        let osc_title = crate::core::tab_view::connection_identity(&spec.user, &spec.host);
-
-        let state = Arc::new(Mutex::new(PaneState {
-            id,
-            ring: ReplayRing::new(size),
-            subscriber: None,
-            subscriber_epoch: 0,
-            allow_remote_clipboard_write,
-            clipboard_write_from_spec: Some(allow_remote_clipboard_write),
-            observers: Vec::new(),
-            observer_seq: 0,
-            // A native ssh pane is not running a shell of this machine's; what
-            // it is, `ssh_spec` already says.
-            shell_spec: None,
-            cwd: None,
-            home_identity: osc_title.clone(),
-            osc_title,
-            shell: ShellState::default(),
-            remote_prompt_seen: false,
-            modes: TerminalModes::default(),
-            remote: Some(remote),
-            agent: None,
-            agent_session: None,
-            agent_argv: None,
-            alive: true,
-            exit_code: None,
-        }));
-        let shutting_down = Arc::new(AtomicBool::new(false));
-        let gate = Arc::new(OutputGate::new());
-
-        let broker = {
-            let state = state.clone();
-            crate::daemon::ssh::PromptBroker::new(Box::new(move |msg: DaemonMsg| {
-                match &state.lock().unwrap().subscriber {
-                    Some(sub) => sub.send(msg).is_ok(),
-                    None => false,
-                }
-            }))
-        };
-
-        let pane = Arc::new(Self {
-            id,
-            owner: None,
-            backend: PaneBackend::NativeSsh(NativeSshBackend {
-                handle: bridge.handle,
-                connection: connection.clone(),
-            }),
-            writer: writer.clone(),
-            shutting_down: shutting_down.clone(),
-            gate: gate.clone(),
-            state: state.clone(),
-            reader: Mutex::new(None),
-            broker: Some(broker.clone()),
-        });
-
-        let death = Arc::new(DeathReporter::new(on_dead));
-
-        let reader = Self::spawn_reader(
-            state,
-            shutting_down,
-            gate,
-            reader_handle,
-            writer.clone(),
-            || false,
-            ForegroundProbes {
-                remote: Box::new(|| None),
-                agent: Box::new(|| None),
-                cwd: Box::new(|| None),
-            },
-            death,
-        );
-        *pane.reader.lock().unwrap() = Some(reader);
-
-        crate::daemon::ssh::SshManager::global().spawn_native_session(
-            id,
-            spec,
-            size,
-            broker,
-            bridge.data_tx,
-            bridge.cmd_rx,
-            connection,
-        );
-
-        Ok(pane)
-    }
-
-    pub fn deliver_auth_response(&self, request_id: u64, response: AuthResponse) {
-        if let Some(broker) = &self.broker {
-            broker.deliver(request_id, response);
-        }
-    }
-
-    #[allow(dead_code)]
-    pub fn ssh_connection(&self) -> Option<Arc<crate::daemon::ssh::SshConnection>> {
-        match &self.backend {
-            PaneBackend::NativeSsh(b) => b.connection.lock().unwrap().upgrade(),
-            PaneBackend::Pty(_) => None,
-        }
     }
 
     fn spawn_reader(
@@ -2085,7 +1951,6 @@ impl DaemonPane {
     fn has_foreground_command(&self) -> bool {
         match &self.backend {
             PaneBackend::Pty(pty) => foreground_command_running(&pty.master, pty.shell_pid),
-            PaneBackend::NativeSsh(_) => false,
         }
     }
 
@@ -2167,7 +2032,6 @@ impl DaemonPane {
     fn pty(&self) -> Option<&PtyBackend> {
         match &self.backend {
             PaneBackend::Pty(p) => Some(p),
-            PaneBackend::NativeSsh(_) => None,
         }
     }
 
@@ -2181,7 +2045,6 @@ impl DaemonPane {
                     }
                 }
             }
-            PaneBackend::NativeSsh(b) => b.handle.resize(size),
         }
     }
 
@@ -2249,7 +2112,6 @@ impl DaemonPane {
                 #[cfg(unix)]
                 Self::signal_group(p, libc::SIGKILL);
             }
-            PaneBackend::NativeSsh(b) => b.handle.close(),
         }
     }
 
@@ -2300,16 +2162,12 @@ impl DaemonPane {
     fn foreground_remote_context(&self) -> Option<RemoteContext> {
         match &self.backend {
             PaneBackend::Pty(p) => foreground_remote_context(&p.master),
-            PaneBackend::NativeSsh(_) => None,
         }
     }
 }
 
 impl Drop for DaemonPane {
     fn drop(&mut self) {
-        if matches!(self.backend, PaneBackend::NativeSsh(_)) {
-            crate::daemon::ssh::SshManager::global().teardown_pane_forwards(self.id);
-        }
         self.hangup();
         if let PaneBackend::Pty(p) = &self.backend {
             if let Ok(mut child) = p.child.lock() {
@@ -2796,11 +2654,6 @@ fn set_pane_identity(st: &mut PaneState, identity: String) {
     // speaking), so restore is implicit.
     match st.remote.as_ref().map(|r| r.kind) {
         Some(RemoteKind::Ssh) => {}
-        Some(RemoteKind::NativeSsh) => {
-            if st.home_identity.is_none() {
-                st.home_identity = Some(identity.clone());
-            }
-        }
         None => {
             st.home_identity = Some(identity.clone());
         }
@@ -4368,7 +4221,7 @@ mod tests {
 
         let mut st = test_state(true);
         st.remote = Some(RemoteContext {
-            kind: RemoteKind::NativeSsh,
+            kind: RemoteKind::Ssh /* was NativeSsh; removed */,
             argv: Vec::new(),
             target: "dev@box".into(),
         });
@@ -4906,7 +4759,6 @@ mod tests {
                 PaneSeed {
                     pane: PANE,
                     cwd: Some("/work/api".to_string()),
-                    ssh_spec: None,
                     agent: Some(AgentFacts {
                         agent: CLIAgent::Claude,
                         session_id: Some("sess-1".to_string()),

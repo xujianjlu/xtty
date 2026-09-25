@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::core::cli_agent::CLIAgent;
 use crate::core::session::WorkspaceId;
-use crate::daemon::protocol::{NativeSshSpec, ShellSpec};
+use crate::daemon::protocol::ShellSpec;
 
 pub const MACHINE_FILE: &str = "machine.json";
 
@@ -308,8 +308,6 @@ pub struct PaneRecord {
     #[serde(default)]
     pub osc_title: Option<String>,
     #[serde(default)]
-    pub ssh_spec: Option<Box<NativeSshSpec>>,
-    #[serde(default)]
     pub agent: Option<AgentFacts>,
     /// What the pane is actually running, resolved: the spawn's override if it
     /// had one, otherwise the shell the config named at the time.
@@ -331,7 +329,6 @@ impl PaneRecord {
             cwd: None,
             title: String::new(),
             osc_title: None,
-            ssh_spec: None,
             agent: None,
             shell: None,
             live: false,
@@ -356,8 +353,6 @@ pub struct PaneSeed {
     #[serde(default)]
     pub cwd: Option<String>,
     #[serde(default)]
-    pub ssh_spec: Option<Box<NativeSshSpec>>,
-    #[serde(default)]
     pub agent: Option<AgentFacts>,
     /// See [`PaneRecord::shell`]. Carried here too so a pane that reaches the
     /// tree as a seed — a split, a `tty7` CLI call — names its shell from the
@@ -371,7 +366,6 @@ impl PaneSeed {
         PaneSeed {
             pane,
             cwd: None,
-            ssh_spec: None,
             agent: None,
             shell: None,
         }
@@ -388,7 +382,6 @@ impl PaneSeed {
             cwd: self.cwd,
             title: String::new(),
             osc_title: None,
-            ssh_spec: self.ssh_spec.map(|s| Box::new(s.without_secrets())),
             agent: self.agent,
             shell: self.shell,
             live,
@@ -1740,7 +1733,6 @@ mod tests {
         PaneSeed {
             pane,
             cwd: Some(cwd.to_string()),
-            ssh_spec: None,
             agent: None,
             shell: None,
         }

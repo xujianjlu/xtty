@@ -2,8 +2,6 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::daemon::protocol::NativeSshSpec;
-
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub enum SessionAxis {
     Horizontal,
@@ -23,8 +21,6 @@ pub enum SessionPane {
         /// turns into a PowerShell one.
         #[serde(default)]
         shell: Option<crate::daemon::protocol::ShellSpec>,
-        #[serde(default)]
-        ssh_spec: Option<Box<NativeSshSpec>>,
         #[serde(default)]
         agent: Option<crate::core::cli_agent::CLIAgent>,
         #[serde(default)]

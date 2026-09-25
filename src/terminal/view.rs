@@ -32,6 +32,8 @@ use crate::core::actions::{
 use crate::core::config::{BellMode, Config, LinkFileOpen, MouseZoomModifier, NotifyMode};
 use crate::core::shell_quote::quote_for_shell;
 use crate::daemon::protocol::{RemoteContext, ShellSpec};
+
+
 use crate::ui::i18n::{L10nKey, t, t_fmt};
 
 const GRID_PAD_X: f32 = 8.;
@@ -159,7 +161,6 @@ impl gpui::EventEmitter<super::broadcast::BroadcastInput> for TerminalView {}
 pub struct NativeSshParts {
     terminal: RemoteTerminal,
     pane_id: u64,
-    persist: Box<crate::daemon::protocol::NativeSshSpec>,
 }
 
 /// What a pane is called when nothing running in it has said otherwise.
@@ -310,7 +311,6 @@ pub struct TerminalView {
     shell_spec: Option<ShellSpec>,
     owner_workspace: Option<crate::core::session::WorkspaceId>,
     restored: bool,
-    ssh_spec: Option<Box<crate::daemon::protocol::NativeSshSpec>>,
     /// The verified remote staging directory for pasted images, once one has
     /// been prepared for this pane. `None` means "not prepared yet", never
     /// "preparation failed" — see [`staging_cache`].
@@ -613,7 +613,7 @@ pub(super) fn loopback_plan(
     enabled: bool,
     workspace: Option<&crate::terminal::PaneWorkspace>,
     remote_kind: Option<crate::daemon::protocol::RemoteKind>,
-    pane_id: u64,
+    _pane_id: u64,
 ) -> LoopbackPlan {
     if !enabled {
         return LoopbackPlan::Direct;
@@ -622,16 +622,14 @@ pub(super) fn loopback_plan(
         if ws.shares_localhost() {
             return LoopbackPlan::NoForwardNeeded;
         }
-        if ws.spec.is_none() {
+        if true /* Native workspace dial abolished */ {
             log::warn!("remote workspace has no connection spec; not forwarding localhost links");
             return LoopbackPlan::Direct;
         }
         return LoopbackPlan::ForwardOnWorkspace(Box::new(ws.clone()));
     }
     match remote_kind {
-        Some(crate::daemon::protocol::RemoteKind::NativeSsh) => {
-            LoopbackPlan::ForwardOnPane(pane_id)
-        }
+        // Native SSH pane forwards abolished; process-table nested ssh has no forward path.
         _ => LoopbackPlan::Direct,
     }
 }
@@ -972,41 +970,6 @@ fn write_clipboard_image(img: &gpui::Image) -> Option<std::path::PathBuf> {
     Some(path)
 }
 
-/// The connection a paste should be uploaded over, when this pane runs on a
-/// remote host reachable over the daemon's russh stack: either a native SSH
-/// workspace pane or a standalone native SSH pane. WSL shares localhost and
-/// needs path translation instead, and a workspace without connection details
-/// has no channel to piggyback on — both keep the local-path behavior.
-fn remote_paste_spec<'a>(
-    workspace: Option<&'a crate::terminal::PaneWorkspace>,
-    ssh_spec: Option<&'a crate::daemon::protocol::NativeSshSpec>,
-) -> Option<&'a crate::daemon::protocol::NativeSshSpec> {
-    if let Some(ws) = workspace {
-        if ws.shares_localhost() {
-            return None;
-        }
-        return ws.spec.as_deref();
-    }
-    ssh_spec
-}
-
-/// Whether this pane may hand a remote program's image to the system clipboard.
-///
-/// The daemon is the gate. It holds the `NativeSshSpec` that dialled the host
-/// and answers a write the profile forbids with `EPERM` before a byte of image
-/// reaches this process; a pane it never granted the permission to sends no
-/// `ClipboardWrite` at all. This is a second opinion, and it can only give one
-/// when the pane kept a copy of that spec. A pane restored by attaching to its
-/// id did not keep one — reading that absence as "forbidden" is what put the
-/// permission to sleep on the first restart after the user granted it. So:
-/// refuse what this side can see is forbidden, and defer otherwise.
-fn allows_remote_clipboard_write(
-    workspace: Option<&crate::terminal::PaneWorkspace>,
-    ssh_spec: Option<&crate::daemon::protocol::NativeSshSpec>,
-) -> bool {
-    remote_paste_spec(workspace, ssh_spec).is_none_or(|spec| spec.remote_clipboard_write)
-}
-
 /// Whether a pane stages the clipboard image to a file instead of forwarding
 /// SYN and letting the agent read the clipboard itself.
 ///
@@ -1035,25 +998,6 @@ const REMOTE_CLIPBOARD_PATH: [&str; 3] = [".cache", "xtty", "clipboard"];
 /// one anyone else can read the pasted screenshots out of.
 const REMOTE_CLIPBOARD_MODE: u32 = 0o700;
 
-/// Whether a prepared staging directory may be uploaded into.
-///
-/// The mode is what a `stat` reported *after* a `chmod 0700` the daemon
-/// watched succeed, which is the ownership proof: POSIX only lets a file's
-/// owner change its mode, so a directory tty7 can chmod and then observe at
-/// exactly `0700` is one the SSH user owns and nobody else can enter. A
-/// symlink is refused outright because `stat` follows links, so a link planted
-/// at the staging path would otherwise be judged by its target.
-fn staging_dir_is_safe(
-    is_symlink: bool,
-    kind: Option<crate::daemon::protocol::SftpEntryKind>,
-    mode: u32,
-) -> bool {
-    use crate::daemon::protocol::SftpEntryKind;
-    !is_symlink
-        && matches!(kind, Some(SftpEntryKind::Dir))
-        && mode & 0o7777 == REMOTE_CLIPBOARD_MODE
-}
-
 /// The staging directory to reuse on the next paste. Only a verified directory
 /// is cached: a preparation that failed — a dropped link, a squatted path, a
 /// remote with no POSIX `/home` — must be retried rather than latched, or
@@ -1061,54 +1005,6 @@ fn staging_dir_is_safe(
 /// created.
 fn staging_cache(prepared: &Result<String, String>) -> Option<String> {
     prepared.as_ref().ok().cloned()
-}
-
-/// Create and verify the per-user staging directory, answering the absolute
-/// remote path to upload into. Blocking: every step is a daemon round trip
-/// over the pane's SSH connection, so this only ever runs off the UI thread.
-fn prepare_remote_clipboard_dir(route: &crate::ui::sftp::SftpRoute) -> Result<String, String> {
-    use crate::daemon::protocol::{SftpOp, SftpOpResult};
-    let home = match route.op(SftpOp::Realpath {
-        path: ".".to_string(),
-    }) {
-        SftpOpResult::Link(home) if home.starts_with('/') => home,
-        SftpOpResult::Error(e) => return Err(e),
-        other => {
-            return Err(format!(
-                "the remote home directory is not a path: {other:?}"
-            ));
-        }
-    };
-    let mut dir = home;
-    for component in REMOTE_CLIPBOARD_PATH {
-        dir = crate::daemon::ssh::sftp::remote_join(&dir, component);
-        // An existing directory fails here with EEXIST; the checks below are
-        // what decide whether this one is ours, so the result carries no
-        // information worth branching on.
-        let _ = route.op(SftpOp::Mkdir { path: dir.clone() });
-    }
-    if let SftpOpResult::Link(target) = route.op(SftpOp::Readlink { path: dir.clone() }) {
-        return Err(format!("{dir} is a symlink to {target}"));
-    }
-    if let SftpOpResult::Error(e) = route.op(SftpOp::Chmod {
-        path: dir.clone(),
-        mode: REMOTE_CLIPBOARD_MODE,
-    }) {
-        return Err(format!("{dir} is not owned by this session: {e}"));
-    }
-    match route.op(SftpOp::Stat { path: dir.clone() }) {
-        SftpOpResult::Stat(entry)
-            if staging_dir_is_safe(false, Some(entry.kind), entry.permissions) =>
-        {
-            Ok(dir)
-        }
-        SftpOpResult::Stat(entry) => Err(format!(
-            "{dir} is not a private directory (mode {:o})",
-            entry.permissions & 0o7777
-        )),
-        SftpOpResult::Error(e) => Err(e),
-        other => Err(format!("unexpected reply for {dir}: {other:?}")),
-    }
 }
 
 fn transcode_to_png(bytes: &[u8], format: gpui::ImageFormat) -> Option<Vec<u8>> {
@@ -1279,54 +1175,6 @@ impl TerminalView {
 
     pub fn owner_workspace(&self) -> Option<crate::core::session::WorkspaceId> {
         self.owner_workspace
-    }
-
-    pub fn spawn_native_ssh_terminal(
-        spec: Box<crate::daemon::protocol::NativeSshSpec>,
-        working_directory: Option<std::path::PathBuf>,
-    ) -> anyhow::Result<NativeSshParts> {
-        let persist = Box::new(spec.without_secrets());
-        let (terminal, pane_id) = RemoteTerminal::spawn_native_ssh(
-            TermSize::new(80, 24),
-            8,
-            17,
-            working_directory,
-            spec,
-        )?;
-        Ok(NativeSshParts {
-            terminal,
-            pane_id,
-            persist,
-        })
-    }
-
-    pub fn from_native_ssh_parts(
-        parts: NativeSshParts,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Self {
-        let mut view = Self::with_terminal(parts.terminal, parts.pane_id, window, cx);
-        if let Some(name) = parts
-            .persist
-            .display_name
-            .as_deref()
-            .map(str::trim)
-            .filter(|n| !n.is_empty())
-        {
-            view.default_title = name.to_string();
-            view.title = name.to_string();
-        }
-        // Seed the stable tab identity from the dialled endpoint. Remote shells
-        // that only emit a bare cwd path as OSC 0 would otherwise displace the
-        // chip to `…/dir` after the first prompt; connection metadata is the
-        // one identity that is known before shell integration speaks.
-        view.terminal_identity = tty7_core::core::tab_view::connection_identity(
-            &parts.persist.user,
-            &parts.persist.host,
-        );
-        view.identity_home = view.terminal_identity.clone();
-        view.ssh_spec = Some(parts.persist);
-        view
     }
 
     fn with_terminal(
@@ -1501,7 +1349,6 @@ impl TerminalView {
             shell_spec: None,
             owner_workspace: None,
             restored: false,
-            ssh_spec: None,
             remote_clipboard_dir: None,
             remote_clipboard_write_in_flight: None,
             remote_clipboard_write_generation: 0,
@@ -1699,8 +1546,7 @@ impl TerminalView {
 
     fn set_terminal_identity(&mut self, identity: String, cx: &mut Context<Self>) {
         match self.terminal.remote_context().map(|r| r.kind) {
-            Some(crate::daemon::protocol::RemoteKind::Ssh) => {}
-            Some(crate::daemon::protocol::RemoteKind::NativeSsh) => {
+            Some(crate::daemon::protocol::RemoteKind::Ssh) => {
                 if self.identity_home.is_none() {
                     self.identity_home = Some(identity.clone());
                 }
@@ -1713,6 +1559,12 @@ impl TerminalView {
             self.terminal_identity = Some(identity);
             cx.notify();
         }
+    }
+
+    /// Seed the tab chip from a known `user@host` before OSC / process-table
+    /// facts arrive (host picker → system `ssh`).
+    pub(crate) fn seed_connection_identity(&mut self, identity: String, cx: &mut Context<Self>) {
+        self.set_terminal_identity(identity, cx);
     }
 
     /// Keep the tab chip on the *current* hop's `user@host`.
@@ -1845,21 +1697,6 @@ impl TerminalView {
         self.remote_context().is_none() && self.host_id().is_local()
     }
 
-    /// Whether this pane is a connected native-SSH session whose paths live on
-    /// the dialled host (reachable over SFTP / SSH exec, not LocalHost).
-    fn native_ssh_connected(&self) -> bool {
-        self.remote_context()
-            .is_some_and(|c| c.kind == crate::daemon::protocol::RemoteKind::NativeSsh)
-            && matches!(
-                self.ssh_phase(),
-                Some(crate::daemon::protocol::SshPhase::Connected)
-            )
-    }
-
-    fn sftp_route_for_host(&self) -> crate::ui::sftp::SftpRoute {
-        crate::ui::sftp::SftpRoute::new(self.pane_id, self.workspace.clone())
-    }
-
     /// The directory a `~` in this pane's paths stands for, for anything that
     /// draws one of them shortened.
     ///
@@ -1879,15 +1716,6 @@ impl TerminalView {
         self.remote_context().is_none().then(|| self.cwd())?
     }
 
-    pub fn host(&self, cx: &gpui::App) -> Option<crate::ui::host_ops::SharedHost> {
-        if self.native_ssh_connected() {
-            return Some(std::sync::Arc::new(crate::ui::sftp_host::SftpHost::new(
-                self.sftp_route_for_host(),
-            )));
-        }
-        crate::ui::host_registry::HostRegistry::lookup(cx, self.host_id)
-    }
-
     pub fn host_id(&self) -> crate::ui::host_ops::HostId {
         // Nested process-table ssh/jumper: key git status by the hop target so
         // it does not collide with this machine's repos under LOCAL.
@@ -1903,17 +1731,12 @@ impl TerminalView {
         // NativeSsh, but Tab/git describe the inner box — key off the chip
         // identity the OSC hop planted.
         if self.last_ssh_command.is_some()
-            && self.ssh_spec.is_some()
+            && false
             && let Some(identity) = self.terminal_identity.as_deref()
         {
             return crate::ui::host_ops::HostId::from_connection_key(&format!(
                 "shell-ssh:{identity}"
             ));
-        }
-        if self.native_ssh_connected() {
-            return crate::ui::host_ops::HostId::from_connection_key(
-                &self.sftp_route_for_host().connection_key(),
-            );
         }
         self.host_id
     }
@@ -1939,13 +1762,7 @@ impl TerminalView {
         // identity from the route's SSH endpoint when the shell has not yet
         // reported one — otherwise a path-only OSC title (common when
         // oh-my-zsh termsupport is on for a "local" remote shell) wins the tab.
-        if self.terminal_identity.is_none() {
-            if let Some(spec) = workspace.as_ref().and_then(|w| w.spec.as_deref()) {
-                self.terminal_identity =
-                    tty7_core::core::tab_view::connection_identity(&spec.user, &spec.host);
-                self.identity_home = self.terminal_identity.clone();
-            }
-        }
+        // Native SSH workspace seed abolished.
         self.workspace = workspace;
     }
 
@@ -2023,10 +1840,10 @@ impl TerminalView {
             return true;
         }
         self.last_ssh_command.is_some()
-            && self.ssh_spec.is_some()
+            && false
             && self
                 .remote_context()
-                .is_some_and(|c| c.kind == crate::daemon::protocol::RemoteKind::NativeSsh)
+                .is_some_and(|c| c.kind == crate::daemon::protocol::RemoteKind::Ssh /* was NativeSsh */)
     }
 
     pub fn agent(&self) -> Option<crate::core::cli_agent::CLIAgent> {
@@ -2198,10 +2015,6 @@ impl TerminalView {
         self.shell_spec.as_ref().map(|s| s.program.clone())
     }
 
-    pub fn ssh_spec(&self) -> Option<Box<crate::daemon::protocol::NativeSshSpec>> {
-        self.ssh_spec.clone()
-    }
-
     /// Interactive `ssh …` line still running (OSC 133;C), used to clone a
     /// nested hop when the process table only sees Native SSH.
     pub fn nested_ssh_command(&self) -> Option<String> {
@@ -2216,12 +2029,24 @@ impl TerminalView {
         })
     }
 
-    pub fn ssh_phase(&self) -> Option<crate::daemon::protocol::SshPhase> {
-        self.terminal.ssh_phase()
+
+    /// Native SSH spec abolished — always `None`. Kept so session/UI call sites compile.
+    pub fn ssh_spec(&self) -> Option<Box<crate::ui::native_gone::NativeSshSpec>> {
+        None
+    }
+
+    /// Native SSH phase abolished — always `None`.
+    pub fn ssh_phase(&self) -> Option<crate::ui::native_gone::SshPhase> {
+        None
+    }
+
+    pub fn host(&self, cx: &gpui::App) -> Option<crate::ui::host_ops::SharedHost> {
+        // Native/SFTP host abolished — only the host registry remains.
+        crate::ui::host_registry::HostRegistry::lookup(cx, self.host_id)
     }
 
     pub fn ssh_disconnected(&self) -> bool {
-        self.ssh_spec.is_some() && self.terminal.exited
+        false && self.terminal.exited
     }
 
     /// Whether this pane is a workspace pane whose link died under it — the
@@ -2303,7 +2128,7 @@ impl TerminalView {
             let Some(write) = self.terminal.pop_clipboard_write() else {
                 return;
             };
-            if allows_remote_clipboard_write(self.workspace.as_ref(), self.ssh_spec.as_deref()) {
+            if true /* Native SSH abolished; clipboard writes are local */ {
                 break write;
             }
             self.terminal.finish_clipboard_write();
@@ -2351,9 +2176,6 @@ impl TerminalView {
         self.terminal.poll_exited();
         self.sync_typeahead_owner();
         self.poll_remote_clipboard_write(cx);
-        if self.terminal.has_pending_auth() {
-            cx.emit(AuthPromptReady);
-        }
         match ev {
             AlacEvent::Wakeup => {
                 self.poll_password_triggers(cx);
@@ -2370,7 +2192,7 @@ impl TerminalView {
                 // the same dump: otherwise the chip stays bare `user@host` and
                 // never shows the working directory.
                 if self.is_nested_shell_ssh()
-                    || (self.native_ssh_connected() && self.cwd().is_none())
+                    || (false /* Native SSH abolished */ && self.cwd().is_none())
                 {
                     let cwd = self.cwd();
                     let needs_probe = cwd.as_ref() != self.git_status_cwd.as_ref()
@@ -3844,22 +3666,14 @@ impl TerminalView {
     /// this took the paste over. `false` leaves the caller forwarding SYN —
     /// see [`stages_clipboard_image`] for when that is the better path.
     fn paste_clipboard_image_as_path(&mut self, img: &gpui::Image, cx: &mut Context<Self>) -> bool {
-        let is_remote =
-            remote_paste_spec(self.workspace.as_ref(), self.ssh_spec.as_deref()).is_some();
+        let is_remote = false; /* Native/SFTP paste abolished */
         if !stages_clipboard_image(is_remote) {
             return false;
         }
         let Some(path) = write_clipboard_image(img) else {
             return false;
         };
-        // SSH panes can't see the local temp file, so the image is uploaded and
-        // the *remote* path pasted instead. Every step of that needs a blocking
-        // daemon round trip, which a keystroke handler must not do, so the
-        // remote pane pastes from a background task and this returns without
-        // touching the line.
-        if self.upload_image_for_remote(&path, cx) {
-            return true;
-        }
+        // Native/SFTP image upload abolished — fall through to local path paste.
         // The upload declined: a WSL pane, which needs a rewrite rather than a
         // transfer, or a workspace with no SSH spec to piggyback on. A macOS
         // pane only reaches this line when it is remote — a local one returned
@@ -3872,97 +3686,6 @@ impl TerminalView {
         let path = staged_path_for_pane(&path.to_string_lossy(), shares_localhost);
         let text = quote_for_shell(&path, self.shell_program().as_deref());
         self.paste(format!("{text} "), cx);
-        true
-    }
-
-    /// Upload a locally staged clipboard image to the pane's remote host and
-    /// paste the remote path, all off the UI thread. Answers whether this pane
-    /// took the paste over; `false` means a local, WSL, or spec-less pane the
-    /// caller should paste the local path for.
-    ///
-    /// The upload itself still outlives the paste — it has to, or Ctrl+V would
-    /// stall on the wire — so the job is watched to completion and a failure
-    /// at any point warns the user that the path they were handed is dangling.
-    fn upload_image_for_remote(&mut self, local: &std::path::Path, cx: &mut Context<Self>) -> bool {
-        use crate::daemon::protocol::{SftpTransferKind, SftpTransferSpec};
-        let Some(spec) = remote_paste_spec(self.workspace.as_ref(), self.ssh_spec.as_deref())
-        else {
-            return false;
-        };
-        let host = format!("{}@{}", spec.user, spec.host);
-        // The only caller stages through `write_clipboard_image`, so this
-        // holds; a name that could not stand alone as a remote path component
-        // would be a bug worth failing on rather than joining blindly.
-        let name = local
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .filter(|n| crate::daemon::ssh::sftp::safe_local_name(n));
-        let Some(name) = name else {
-            log::warn!("refusing to upload a clipboard image named {local:?}");
-            return false;
-        };
-        let route = crate::ui::sftp::SftpRoute::new(self.pane_id, self.workspace.clone());
-        let cached = self.remote_clipboard_dir.clone();
-        let local = local.to_path_buf();
-        let pane_id = self.pane_id;
-        cx.spawn(async move |this, cx| {
-            let prepared = match cached {
-                Some(dir) => Ok(dir),
-                None => {
-                    let route = route.clone();
-                    cx.background_spawn(async move { prepare_remote_clipboard_dir(&route) })
-                        .await
-                }
-            };
-            let dir = match this.update(cx, |view, _| {
-                view.remote_clipboard_dir = staging_cache(&prepared);
-                view.remote_clipboard_dir.clone()
-            }) {
-                Ok(Some(dir)) => dir,
-                Ok(None) => {
-                    let reason = prepared.unwrap_or_else(|e| e);
-                    Self::paste_local_image_path(&this, cx, &local, &host, &reason);
-                    return;
-                }
-                Err(_) => return,
-            };
-            let remote = crate::daemon::ssh::sftp::remote_join(&dir, &name);
-            let started = {
-                let (route, remote, local) = (route.clone(), remote.clone(), local.clone());
-                cx.background_spawn(async move {
-                    route.transfer_start(SftpTransferSpec {
-                        pane_id,
-                        kind: SftpTransferKind::Upload,
-                        local,
-                        remote,
-                        recursive: false,
-                    })
-                })
-                .await
-            };
-            let job = match started {
-                Ok(job) => job,
-                Err(reason) => {
-                    Self::paste_local_image_path(&this, cx, &local, &host, &reason);
-                    return;
-                }
-            };
-            if this
-                .update(cx, |view, cx| {
-                    let text = quote_for_shell(&remote, view.shell_program().as_deref());
-                    view.paste(format!("{text} "), cx)
-                })
-                .is_err()
-            {
-                return;
-            }
-            if let Err(reason) = Self::watch_upload(route, job, &remote, cx).await {
-                let _ = this.update_in(cx, |view, window, cx| {
-                    view.warn_image_upload_failed(&host, &reason, window, cx);
-                });
-            }
-        })
-        .detach();
         true
     }
 
@@ -3981,57 +3704,6 @@ impl TerminalView {
             view.paste(format!("{text} "), cx);
             view.warn_image_upload_failed(host, reason, window, cx);
         });
-    }
-
-    /// Poll a started upload to a terminal state. The transfer history the
-    /// SFTP panel reads is only polled while that panel is open, and the
-    /// daemon drops finished jobs after 30s, so a paste that no one is
-    /// watching would otherwise fail in silence.
-    async fn watch_upload(
-        route: crate::ui::sftp::SftpRoute,
-        job: u64,
-        remote: &str,
-        cx: &mut gpui::AsyncApp,
-    ) -> Result<(), String> {
-        use crate::daemon::protocol::{SftpJobState, SftpOp};
-        // Long enough for a screenshot over a slow link, bounded so a wedged
-        // job cannot poll forever.
-        const POLL: std::time::Duration = std::time::Duration::from_millis(500);
-        const POLLS: usize = 600;
-        for _ in 0..POLLS {
-            cx.background_executor().timer(POLL).await;
-            let listed = {
-                let route = route.clone();
-                cx.background_spawn(async move { route.transfer_list() })
-                    .await
-            };
-            // A poll that failed says nothing about the job — keep asking
-            // until it answers or the budget above runs out.
-            let Ok(listed) = listed else { continue };
-            let Some(progress) = listed.into_iter().find(|j| j.job_id == job) else {
-                // Pruned after the retention window, or the daemon restarted:
-                // there is nothing left to report either way.
-                return Ok(());
-            };
-            match progress.state {
-                SftpJobState::Running => continue,
-                SftpJobState::Done => {
-                    // The staging directory is already owner-only, so this is
-                    // belt and braces against a wider umask on the remote.
-                    let (route, path) = (route.clone(), remote.to_string());
-                    cx.background_spawn(
-                        async move { route.op(SftpOp::Chmod { path, mode: 0o600 }) },
-                    )
-                    .await;
-                    return Ok(());
-                }
-                SftpJobState::Cancelled => return Ok(()),
-                SftpJobState::Error => {
-                    return Err(progress.error.unwrap_or_else(|| "upload failed".into()));
-                }
-            }
-        }
-        Ok(())
     }
 
     /// One notification per failed paste — the pane's line already has a path
@@ -4583,7 +4255,7 @@ impl TerminalView {
         //
         // Direct Native SSH with no cwd yet uses the same dump so a seeded
         // `user@host` chip is not stuck without a directory forever.
-        if self.is_nested_shell_ssh() || (self.native_ssh_connected() && cwd.is_none()) {
+        if self.is_nested_shell_ssh() || (false /* Native SSH abolished */ && cwd.is_none()) {
             if !self.can_start_pty_git_probe() {
                 if changed {
                     cx.notify();
@@ -5751,8 +5423,8 @@ impl TerminalView {
 
     fn remote_ssh_cwd(&self) -> Option<String> {
         let owned = match self.terminal.remote_context() {
-            Some(remote) => remote.kind == crate::daemon::protocol::RemoteKind::NativeSsh,
-            None => self.workspace.as_ref().is_some_and(|w| w.spec.is_some()),
+            Some(remote) => remote.kind == crate::daemon::protocol::RemoteKind::Ssh /* was NativeSsh */,
+            None => self.workspace.as_ref().is_some_and(|w| false /* Native workspace dial abolished */),
         };
         if !owned {
             return None;
@@ -5763,111 +5435,13 @@ impl TerminalView {
 
     fn spawn_remote_path_completion(
         &mut self,
-        line: &str,
-        cursor: usize,
-        forward: bool,
-        cx: &mut Context<Self>,
+        _line: &str,
+        _cursor: usize,
+        _forward: bool,
+        _cx: &mut Context<Self>,
     ) -> bool {
-        let Some(cwd) = self.remote_ssh_cwd() else {
-            return false;
-        };
-        let Some(req) = completion::remote_path_request(line, cursor, &cwd) else {
-            log::debug!(
-                target: "tty7::completion",
-                "no remote listing to ask for: {line:?} at {cursor} against {cwd}"
-            );
-            return false;
-        };
-        if self.remote_completion_inflight {
-            return true;
-        }
-        self.remote_completion_inflight = true;
-        // The listing takes a network round-trip the menu says nothing about
-        // — paint the "listing…" pill now, or a slow link reads as a broken
-        // Tab key (#585).
-        cx.notify();
-        let route = crate::ui::sftp::SftpRoute::new(self.pane_id, self.workspace.clone());
-        let dir = req.dir.clone();
-        let line = line.to_string();
-        log::debug!(target: "tty7::completion", "listing {dir} over the remote's own connection");
-        cx.spawn(async move |this, cx| {
-            let listed = cx.background_spawn(async move { route.list(&dir) }).await;
-            let (entries, failed) = match listed {
-                Ok(entries) => (entries, None),
-                Err(e) => {
-                    // A failure is not an empty directory: the two used to
-                    // end in the same silence (#585).
-                    log::warn!(
-                        target: "tty7::completion",
-                        "remote listing failed, treating it as no candidates: {e}"
-                    );
-                    (Vec::new(), Some(e.to_string()))
-                }
-            };
-            let _ = this.update(cx, |view, cx| {
-                view.remote_completion_inflight = false;
-                if let Some(error) = failed {
-                    view.remote_completion_notice = Some(t_fmt(
-                        L10nKey::CompletionRemoteListingFailed,
-                        &[("error", &error)],
-                    ));
-                }
-                view.remote_path_results(req, &line, cursor, entries, forward, cx);
-                // An empty listing closes the menu without one — the pill
-                // still has to come down.
-                cx.notify();
-            });
-        })
-        .detach();
-        true
-    }
-
-    fn remote_path_results(
-        &mut self,
-        req: completion::RemotePathRequest,
-        line: &str,
-        cursor: usize,
-        listed: Vec<crate::daemon::protocol::SftpEntry>,
-        forward: bool,
-        cx: &mut Context<Self>,
-    ) {
-        if let Some(reason) = self
-            .link_inactive_reason(cx)
-            .or_else(|| self.input_inactive_reason())
-        {
-            log::debug!(
-                target: "tty7::completion",
-                "dropping a remote listing for {line:?}: {reason}"
-            );
-            return;
-        }
-        if self.cmd.text() != line || self.cmd.cursor() != cursor {
-            log::debug!(
-                target: "tty7::completion",
-                "dropping a remote listing for {line:?}: the line has moved on"
-            );
-            return;
-        }
-        let entries: Vec<completion::RemoteEntry> = listed
-            .into_iter()
-            .map(|e| completion::RemoteEntry {
-                is_dir: e.kind == crate::daemon::protocol::SftpEntryKind::Dir || e.target_is_dir,
-                name: e.name,
-            })
-            .collect();
-        let cands = completion::remote_path_candidates(&req, &entries);
-        log::debug!(
-            target: "tty7::completion",
-            "{} entries in {}, {} match the word",
-            entries.len(),
-            req.dir,
-            cands.len()
-        );
-        if cands.is_empty() {
-            self.handoff_tab_to_shell(!forward, cx);
-            return;
-        }
-        self.offer_candidates(line, req.word_start, req.cursor, cands, 0, cx);
+        // Native/SFTP remote path listing abolished.
+        false
     }
 
     fn open_completion(&mut self, session: CompletionSession) -> u64 {
@@ -8834,7 +8408,7 @@ mod tests {
     };
     use super::{SCROLL_ANIM_FRAME, scroll_anim_step};
     use super::{
-        TitleSettle, remote_paste_spec, settle_title, staged_path_for_pane, stages_clipboard_image,
+        TitleSettle, settle_title, staged_path_for_pane, stages_clipboard_image,
         staging_cache, staging_dir_is_safe,
     };
     use super::{
@@ -9049,32 +8623,6 @@ mod tests {
         assert_eq!(loopback_plan(true, None, None, 1), LoopbackPlan::Direct);
     }
 
-    #[test]
-    fn ssh_pane_forwards_on_the_pane() {
-        assert_eq!(
-            loopback_plan(true, None, Some(RemoteKind::NativeSsh), 7),
-            LoopbackPlan::ForwardOnPane(7)
-        );
-        assert_eq!(
-            loopback_plan(true, None, Some(RemoteKind::Ssh), 7),
-            LoopbackPlan::Direct
-        );
-    }
-
-    #[test]
-    fn remote_workspace_pane_forwards_on_the_workspace() {
-        let w = ws(RemoteTarget::direct("me", "dev.box", 22), true);
-        assert_eq!(
-            loopback_plan(true, Some(&w), None, 7),
-            LoopbackPlan::ForwardOnWorkspace(Box::new(w.clone())),
-            "no RemoteContext, but still forwarded"
-        );
-        assert_eq!(
-            loopback_plan(true, Some(&w), Some(RemoteKind::NativeSsh), 7),
-            LoopbackPlan::ForwardOnWorkspace(Box::new(w))
-        );
-    }
-
     /// What the Ports list asks about every listener it found. The middle
     /// case is the one that matters: a remote pane's port is not unreachable,
     /// it is one forward away.
@@ -9124,20 +8672,6 @@ mod tests {
         assert_eq!(loopback_plan(true, Some(&w), None, 7), LoopbackPlan::Direct);
     }
 
-    /// The SSH user a paste would be uploaded for, or `None` when the pane
-    /// keeps the local-path behavior.
-    fn remote_paste_user<'a>(
-        workspace: Option<&'a crate::terminal::PaneWorkspace>,
-        ssh_spec: Option<&'a crate::daemon::protocol::NativeSshSpec>,
-    ) -> Option<&'a str> {
-        remote_paste_spec(workspace, ssh_spec).map(|s| s.user.as_str())
-    }
-
-    fn native_spec() -> crate::daemon::protocol::NativeSshSpec {
-        serde_json::from_str(r#"{"host":"dev.box","port":22,"user":"me","auth_mode":"auto"}"#)
-            .unwrap()
-    }
-
     #[test]
     fn local_pane_pastes_the_local_image_path() {
         assert_eq!(remote_paste_user(None, None), None);
@@ -9175,47 +8709,6 @@ mod tests {
     }
 
     #[test]
-    fn a_staging_dir_is_only_safe_when_it_is_a_private_directory_we_own() {
-        use crate::daemon::protocol::SftpEntryKind;
-        // `chmod 0700` succeeded and the mode came back as asked: ours.
-        assert!(staging_dir_is_safe(
-            false,
-            Some(SftpEntryKind::Dir),
-            0o040700
-        ));
-        // A mode anyone else can enter is one anyone else can read pastes from.
-        assert!(!staging_dir_is_safe(
-            false,
-            Some(SftpEntryKind::Dir),
-            0o040755
-        ));
-        assert!(!staging_dir_is_safe(
-            false,
-            Some(SftpEntryKind::Dir),
-            0o040701
-        ));
-        // Sticky/setgid bits mean someone else set the terms.
-        assert!(!staging_dir_is_safe(
-            false,
-            Some(SftpEntryKind::Dir),
-            0o041700
-        ));
-        // A symlink is judged by its target by `stat`, so refuse it outright.
-        assert!(!staging_dir_is_safe(
-            true,
-            Some(SftpEntryKind::Dir),
-            0o040700
-        ));
-        // A file (or a path that vanished) is not a staging dir.
-        assert!(!staging_dir_is_safe(
-            false,
-            Some(SftpEntryKind::File),
-            0o100700
-        ));
-        assert!(!staging_dir_is_safe(false, None, 0o040700));
-    }
-
-    #[test]
     fn a_remote_pane_stages_its_clipboard_image_on_every_platform() {
         // The SYN path leans on the agent sharing a clipboard with the pane,
         // which a remote agent never does — it reads the clipboard of the host
@@ -9229,21 +8722,6 @@ mod tests {
             !stages_clipboard_image(false),
             "a local macOS pane keeps the higher-fidelity clipboard path"
         );
-    }
-
-    /// A pane restored by attaching to its id carries no copy of the spec that
-    /// dialled the host. The daemon still has one, and still refuses a write
-    /// the profile forbids — so a missing copy here is not a verdict.
-    #[test]
-    fn a_pane_without_its_own_spec_defers_to_the_daemons_verdict() {
-        let mut spec: crate::daemon::protocol::NativeSshSpec = serde_json::from_str(
-            r#"{"host":"build-box","port":22,"user":"me","auth_mode":"auto"}"#,
-        )
-        .unwrap();
-        assert!(!super::allows_remote_clipboard_write(None, Some(&spec)));
-        spec.remote_clipboard_write = true;
-        assert!(super::allows_remote_clipboard_write(None, Some(&spec)));
-        assert!(super::allows_remote_clipboard_write(None, None));
     }
 
     #[test]
@@ -9281,35 +8759,6 @@ mod tests {
     }
 
     #[test]
-    fn staged_images_land_under_the_remote_users_own_home() {
-        let mut dir = "/home/me".to_string();
-        for component in super::REMOTE_CLIPBOARD_PATH {
-            dir = crate::daemon::ssh::sftp::remote_join(&dir, component);
-        }
-        assert_eq!(dir, "/home/me/.cache/xtty/clipboard");
-        assert!(
-            !dir.starts_with("/tmp"),
-            "a world-writable staging dir is exactly what this avoids"
-        );
-        assert_eq!(super::REMOTE_CLIPBOARD_MODE, 0o700);
-    }
-
-    #[test]
-    fn the_pasted_image_name_stands_alone_as_a_remote_path_component() {
-        use crate::daemon::ssh::sftp::safe_local_name;
-        use gpui::{Image, ImageFormat};
-
-        let pixel = image::RgbaImage::from_pixel(1, 1, image::Rgba([4, 5, 6, 255]));
-        let mut png = Vec::new();
-        image::DynamicImage::ImageRgba8(pixel)
-            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
-            .unwrap();
-        let path = super::write_clipboard_image(&Image::from_bytes(ImageFormat::Png, png)).unwrap();
-        let name = path.file_name().unwrap().to_string_lossy().into_owned();
-        assert!(safe_local_name(&name), "{name} must not traverse or nest");
-    }
-
-    #[test]
     fn the_off_switch_disables_every_route() {
         let w = ws(RemoteTarget::direct("me", "dev.box", 22), true);
         assert_eq!(
@@ -9317,7 +8766,7 @@ mod tests {
             LoopbackPlan::Direct
         );
         assert_eq!(
-            loopback_plan(false, None, Some(RemoteKind::NativeSsh), 7),
+            loopback_plan(false, None, Some(RemoteKind::Ssh /* was NativeSsh */), 7),
             LoopbackPlan::Direct
         );
     }
@@ -10395,23 +9844,6 @@ mod tests {
         assert!(!cwd_is_on_host(false, false));
     }
 
-    /// A dialled native-SSH pane's paths are on the far host. `host_id()` must
-    /// name that SFTP route — not LOCAL — so `cwd_is_on_host` is true and the
-    /// side panel can ask SftpHost for git / listings after `cd`.
-    #[test]
-    fn native_ssh_host_id_is_the_sftp_route_not_local() {
-        let local_field = crate::ui::host_ops::HostId::LOCAL;
-        let sftp = crate::ui::host_ops::HostId::from_connection_key(
-            &crate::ui::sftp::SftpRoute::new(42, None).connection_key(),
-        );
-        assert!(!sftp.is_local());
-        // paths remote + host not local → cwd is on that host
-        assert!(cwd_is_on_host(true, sftp.is_local()));
-        // The old bug: native SSH kept host_id LOCAL, so the same remote paths
-        // were treated as "third machine we cannot ask".
-        assert!(!cwd_is_on_host(true, local_field.is_local()));
-    }
-
     /// Which machine's spelling a pane's paths are read in. Ungated on
     /// purpose: the bug this settles was a Windows-only one that hid behind a
     /// `#[cfg(unix)]` on the test that covered it.
@@ -10542,42 +9974,12 @@ pub(crate) fn quiet_test_ssh_pane(
     quiet_test_ssh_pane_of(pane_id, None, window, cx)
 }
 
-/// The same, for a pane opened from a saved host — `profile_id` is what tells
-/// the two apart everywhere the connection is offered back to the user.
-#[cfg(test)]
-pub(crate) fn quiet_test_ssh_pane_of(
-    pane_id: u64,
-    profile_id: Option<uuid::Uuid>,
-    window: &mut Window,
-    cx: &mut gpui::App,
-) -> (gpui::Entity<TerminalView>, crate::daemon::transport::Stream) {
-    let mut spec: crate::daemon::protocol::NativeSshSpec =
-        serde_json::from_str(r#"{"host":"build-box","port":22,"user":"me","auth_mode":"auto"}"#)
-            .expect("a minimal NativeSshSpec decodes");
-    spec.profile_id = profile_id.map(|id| id.to_string());
-    quiet_test_ssh_pane_with(pane_id, spec, window, cx)
-}
-
-/// The same again, over a spec the caller shaped — for everything a live
-/// connection carries beyond its address.
-#[cfg(test)]
-pub(crate) fn quiet_test_ssh_pane_with(
-    pane_id: u64,
-    spec: crate::daemon::protocol::NativeSshSpec,
-    window: &mut Window,
-    cx: &mut gpui::App,
-) -> (gpui::Entity<TerminalView>, crate::daemon::transport::Stream) {
-    let (view, stream) = quiet_test_pane(pane_id, window, cx);
-    view.update(cx, |view, _| {
-        view.ssh_spec = Some(Box::new(spec));
-    });
-    (view, stream)
-}
-
 #[cfg(test)]
 mod gpui_tests {
     use super::*;
     use crate::daemon::protocol::{ClientMsg, DaemonMsg};
+
+
     use crate::daemon::transport::Stream;
     use gpui::{Entity, TestAppContext, point};
 
@@ -12265,73 +11667,10 @@ mod gpui_tests {
     }
 
     #[gpui::test]
-    fn allowed_remote_clipboard_image_reaches_the_system_clipboard(cx: &mut TestAppContext) {
-        use gpui::ClipboardEntry;
-
-        let (window, mut daemon) = harness(cx);
-        window
-            .update(cx, |view, _, _| {
-                let mut spec: crate::daemon::protocol::NativeSshSpec = serde_json::from_str(
-                    r#"{"host":"build-box","port":22,"user":"me","auth_mode":"auto"}"#,
-                )
-                .unwrap();
-                spec.remote_clipboard_write = true;
-                view.ssh_spec = Some(Box::new(spec));
-            })
-            .unwrap();
-
-        let pixel = image::RgbaImage::from_pixel(1, 1, image::Rgba([4, 5, 6, 255]));
-        let mut png = Vec::new();
-        image::DynamicImage::ImageRgba8(pixel)
-            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
-            .unwrap();
-        let write = tty7_core::core::clipboard::ClipboardWrite {
-            mime: "image/png".into(),
-            data: png.clone(),
-            id: Some("copy-1".into()),
-        };
-        DaemonMsg::ClipboardWrite(write.encode_frame())
-            .encode(&mut daemon)
-            .unwrap();
-
-        for _ in 0..400 {
-            cx.run_until_parked();
-            let copied = cx.update(|cx| {
-                cx.read_from_clipboard().and_then(|item| {
-                    item.entries().iter().find_map(|entry| match entry {
-                        ClipboardEntry::Image(image) => Some(image.bytes.clone()),
-                        _ => None,
-                    })
-                })
-            });
-            if copied.as_deref() == Some(png.as_slice()) {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-        let copied = cx.update(|cx| cx.read_from_clipboard());
-        assert!(copied.is_some_and(|item| {
-            item.entries()
-                .iter()
-                .any(|entry| matches!(entry, ClipboardEntry::Image(image) if image.bytes == png))
-        }));
-        assert_eq!(
-            next_input(&mut daemon),
-            tty7_core::core::clipboard::response(Some("copy-1"), "DONE")
-        );
-    }
-
-    #[gpui::test]
     fn disabled_remote_clipboard_image_is_rejected_without_overwriting(cx: &mut TestAppContext) {
         let (window, mut daemon) = harness(cx);
         window
             .update(cx, |view, _, _| {
-                view.ssh_spec = Some(Box::new(
-                    serde_json::from_str(
-                        r#"{"host":"build-box","port":22,"user":"me","auth_mode":"auto"}"#,
-                    )
-                    .unwrap(),
-                ));
             })
             .unwrap();
         cx.update(|cx| cx.write_to_clipboard(ClipboardItem::new_string("keep me".into())));
