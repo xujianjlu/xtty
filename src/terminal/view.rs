@@ -133,10 +133,6 @@ pub struct ChildExited;
 
 impl gpui::EventEmitter<ChildExited> for TerminalView {}
 
-pub struct AuthPromptReady;
-
-impl gpui::EventEmitter<AuthPromptReady> for TerminalView {}
-
 pub struct AgentSessionChanged;
 
 impl gpui::EventEmitter<AgentSessionChanged> for TerminalView {}
@@ -157,11 +153,6 @@ pub struct OpenFileRequested {
 impl gpui::EventEmitter<OpenFileRequested> for TerminalView {}
 
 impl gpui::EventEmitter<super::broadcast::BroadcastInput> for TerminalView {}
-
-pub struct NativeSshParts {
-    terminal: RemoteTerminal,
-    pane_id: u64,
-}
 
 /// What a pane is called when nothing running in it has said otherwise.
 pub(crate) const DEFAULT_TITLE: &str = "xtty";
@@ -365,6 +356,10 @@ pub struct TerminalView {
     /// Last interactive `ssh …` command we applied as a hop, so we do not
     /// re-apply every Wakeup while it stays in `running_command`.
     last_ssh_command: Option<String>,
+    /// Lines Copy Tab / split-as-clone still owe the new shell (in-shell hop).
+    /// Flushed on the first prompt, or after a short fallback if integration
+    /// never reports one.
+    clone_follow_up: Vec<String>,
     password_trigger: super::password_trigger::PasswordTriggerMatcher,
     /// When true, this pane stays out of the current tab's broadcast group.
     broadcast_opt_out: bool,
@@ -622,16 +617,11 @@ pub(super) fn loopback_plan(
         if ws.shares_localhost() {
             return LoopbackPlan::NoForwardNeeded;
         }
-        if true /* Native workspace dial abolished */ {
-            log::warn!("remote workspace has no connection spec; not forwarding localhost links");
-            return LoopbackPlan::Direct;
-        }
-        return LoopbackPlan::ForwardOnWorkspace(Box::new(ws.clone()));
+        log::warn!("remote workspace has no connection spec; not forwarding localhost links");
+        return LoopbackPlan::Direct;
     }
-    match remote_kind {
-        // Native SSH pane forwards abolished; process-table nested ssh has no forward path.
-        _ => LoopbackPlan::Direct,
-    }
+    let _ = remote_kind;
+    LoopbackPlan::Direct
 }
 
 struct PendingHistory {
@@ -1377,6 +1367,7 @@ impl TerminalView {
             identity_home: None,
             last_remote_ssh_target: None,
             last_ssh_command: None,
+            clone_follow_up: Vec::new(),
             password_trigger: Default::default(),
             broadcast_opt_out: false,
             broadcast_role: super::broadcast::BroadcastRole::Off,
@@ -1727,17 +1718,6 @@ impl TerminalView {
                 ctx.target
             ));
         }
-        // Interactive hop inside Native SSH: process table still reports
-        // NativeSsh, but Tab/git describe the inner box — key off the chip
-        // identity the OSC hop planted.
-        if self.last_ssh_command.is_some()
-            && false
-            && let Some(identity) = self.terminal_identity.as_deref()
-        {
-            return crate::ui::host_ops::HostId::from_connection_key(&format!(
-                "shell-ssh:{identity}"
-            ));
-        }
         self.host_id
     }
 
@@ -1829,21 +1809,10 @@ impl TerminalView {
         cwd_is_on_host(!self.paths_are_local(), self.host_id().is_local())
     }
 
-    /// Process-table nested `ssh` / jumper (no SFTP / `Host::git` to the hop),
-    /// or an interactive hop inside Native SSH tracked via OSC 133;C
-    /// (`last_ssh_command`) — process table cannot see past the tunnel.
+    /// Process-table nested `ssh` / jumper — no `Host::git` to the hop.
     fn is_nested_shell_ssh(&self) -> bool {
-        if self
-            .remote_context()
+        self.remote_context()
             .is_some_and(|c| c.kind == crate::daemon::protocol::RemoteKind::Ssh)
-        {
-            return true;
-        }
-        self.last_ssh_command.is_some()
-            && false
-            && self
-                .remote_context()
-                .is_some_and(|c| c.kind == crate::daemon::protocol::RemoteKind::Ssh /* was NativeSsh */)
     }
 
     pub fn agent(&self) -> Option<crate::core::cli_agent::CLIAgent> {
@@ -2001,6 +1970,35 @@ impl TerminalView {
         self.terminal.write(format!("{cmd}\r").into_bytes());
     }
 
+    /// Type `lines` after this pane's first prompt — used to replay an in-shell
+    /// `ssh` hop on a clone. A missing prompt (no shell integration) still
+    /// sends after a short wait so the hop is not lost.
+    pub fn queue_clone_follow_up(&mut self, lines: Vec<String>, cx: &mut Context<Self>) {
+        self.clone_follow_up = lines.into_iter().filter(|line| !line.is_empty()).collect();
+        if self.clone_follow_up.is_empty() {
+            return;
+        }
+        if self.terminal.at_prompt() {
+            self.flush_clone_follow_up();
+            return;
+        }
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(std::time::Duration::from_millis(800))
+                .await;
+            this.update(cx, |this, _cx| this.flush_clone_follow_up())
+                .ok();
+        })
+        .detach();
+    }
+
+    fn flush_clone_follow_up(&mut self) {
+        let lines = std::mem::take(&mut self.clone_follow_up);
+        for line in lines {
+            self.run_command_line(&line);
+        }
+    }
+
     pub fn shell_spec(&self) -> Option<ShellSpec> {
         self.shell_spec.clone()
     }
@@ -2016,7 +2014,7 @@ impl TerminalView {
     }
 
     /// Interactive `ssh …` line still running (OSC 133;C), used to clone a
-    /// nested hop when the process table only sees Native SSH.
+    /// nested hop from the in-shell process table.
     pub fn nested_ssh_command(&self) -> Option<String> {
         self.last_ssh_command.clone()
     }
@@ -2029,16 +2027,6 @@ impl TerminalView {
         })
     }
 
-
-    /// Native SSH spec abolished — always `None`. Kept so session/UI call sites compile.
-    pub fn ssh_spec(&self) -> Option<Box<crate::ui::native_gone::NativeSshSpec>> {
-        None
-    }
-
-    /// Native SSH phase abolished — always `None`.
-    pub fn ssh_phase(&self) -> Option<crate::ui::native_gone::SshPhase> {
-        None
-    }
 
     pub fn host(&self, cx: &gpui::App) -> Option<crate::ui::host_ops::SharedHost> {
         // Native/SFTP host abolished — only the host registry remains.
@@ -2124,18 +2112,8 @@ impl TerminalView {
         if self.remote_clipboard_write_in_flight.is_some() {
             return;
         }
-        let write = loop {
-            let Some(write) = self.terminal.pop_clipboard_write() else {
-                return;
-            };
-            if true /* Native SSH abolished; clipboard writes are local */ {
-                break write;
-            }
-            self.terminal.finish_clipboard_write();
-            self.terminal.write(tty7_core::core::clipboard::response(
-                write.id.as_deref(),
-                "EPERM",
-            ));
+        let Some(write) = self.terminal.pop_clipboard_write() else {
+            return;
         };
 
         let generation = self.remote_clipboard_write_generation;
@@ -2188,12 +2166,7 @@ impl TerminalView {
                 // so the PTY `pwd`+git dump plants Tab chip data without waiting
                 // for the 300 ms poll_foreground tick.
                 //
-                // Direct Native SSH with a seeded identity but no OSC 7 yet gets
-                // the same dump: otherwise the chip stays bare `user@host` and
-                // never shows the working directory.
-                if self.is_nested_shell_ssh()
-                    || (false /* Native SSH abolished */ && self.cwd().is_none())
-                {
+                if self.is_nested_shell_ssh() {
                     let cwd = self.cwd();
                     let needs_probe = cwd.as_ref() != self.git_status_cwd.as_ref()
                         || (cwd.is_none() && !self.terminal.git_probe_pipe().is_active());
@@ -2443,27 +2416,20 @@ impl TerminalView {
     }
 
     fn open_zmodem_send_picker(&mut self, cx: &mut Context<Self>) {
-        // Drop forced DarkAqua so NSOpenPanel matches Finder, not a black sheet.
-        crate::ui::theme::begin_system_file_dialog_appearance();
-        let rx = cx.prompt_for_paths(gpui::PathPromptOptions {
-            files: true,
-            directories: false,
-            multiple: true,
-            prompt: None,
-        });
+        // Finder `runModal` — not gpui's sheet, which inherited DarkAqua.
         cx.spawn(async move |this, cx| {
-            let paths = match rx.await {
-                Ok(Ok(Some(paths))) if !paths.is_empty() => paths,
-                _ => {
-                    let _ = this.update(cx, |this, cx| {
-                        crate::ui::theme::end_system_file_dialog_appearance(cx);
-                        this.cancel_zmodem_picker(cx);
-                    });
-                    return;
-                }
-            };
+            crate::ui::theme::begin_system_file_dialog_appearance();
+            let paths = crate::ui::file_dialog::pick_paths(crate::ui::file_dialog::Options {
+                files: true,
+                directories: false,
+                multiple: true,
+            });
             let _ = this.update(cx, |this, cx| {
                 crate::ui::theme::end_system_file_dialog_appearance(cx);
+                let Some(paths) = paths.filter(|p| !p.is_empty()) else {
+                    this.cancel_zmodem_picker(cx);
+                    return;
+                };
                 this.zmodem_picker_open = false;
                 let Some(session) = this.zmodem.as_mut() else {
                     return;
@@ -2473,7 +2439,6 @@ impl TerminalView {
                         if !wire.is_empty() {
                             this.terminal.write(wire);
                         }
-                        // Drain anything that arrived while we started.
                         this.poll_zmodem(cx);
                     }
                     Err(err) => {
@@ -2489,21 +2454,16 @@ impl TerminalView {
         .detach();
     }
 
-    /// Ask where remote `sz` should land — system folder picker, not a silent
-    /// write into `~/Downloads`.
+    /// Ask where remote `sz` should land — Finder folder dialog, not `~/Downloads`.
     fn open_zmodem_receive_picker(&mut self, cx: &mut Context<Self>) {
-        crate::ui::theme::begin_system_file_dialog_appearance();
-        let rx = cx.prompt_for_paths(gpui::PathPromptOptions {
-            files: false,
-            directories: true,
-            multiple: false,
-            prompt: None,
-        });
         cx.spawn(async move |this, cx| {
-            let dir = match rx.await {
-                Ok(Ok(Some(paths))) => paths.into_iter().next(),
-                _ => None,
-            };
+            crate::ui::theme::begin_system_file_dialog_appearance();
+            let dir = crate::ui::file_dialog::pick_paths(crate::ui::file_dialog::Options {
+                files: false,
+                directories: true,
+                multiple: false,
+            })
+            .and_then(|paths| paths.into_iter().next());
             let _ = this.update(cx, |this, cx| {
                 crate::ui::theme::end_system_file_dialog_appearance(cx);
                 this.zmodem_picker_open = false;
@@ -3868,6 +3828,10 @@ impl TerminalView {
             self.last_at_prompt = at_prompt;
             cx.notify();
         }
+        if at_prompt && !self.clone_follow_up.is_empty() {
+            self.flush_clone_follow_up();
+            cx.notify();
+        }
 
         let notify_allowed = match cx.global::<Config>().notify_on_command_finish {
             NotifyMode::Never => false,
@@ -4212,10 +4176,9 @@ impl TerminalView {
         if self.history_scope.is_local() || self.host_id.is_local() {
             return Vec::new();
         }
-        // Nested process-table `ssh`/`su` (RemoteKind::Ssh): Host SFTP still
-        // reaches only the workspace machine. Seeding the inner scope from
-        // that home would list the wrong box's commands. NativeSsh keeps Host
-        // on the dialled machine — read that machine's shell history files.
+        // Nested process-table `ssh`/`su` (RemoteKind::Ssh): Host file access
+        // still reaches only the workspace machine. Seeding the inner scope
+        // from that home would list the wrong box's commands.
         if self
             .remote_context()
             .is_some_and(|c| c.kind == crate::daemon::protocol::RemoteKind::Ssh)
@@ -4253,9 +4216,7 @@ impl TerminalView {
         // Even with no OSC 7 cwd yet, still arm the dump: the script prints
         // `pwd` first so Tab chips get a path without far-side shell integration.
         //
-        // Direct Native SSH with no cwd yet uses the same dump so a seeded
-        // `user@host` chip is not stuck without a directory forever.
-        if self.is_nested_shell_ssh() || (false /* Native SSH abolished */ && cwd.is_none()) {
+        if self.is_nested_shell_ssh() {
             if !self.can_start_pty_git_probe() {
                 if changed {
                     cx.notify();
@@ -5422,10 +5383,10 @@ impl TerminalView {
     }
 
     fn remote_ssh_cwd(&self) -> Option<String> {
-        let owned = match self.terminal.remote_context() {
-            Some(remote) => remote.kind == crate::daemon::protocol::RemoteKind::Ssh /* was NativeSsh */,
-            None => self.workspace.as_ref().is_some_and(|w| false /* Native workspace dial abolished */),
-        };
+        let owned = self
+            .terminal
+            .remote_context()
+            .is_some_and(|remote| remote.kind == crate::daemon::protocol::RemoteKind::Ssh);
         if !owned {
             return None;
         }
@@ -8766,7 +8727,7 @@ mod tests {
             LoopbackPlan::Direct
         );
         assert_eq!(
-            loopback_plan(false, None, Some(RemoteKind::Ssh /* was NativeSsh */), 7),
+            loopback_plan(false, None, Some(RemoteKind::Ssh), 7),
             LoopbackPlan::Direct
         );
     }
@@ -9960,18 +9921,36 @@ pub(crate) fn quiet_reattached_test_pane(
     (view, daemon_side)
 }
 
-/// A quiet pane that was dialled by hand, with no saved host behind it.
-///
-/// Ungated on purpose: the transport this hands back is already
-/// platform-neutral, and gating it left every test that wanted an SSH pane
-/// silently skipped on Windows.
+/// A local pane whose process table already shows an in-shell `ssh` hop.
 #[cfg(test)]
 pub(crate) fn quiet_test_ssh_pane(
     pane_id: u64,
     window: &mut Window,
     cx: &mut gpui::App,
 ) -> (gpui::Entity<TerminalView>, crate::daemon::transport::Stream) {
-    quiet_test_ssh_pane_of(pane_id, None, window, cx)
+    quiet_test_ssh_hop_pane(pane_id, "me@build-box", window, cx)
+}
+
+/// Same as [`quiet_test_ssh_pane`], with a chosen `user@host` chip target.
+#[cfg(test)]
+pub(crate) fn quiet_test_ssh_hop_pane(
+    pane_id: u64,
+    target: &str,
+    window: &mut Window,
+    cx: &mut gpui::App,
+) -> (gpui::Entity<TerminalView>, crate::daemon::transport::Stream) {
+    let (view, daemon) = quiet_test_pane(pane_id, window, cx);
+    view.update(cx, |view, cx| {
+        view.terminal.set_remote_context_for_test(Some(
+            crate::daemon::protocol::RemoteContext {
+                kind: crate::daemon::protocol::RemoteKind::Ssh,
+                argv: vec!["ssh".into(), target.into()],
+                target: target.into(),
+            },
+        ));
+        view.sync_identity_with_remote(cx);
+    });
+    (view, daemon)
 }
 
 #[cfg(test)]

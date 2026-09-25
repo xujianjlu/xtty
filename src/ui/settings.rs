@@ -33,8 +33,6 @@ use crate::core::keychain::{
 use crate::core::ssh_profile::{
     Algorithms, AuthMode, ForwardKind, ForwardRule, HostPort, SshProfile, to_connect_string,
 };
-use crate::ui::native_gone::{SshTestNeed, SshTestReport};
-
 use crate::ui::app::{
     FONT_SIZE_STEP, LINE_HEIGHT_STEP, TILE_GLYPH_LINE, TILE_SIZE, TITLE_BAR_HEIGHT, ThemeEdit,
     Tty7App, UI_FONT_SIZE_STEP,
@@ -1062,16 +1060,7 @@ pub(crate) struct SshProfileForm {
     verify_host_keys: Option<bool>,
     warn_on_close: Option<bool>,
 
-    /// The last Test Connection on this form, or `None` when there has not
-    /// been one — or when an edit since made the old answer a lie.
-    test: Option<SshTestState>,
-
     _subs: Vec<Subscription>,
-}
-
-pub(crate) enum SshTestState {
-    Running,
-    Done(SshTestReport),
 }
 
 impl SshProfileForm {
@@ -1491,24 +1480,11 @@ fn field_error(message: impl Into<String>, cx: &App) -> Div {
 
 /// A duration as a test result should read it: milliseconds while the number
 /// still means something, seconds once it does not.
+#[cfg(test)]
 fn human_millis(ms: u32) -> String {
     match ms < 1000 {
         true => format!("{ms} ms"),
         false => format!("{:.1} s", f64::from(ms) / 1000.0),
-    }
-}
-
-/// What the handshake stopped to ask for, as the one line explaining why a
-/// reachable host still is not a connected one.
-fn ssh_test_need_message(need: &SshTestNeed) -> L10nKey {
-    match need {
-        SshTestNeed::Password => L10nKey::SettingsTestNeedsPassword,
-        SshTestNeed::Passphrase | SshTestNeed::KeyPassphrase => {
-            L10nKey::SettingsTestNeedsPassphrase
-        }
-        SshTestNeed::KeyboardInteractive => L10nKey::SettingsTestNeedsInteractive,
-        SshTestNeed::HostKeyDecision => L10nKey::SettingsTestNeedsHostKey,
-        SshTestNeed::HostKeyChanged => L10nKey::SettingsTestHostKeyChanged,
     }
 }
 
@@ -3465,18 +3441,17 @@ impl Tty7App {
     }
 
     fn live_ssh_profiles(&self, cx: &App) -> std::collections::HashSet<Uuid> {
-        use crate::ui::native_gone::SshPhase;
+        use crate::core::session::RemoteTarget;
+        let profiles = &cx.global::<Config>().ssh_profiles;
         let mut live = std::collections::HashSet::new();
         for tab in &self.tabs {
             for leaf in tab.pane.terminals() {
                 let v = leaf.read(cx);
-                if !matches!(v.ssh_phase(), Some(SshPhase::Connected)) || v.terminal.exited {
+                if v.terminal.exited {
                     continue;
                 }
-                if let Some(id) = v
-                    .ssh_spec()
-                    .and_then(|s| s.profile_id.clone())
-                    .and_then(|id| Uuid::parse_str(&id).ok())
+                if let Some(RemoteTarget::Profile { id }) =
+                    crate::ui::ssh_connect::ssh_host_target_of_view(&v, profiles)
                 {
                     live.insert(id);
                 }
@@ -3911,11 +3886,6 @@ impl Tty7App {
                 let picked = auth_mode_labels().iter().position(|l| l == label);
                 if let (Some(ix), Some(form)) = (picked, this.ssh_form_mut()) {
                     form.auth = AUTH_MODES[ix];
-                    // The same reason the typed fields drop it: the answer on
-                    // screen was about a handshake this form would no longer
-                    // make. A green line under a changed method reads as a
-                    // method that was proved, and it was not.
-                    form.test = None;
                     cx.notify();
                 }
             },
@@ -3963,13 +3933,6 @@ impl Tty7App {
             subs.push(
                 cx.subscribe_in(input, window, |this, _i, ev: &InputEvent, _w, cx| {
                     if matches!(ev, InputEvent::Change) {
-                        // The test answered for the host as it was typed a
-                        // moment ago. Keeping the green line under a changed
-                        // address would be the form vouching for something it
-                        // never dialled.
-                        if let Some(form) = this.ssh_form_mut() {
-                            form.test = None;
-                        }
                         cx.notify();
                     }
                 }),
@@ -4017,7 +3980,6 @@ impl Tty7App {
             remote_clipboard_write: profile.remote_clipboard_write,
             verify_host_keys: profile.verify_host_keys,
             warn_on_close: profile.warn_on_close,
-            test: None,
             _subs: subs,
         };
         let editing = form.editing;
@@ -4346,65 +4308,6 @@ impl Tty7App {
         cx.spawn_in(window, async move |this, cx| {
             let Ok(0) = answer.await else { return };
             let _ = this.update_in(cx, |this, window, cx| this.close_settings(window, cx));
-        })
-        .detach();
-    }
-
-    /// Dial the host the form is holding — without saving it, and without
-    /// spending a tab on the answer. The daemon does the connecting, so this is
-    /// the same path Connect would take.
-    pub(crate) fn test_ssh_form_connection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some((profile, errors)) = self.ssh_form_collect(cx) else {
-            return;
-        };
-        if !errors.is_empty() {
-            return;
-        }
-        let mut spec = Box::new(self.native_ssh_spec_for_profile(&profile, cx));
-        // The spec is built from the keychain, so without this Test would dial
-        // with the *saved* password while a new one sits typed on screen —
-        // and report a failure the form could not explain.
-        if let Some(form) = self.active_settings().and_then(|s| s.ssh_form.as_ref()) {
-            if form.wants_password() {
-                let typed = form.password.read(cx).value().to_string();
-                if !typed.is_empty() {
-                    spec.password = Some(typed);
-                }
-            }
-            if form.wants_key() {
-                let typed = form.passphrase.read(cx).value().to_string();
-                if let (false, Some(key)) = (typed.is_empty(), first_readable_key(&profile)) {
-                    spec.key_passphrases
-                        .get_or_insert_with(Default::default)
-                        .insert(key, typed);
-                }
-            }
-        }
-        let editing = profile.id;
-        if let Some(form) = self.ssh_form_mut() {
-            form.test = Some(SshTestState::Running);
-        }
-        cx.notify();
-
-        let probe = cx.background_executor().spawn(async move {
-            Err::<crate::ui::native_gone::SshTestReport, String>(
-                "Native SSH test abolished".into(),
-            )
-        });
-        cx.spawn_in(window, async move |this, cx| {
-            let report = match probe.await {
-                Ok(r) => r,
-                Err(reason) => crate::ui::native_gone::SshTestReport::Failed { reason },
-            };
-            let _ = this.update(cx, |this, cx| {
-                // The form may have been closed, or moved to another host, in
-                // the seconds the handshake took. An answer about a host nobody
-                // is looking at any more is not worth showing.
-                if let Some(form) = this.ssh_form_mut().filter(|f| f.editing == editing) {
-                    form.test = Some(SshTestState::Done(report));
-                    cx.notify();
-                }
-            });
         })
         .detach();
     }
@@ -4781,26 +4684,6 @@ impl Tty7App {
             (true, true) => t(L10nKey::SettingsNewHost).to_string(),
         };
 
-        let testing = matches!(form.test, Some(SshTestState::Running));
-        let test_line = form.test.as_ref().map(|state| match state {
-            SshTestState::Running => field_note(t(L10nKey::SettingsTestRunning), cx),
-            SshTestState::Done(report) => match report {
-                SshTestReport::Authenticated { elapsed_ms } => {
-                    div().text_xs().text_color(success).child(t_fmt(
-                        L10nKey::SettingsTestReached,
-                        &[("time", &human_millis(*elapsed_ms))],
-                    ))
-                }
-                SshTestReport::NeedsInput { need, .. } => {
-                    field_note(t(ssh_test_need_message(need)), cx)
-                }
-                SshTestReport::Failed { reason } => field_error(
-                    t_fmt(L10nKey::SettingsTestFailed, &[("reason", reason)]),
-                    cx,
-                ),
-            },
-        });
-
         let header = h_flex()
             .items_start()
             .justify_between()
@@ -4918,11 +4801,6 @@ impl Tty7App {
         v_flex()
             .gap_4()
             .child(header)
-            // Under the buttons that produced it, on the right, where the eye
-            // already is after pressing Test.
-            .when_some(test_line, |col, line| {
-                col.child(h_flex().w_full().justify_end().child(line))
-            })
             .child(core)
             .child(self.render_ssh_profile_auth_section(form, cx))
             .child(self.render_ssh_profile_jump_section(form, &errors, cx))
@@ -5301,7 +5179,7 @@ impl Tty7App {
                     .opacity(if needs_target {
                         1.0
                     } else {
-                        crate::ui::native_gone::NO_TARGET_FADE
+                        0.4
                     })
                     .when(stack_ends, |end| end.w_full())
                     .child(endpoint(&row.target_host, &row.target_port)),
@@ -8026,21 +7904,6 @@ mod tests {
         assert_eq!(human_millis(999), "999 ms");
         assert_eq!(human_millis(1000), "1.0 s");
         assert_eq!(human_millis(12_400), "12.4 s");
-
-        let needs = [
-            SshTestNeed::Password,
-            SshTestNeed::KeyPassphrase,
-            SshTestNeed::KeyboardInteractive,
-            SshTestNeed::HostKeyDecision,
-            SshTestNeed::HostKeyChanged,
-        ];
-        let lines: Vec<&str> = needs.iter().map(|n| t(ssh_test_need_message(n))).collect();
-        assert!(lines.iter().all(|l| !l.is_empty()));
-        assert_eq!(
-            lines.iter().collect::<std::collections::HashSet<_>>().len(),
-            lines.len(),
-            "each thing the handshake can stop for gets said differently"
-        );
     }
 
     /// The credential boxes the form shows have to be the ones the connection

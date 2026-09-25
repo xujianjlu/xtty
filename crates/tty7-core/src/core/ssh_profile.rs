@@ -455,10 +455,8 @@ pub fn expand_tilde(path: &str) -> String {
 /// which on Windows is the common case (the OpenSSH Authentication Agent
 /// service is disabled by default there).
 ///
-/// Both the GUI (`ui::ssh_connect`, preloading cached passphrases) and the
-/// daemon (`daemon::ssh::auth`, offering the keys) must see the *same* list:
-/// `NativeSshSpec::key_passphrases` is keyed on these exact strings, so the
-/// two sides share this one definition rather than formatting their own.
+/// The GUI (`ui::ssh_connect`) and OpenSSH argv builder must see the same
+/// list: keychain passphrases are keyed on these exact strings.
 ///
 /// The list stays short on purpose: every offered key spends one of the
 /// server's `MaxAuthTries` (default 6), shared with explicit keys and agent

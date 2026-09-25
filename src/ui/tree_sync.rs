@@ -121,9 +121,7 @@ pub(crate) fn desired_tabs(
     let mut held = Vec::new();
     for (index, tab) in app.tabs.iter().enumerate() {
         let Some(root) = desired_node(&tab.pane, remote, cx) else {
-            if !(remote && every_leaf_is_native_ssh(&tab.pane, cx)) {
-                held.push(tab.tree_id.get());
-            }
+            held.push(tab.tree_id.get());
             continue;
         };
         let id = tab.tree_id.get();
@@ -140,24 +138,11 @@ pub(crate) fn desired_tabs(
     (out, active, held)
 }
 
-fn every_leaf_is_native_ssh(pane: &Pane, cx: &App) -> bool {
-    match pane {
-        Pane::Leaf(PaneSlot::Ready(view)) => view.read(cx).ssh_spec().is_some(),
-        Pane::Leaf(PaneSlot::Connecting(_)) | Pane::Empty => false,
-        Pane::Split { a, b, .. } => {
-            every_leaf_is_native_ssh(a, cx) && every_leaf_is_native_ssh(b, cx)
-        }
-    }
-}
-
 fn desired_node(pane: &Pane, remote_window: bool, cx: &App) -> Option<DesiredNode> {
     match pane {
         Pane::Leaf(PaneSlot::Ready(view)) => {
             let view = view.read(cx);
-            let ssh_spec = view.ssh_spec();
-            if remote_window && ssh_spec.is_some() {
-                return None;
-            }
+            let _ = remote_window;
             let agent = view.agent().map(|agent| {
                 let session = view.agent_session();
                 AgentFacts {
@@ -2744,17 +2729,9 @@ impl Tty7App {
         window: &mut gpui::Window,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
-        let remote = WorkspaceStore::all(cx)
-            .get(self.workspace)
-            .is_some_and(|w| w.is_remote());
         let mut existing: HashMap<u64, PaneSlot> = HashMap::new();
-        let mut ssh_slots: Vec<PaneSlot> = Vec::new();
         for slot in self.tabs[index].pane.leaves() {
             let id = match &slot {
-                PaneSlot::Ready(view) if remote && view.read(cx).ssh_spec().is_some() => {
-                    ssh_slots.push(slot);
-                    continue;
-                }
                 PaneSlot::Ready(view) => Some(view.read(cx).pane_id),
                 PaneSlot::Connecting(pending) => pending.read(cx).spawn.restore_pane,
             };
@@ -2765,9 +2742,6 @@ impl Tty7App {
         let Some(pane) = self.build_pane_from_tree(&tab.root, &mut existing, window, cx) else {
             return false;
         };
-        let pane = ssh_slots.into_iter().fold(pane, |tree, slot| {
-            Pane::split_node(gpui::Axis::Horizontal, 0.5, tree, Pane::Leaf(slot))
-        });
         let gui = &mut self.tabs[index];
         gui.pane = pane;
         gui.name = tab.name.clone();

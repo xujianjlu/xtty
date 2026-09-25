@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Native SSH (russh) abolished.** Host-picker tabs and typed hops both spawn
+  local `ssh`. Tab chips still show `user@host`, cwd, git, and the agent icon
+  from in-shell session facts. Managed SFTP / russh forwards / Native Test
+  Connection are gone; profile `-L/-R/-D` rules still go to OpenSSH.
+
 - **Prompt editor removed.** The shell always owns the prompt line (plain PTY
   echo). The Settings → Input → Prompt editor / Tab completion switches are
   gone. Password triggers are unchanged.
@@ -27,12 +32,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Panel, SSH Remote Files, Port Forwarding), palette rows that opened that
   column, and the default ⌘J binding are gone so new installs have no main path
   onto it. Panel chrome still closes it when somehow open; actions and
-  SFTP/git plumbing remain for Native / `config.json` / Keybindings.
+  git plumbing remains for `config.json` / Keybindings.
 
 ### Fixed
 
 
-- **Native Finder panels for in-pane `rz` / `sz`.** Upload (`rz`) clears forced DarkAqua while `NSOpenPanel` is open so the sheet matches system Finder chrome. Download (`sz`) opens a directory picker before writing files instead of silently landing in `~/Downloads`.
+- **Native Finder panels for in-pane `rz` / `sz`.** Both sides use an
+  application-modal `NSOpenPanel` (`runModal`) so the dialog is a normal Finder
+  Open window, not a DarkAqua sheet on the terminal. `sz` always asks for a
+  folder first and no longer writes into `~/Downloads` by default.
 
 - **Sidebar tab cards, Tab colors, and Ctrl+C input retention (26.9.13).** Left
   tab rows are framed chrome-fill cards; idle/hover fills are swapped and the

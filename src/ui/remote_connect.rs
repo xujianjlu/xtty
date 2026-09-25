@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::io;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use gpui::{App, AppContext as _, BorrowAppContext as _, Global};
 
@@ -13,8 +13,6 @@ use crate::daemon::install::{
     InstallConfirm, InstallDecision, InstallPhase, InstallProgress, InstallRequest,
     MismatchedRemoteDaemon,
 };
-use crate::ui::native_gone::{AuthPromptKind, AuthResponse, NativeSshSpec};
-
 use crate::daemon::router::RouteHeader;
 use crate::ui::i18n::{L10nKey, t, t_fmt};
 use tty7_core::host::remote::RemoteHost;
@@ -187,11 +185,6 @@ fn endpoint_label(user: &str, host: &str, port: u16) -> String {
     } else {
         format!("{base}:{port}")
     }
-}
-
-pub fn spec_for(target: &RemoteTarget, cx: &App) -> Result<NativeSshSpec, String> {
-    let _ = (target, cx);
-    Err("remote workspaces require Native SSH which was removed".into())
 }
 
 pub fn control_route(target: &RemoteTarget, cx: &App) -> Result<RouteHeader, String> {
@@ -526,32 +519,6 @@ pub fn take_pending_install() -> Option<PendingInstall> {
     MAILBOX.lock().ok()?.pop()
 }
 
-pub struct PendingAuth {
-    pub host: HostId,
-    pub prompt: AuthPromptKind,
-    /// Which connection is asking, when the route is an SSH hop. The sheet
-    /// files and forgets keychain entries under this; a route that is not SSH
-    /// (WSL, a local stdio server) has no endpoint to name and gets `None`.
-    ///
-    /// Without it the sheet fell back to port 22 and a hard-coded "not
-    /// auto-supplied", so a routed prompt for a non-22 endpoint wrote its
-    /// password under the wrong key and a rejected stored one was never
-    /// noticed, let alone cleared.
-    pub endpoint: Option<crate::ui::native_gone::PromptEndpoint>,
-    /// The route already carried a stored password into this attempt, so a
-    /// password prompt arriving anyway means the server turned it down.
-    pub auto_supplied_password: bool,
-    reply: std::sync::mpsc::SyncSender<AuthResponse>,
-}
-
-impl PendingAuth {
-    pub fn answer(self, response: AuthResponse) {
-        let _ = self.reply.send(response);
-    }
-}
-
-static AUTH_MAILBOX: Mutex<Vec<PendingAuth>> = Mutex::new(Vec::new());
-
 struct RouteOrigin {
     key: String,
     target: RemoteTarget,
@@ -590,14 +557,6 @@ pub fn origin_target(key: &str) -> Option<RemoteTarget> {
         .iter()
         .find(|o| o.key == key)
         .map(|o| o.target.clone())
-}
-
-pub struct GuiRouteAuth;
-
-/* RouteAuthResponder abolished with Native SSH */
-
-pub fn take_pending_auth() -> Option<PendingAuth> {
-    AUTH_MAILBOX.lock().ok()?.pop()
 }
 
 #[cfg(test)]
@@ -842,42 +801,18 @@ mod tests {
         assert_eq!(handle.join().unwrap(), InstallDecision::Approve);
     }
 
-    fn native_spec(user: &str, host: &str, port: u16) -> NativeSshSpec {
-        let mut profile = crate::core::ssh_profile::SshProfile::new(host.to_string());
-        profile.host = host.to_string();
-        profile.user = user.to_string();
-        profile.port = port;
-        crate::ui::ssh_connect::build_native_ssh_spec(
-            &profile,
-            &[],
-            &crate::core::keychain::InMemoryCredentialStore::new(),
-            false,
-        )
-    }
-
-    /// `SshProfile::new` takes a *name*, and the address lives in a separate
-    /// `host` field; every production caller assigns both. `native_spec` used
-    /// to assign only the name, so the spec it handed back addressed nobody
-    /// and `ConnectionKey::from_spec` spelled it `me@:22` — one key for every
-    /// machine in this module that talks to port 22.
-    ///
-    /// `ORIGINS` is keyed by exactly that string, so the two tests below that
-    /// note an origin and read it back were writing to and reading from the
-    /// same slot. Whichever noted last won, and the other was handed the wrong
-    /// machine: 17 failures in 20 runs of this module alone, 6 in 20 of the
-    /// whole binary, and none when either test ran by itself.
     #[test]
     fn two_machines_do_not_share_one_route_origin_key() {
         use crate::daemon::router::RouteTarget;
 
-        let build = RouteTarget::Ssh(Box::new(native_spec("me", "build-box", 22)));
-        let twin = RouteTarget::Ssh(Box::new(native_spec("me", "twin-box", 22)));
-
-        assert_eq!(
-            build.origin_key(),
-            "me@build-box:22",
-            "a route origin key names the machine it dials"
-        );
+        let build = RouteTarget::LocalStdio {
+            program: "/opt/a".into(),
+            args: vec!["--stdio".into()],
+        };
+        let twin = RouteTarget::LocalStdio {
+            program: "/opt/b".into(),
+            args: vec!["--stdio".into()],
+        };
         assert_ne!(
             build.origin_key(),
             twin.origin_key(),
@@ -886,67 +821,8 @@ mod tests {
     }
 
     #[test]
-    fn a_routed_auth_prompt_carries_the_machine_that_raised_it() {
-        let _turn = claim_mailbox();
-        while take_pending_auth().is_some() {}
-        let target = RemoteTarget::direct("me", "build-box", 22);
-        let route =
-            crate::daemon::router::RouteTarget::Ssh(Box::new(native_spec("me", "build-box", 22)));
-        note_origin(&route, &target);
-        let origin_key = route.origin_key();
-
-        let handle = std::thread::spawn(move || {
-            use crate::daemon::router::RouteAuthResponder as _;
-            GuiRouteAuth.respond(
-                &route,
-                &AuthPromptKind::Password {
-                    user: "me".into(),
-                    host: "build-box".into(),
-                },
-            )
-        });
-        let deadline = Instant::now() + Duration::from_secs(10);
-        let pending = loop {
-            if let Some(p) = take_pending_auth() {
-                break p;
-            }
-            assert!(
-                Instant::now() < deadline,
-                "no routed prompt arrived within 10s. `respond` pushes one \
-                 unconditionally, so an empty mailbox means something else \
-                 drained it first — `pump_auth_sheets` takes all of it, and it \
-                 runs from any gpui test here that drives a tick. Responder \
-                 thread finished: {}",
-                handle.is_finished(),
-            );
-            std::thread::sleep(Duration::from_millis(5));
-        };
-        assert_eq!(
-            pending.host,
-            target.host_id(),
-            "the prompt names the machine noted under {:?}",
-            origin_key
-        );
-        pending.answer(AuthResponse::Secret("hunter2".into()));
-        assert_eq!(
-            handle.join().unwrap(),
-            AuthResponse::Secret("hunter2".into())
-        );
-    }
-
-    #[test]
     fn a_pane_and_its_workspace_resolve_to_the_same_machine() {
-        use crate::daemon::router::{RouteHeader, RouteTarget as RT};
-
-        let target = RemoteTarget::direct("me", "twin-box", 22);
-        let control = RouteHeader::ssh(native_spec("me", "twin-box", 22));
-        let pane = RouteHeader::ssh(native_spec("me", "twin-box", 22)).for_pane();
-        note_origin(&control.target, &target);
-        assert_eq!(
-            origin_host(&pane.target.origin_key()),
-            Some(target.host_id()),
-            "a pane's header names the machine its workspace's does"
-        );
+        use crate::daemon::router::RouteTarget as RT;
 
         let local = RemoteTarget::LocalStdio {
             program: "/opt/tty7-server".into(),
@@ -966,15 +842,18 @@ mod tests {
 
     #[test]
     fn a_mismatch_record_resolves_back_to_the_machine_it_is_about() {
-        let target = RemoteTarget::direct("me", "skew-box", 2222);
-        let spec = native_spec("me", "skew-box", 2222);
-        let label = crate::daemon::ssh::ConnectionKey::from_spec(&spec)
-            .as_str()
-            .to_string();
-        note_origin(
-            &crate::daemon::router::RouteTarget::Ssh(Box::new(spec)),
-            &target,
-        );
+        use crate::daemon::router::RouteTarget;
+
+        let target = RemoteTarget::LocalStdio {
+            program: "/opt/tty7-server".into(),
+            args: vec!["--stdio".into()],
+        };
+        let route = RouteTarget::LocalStdio {
+            program: "/opt/tty7-server".into(),
+            args: vec!["--stdio".into()],
+        };
+        note_origin(&route, &target);
+        let label = route.origin_key();
 
         let mismatch = MismatchedRemoteDaemon {
             host: label,
@@ -986,7 +865,7 @@ mod tests {
 
         assert_eq!(
             mismatch_target(&MismatchedRemoteDaemon {
-                host: "me@never-seen:22".into(),
+                host: "local-stdio:/opt/never-seen".into(),
                 ..mismatch
             }),
             None

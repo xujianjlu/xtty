@@ -831,9 +831,7 @@ impl Tty7App {
     }
 
     pub(crate) fn file_tree_on_screen(&self, cx: &App) -> bool {
-        self.right_panel_open(cx)
-            && self.right_panel_tab == RightPanelTab::Files
-            && None::<u64>.is_none()
+        self.right_panel_open(cx) && self.right_panel_tab == RightPanelTab::Files
     }
 
     fn file_tree_query(&self, cx: &App) -> String {
@@ -3515,51 +3513,6 @@ mod render_idle_gpui_tests {
                 .count()
         });
         assert_eq!(left, 0, "the marked listing was re-read on clearing");
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[gpui::test]
-    fn the_sftp_browser_holding_the_column_counts_as_not_drawn(cx: &mut TestAppContext) {
-        let _serial = serial();
-        let root = scratch("sftp-column");
-        for n in 0..12 {
-            std::fs::write(root.join(format!("file{n:02}.rs")), "").unwrap();
-        }
-        let (app, mut vcx, _pane) = files_panel_on(cx, &root);
-        let path = root.join("file00.rs");
-        std::fs::write(&path, "changed").unwrap();
-
-        let (on_screen, in_flight, marked) = app.update_in(&mut vcx, |app, _, cx| {
-            app.sftp_panel.open_pane_id = Some(7);
-            let on_screen = app.file_tree_on_screen(cx);
-            app.file_tree_apply_fs_events(HostId::LOCAL, &HashSet::from([path.clone()]), cx);
-            (
-                on_screen,
-                app.file_tree.loads.len(),
-                app.file_tree
-                    .stale
-                    .iter()
-                    .filter(|(_, dir)| dir.starts_with(&root))
-                    .count(),
-            )
-        });
-        assert!(!on_screen, "the SFTP browser has the column, not the tree");
-        assert_eq!(in_flight, 0, "so nothing was asked of the host");
-        assert!(marked > 0, "but the change was recorded");
-
-        app.update_in(&mut vcx, |app, _, cx| {
-            app.sftp_panel.open_pane_id = None;
-            cx.notify();
-        });
-        settle(&app, &mut vcx, &root);
-        let left = app.update_in(&mut vcx, |app, _, _| {
-            app.file_tree
-                .stale
-                .iter()
-                .filter(|(_, dir)| dir.starts_with(&root))
-                .count()
-        });
-        assert_eq!(left, 0, "the marked listing was re-read once it came back");
         let _ = std::fs::remove_dir_all(&root);
     }
 }

@@ -1718,6 +1718,13 @@ impl RemoteTerminal {
         self.remote_context.lock().ok().and_then(|g| g.clone())
     }
 
+    #[cfg(test)]
+    pub fn set_remote_context_for_test(&self, ctx: Option<RemoteContext>) {
+        if let Ok(mut guard) = self.remote_context.lock() {
+            *guard = ctx;
+        }
+    }
+
     pub fn at_prompt(&self) -> bool {
         self.shell_state
             .lock()

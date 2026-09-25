@@ -6,8 +6,6 @@ use uuid::Uuid;
 
 use crate::core::config::Config;
 use crate::core::ssh_profile::SshProfile;
-use crate::ui::native_gone::NativeSshSpec;
-
 use super::app::{SpawnWhere, Tty7App};
 
 impl Tty7App {
@@ -134,30 +132,6 @@ impl Tty7App {
         self.add_new_profile(window, cx);
     }
 
-    pub(crate) fn unsaved_ssh_session(
-        &self,
-        _window: &gpui::Window,
-        _cx: &gpui::App,
-    ) -> Option<Box<NativeSshSpec>> {
-        None
-    }
-
-    pub(crate) fn save_ssh_session_as_host(
-        &mut self,
-        _window: &mut gpui::Window,
-        _cx: &mut gpui::Context<Self>,
-    ) {
-    }
-
-    pub(crate) fn save_ssh_spec_as_host(
-        &mut self,
-        _spec: &NativeSshSpec,
-        window: &mut gpui::Window,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        self.open_new_ssh_host(window, cx);
-    }
-
     pub(crate) fn edit_ssh_host_of_target(
         &mut self,
         target: &crate::core::session::RemoteTarget,
@@ -201,14 +175,10 @@ impl Tty7App {
         cx: &gpui::App,
     ) -> Option<(TabHostForm, &'static str)> {
         let leaf = self.tabs.get(index)?.pane.focused_or_first(window, cx)?;
-        let spec = leaf.read(cx).ssh_spec()?;
-        let target = ssh_host_target_of_spec(&spec, &cx.global::<Config>().ssh_profiles);
+        let view = leaf.read(cx);
+        let target = ssh_host_target_of_view(&view, &cx.global::<Config>().ssh_profiles)?;
         let label = crate::ui::switcher::host_form_label(&target)?;
-        let form = match target {
-            crate::core::session::RemoteTarget::Profile { .. } => TabHostForm::Saved(target),
-            _ => TabHostForm::Unsaved(spec),
-        };
-        Some((form, label))
+        Some((TabHostForm::Saved(target), label))
     }
 
     pub(crate) fn open_tab_ssh_host_form(
@@ -219,7 +189,6 @@ impl Tty7App {
     ) {
         match form {
             TabHostForm::Saved(target) => self.edit_ssh_host_of_target(target, window, cx),
-            TabHostForm::Unsaved(spec) => self.save_ssh_spec_as_host(spec, window, cx),
         }
     }
 
@@ -252,73 +221,31 @@ pub(crate) fn ssh_profiles_by_frecency(cx: &gpui::App) -> Vec<SshProfile> {
     profiles
 }
 
-pub(crate) fn resolve_persisted_ssh_spec(
-    spec: Box<NativeSshSpec>,
-    _cx: &gpui::App,
-) -> Box<NativeSshSpec> {
-    spec
-}
-
-pub(crate) fn build_native_ssh_spec(
-    profile: &SshProfile,
-    _profiles: &[SshProfile],
-    _store: &impl crate::core::keychain::CredentialStore,
-    _verify_host_keys: bool,
-) -> NativeSshSpec {
-    NativeSshSpec {
-        host: profile.host.clone(),
-        port: profile.port,
-        user: profile.user.clone(),
-        profile_id: Some(profile.id.to_string()),
-        ..Default::default()
-    }
-}
-
-pub(crate) fn native_spec_from_transient_profile(
-    profile: &SshProfile,
-    _proxy_jump: Option<String>,
-    _store: &impl crate::core::keychain::CredentialStore,
-    _verify_host_keys: bool,
-    _alias_resolver: &dyn Fn(&str) -> Option<(SshProfile, Option<String>)>,
-) -> NativeSshSpec {
-    build_native_ssh_spec(
-        profile,
-        &[],
-        &crate::core::keychain::OsCredentialStore,
-        true,
-    )
-}
-
 pub(crate) fn config_alias_resolver(alias: &str) -> Option<(SshProfile, Option<String>)> {
     crate::core::ssh_config::resolve_alias_to_profile(alias).map(|r| (r.profile, r.proxy_jump))
-}
-
-pub(crate) fn profile_from_live_spec(spec: &NativeSshSpec) -> SshProfile {
-    let mut p = SshProfile::new(spec.host.clone());
-    p.host = spec.host.clone();
-    p.user = spec.user.clone();
-    p.port = spec.port;
-    p
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum TabHostForm {
     Saved(crate::core::session::RemoteTarget),
-    Unsaved(Box<NativeSshSpec>),
 }
 
-pub(crate) fn ssh_host_target_of_spec(
-    spec: &NativeSshSpec,
+pub(crate) fn ssh_host_target_of_view(
+    view: &crate::terminal::view::TerminalView,
     profiles: &[SshProfile],
-) -> crate::core::session::RemoteTarget {
+) -> Option<crate::core::session::RemoteTarget> {
     use crate::core::session::RemoteTarget;
-    let saved = spec
-        .profile_id
-        .as_deref()
-        .and_then(|s| Uuid::parse_str(s).ok())
-        .filter(|id| profiles.iter().any(|p| p.id == *id));
-    match saved {
-        Some(id) => RemoteTarget::Profile { id },
-        None => RemoteTarget::direct(spec.user.clone(), spec.host.clone(), spec.port),
-    }
+    let dest = view.remote_context().and_then(|ctx| {
+        (ctx.kind == crate::daemon::protocol::RemoteKind::Ssh).then_some(ctx.target)
+    })?;
+    let (user, host) = match dest.split_once('@') {
+        Some((user, host)) => (user, host),
+        None => ("", dest.as_str()),
+    };
+    let host = host.split(':').next().unwrap_or(host);
+    profiles
+        .iter()
+        .find(|p| p.host == host && (user.is_empty() || p.user == user))
+        .map(|p| RemoteTarget::Profile { id: p.id })
+        .or_else(|| Some(RemoteTarget::direct(user, host, 22)))
 }

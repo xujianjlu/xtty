@@ -144,12 +144,22 @@ tray-icon = "0.24"
 # double-click (`terminal::smart_select`). Already in the tree transitively.
 core-foundation = "0.10"
 objc2 = "0.6"
-objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSResponder", "NSAppearance", "NSGraphics", "NSImage"] }
+objc2-app-kit = { version = "0.3", features = [
+    "NSApplication",
+    "NSResponder",
+    "NSAppearance",
+    "NSGraphics",
+    "NSImage",
+    "NSOpenPanel",
+    "NSSavePanel",
+    "NSPanel",
+    "NSWindow",
+] }
 # NSData feeds the runtime Dock icon for bare (non-bundled) binaries — see
 # `set_dock_icon_for_bare_binary` in main.rs.
 # NSUserNotification is the click-to-reveal notification path — see
 # `terminal::remote::macos_notify` for why it is driven directly.
-objc2-foundation = { version = "0.3", features = ["NSData", "NSString", "NSUserNotification"] }
+objc2-foundation = { version = "0.3", features = ["NSData", "NSString", "NSUserNotification", "NSURL"] }
 
 # The pty-size ioctl in `terminal::generator` is the only libc user left in the
 # GUI (the daemon's own libc calls went to tty7-core), and it is Unix-only — so

@@ -41,7 +41,7 @@ use crate::ui::settings::{Recording, SettingsSection, SettingsState, ThemeEditor
 use crate::ui::theme::{apply_theme, set_menus};
 
 /// What to start in a pane that is about to be opened.
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum SpawnAs {
     /// A local shell; `None` is whatever the default one is.
     Shell(Option<ShellSpec>),
@@ -807,36 +807,6 @@ pub(crate) struct GroupRename {
     pub(crate) _subs: Vec<Subscription>,
 }
 
-pub(crate) struct LoopbackForwardPanelState {
-    pub(crate) form_pane_id: Option<u64>,
-    pub(crate) managed: Vec<crate::ui::native_gone::ManagedForward>,
-    pub(crate) mf_kind: crate::ui::native_gone::SshForwardKind,
-    pub(crate) mf_bind_host: Entity<InputState>,
-    pub(crate) mf_bind_port: Entity<InputState>,
-    pub(crate) mf_target_host: Entity<InputState>,
-    pub(crate) mf_target_port: Entity<InputState>,
-    pub(crate) mf_description: Entity<InputState>,
-    /// The rule the form is editing, whole rather than by id: an edit that
-    /// fails has to be able to put back what it took out, and the id alone
-    /// cannot describe the rule it named.
-    pub(crate) mf_editing: Option<crate::ui::native_gone::ManagedForward>,
-    /// Why the last Add or Save did not take, in the far side's own words.
-    /// Cleared the moment the form is closed or the edit is abandoned.
-    pub(crate) mf_error: Option<String>,
-    /// Return, on each of the boxes. Held here for the same reason the sftp
-    /// form holds its own: a live subscription on a box nothing is showing
-    /// would answer Return for a form that is gone.
-    pub(crate) mf_subs: Vec<Subscription>,
-    /// Whether the form is showing all five fields rather than the one.
-    ///
-    /// Almost every forward anyone builds by hand is "bring the remote's :3000
-    /// over here", which is one number — and asking for five fields to collect
-    /// one number is what made the panel feel like paperwork. The rest of the
-    /// `ssh -L` grammar is still here, one disclosure away, for the forwards
-    /// that really do need it.
-    pub(crate) mf_advanced: bool,
-}
-
 pub struct Tty7App {
     pub(crate) tabs: Vec<Tab>,
     pub(crate) active: usize,
@@ -884,8 +854,6 @@ pub struct Tty7App {
     pub(crate) home_cursor_on: bool,
     pub(crate) shells: ShellInventory,
     pub(crate) shells_host: HostId,
-    pub(crate) loopback_panel: LoopbackForwardPanelState,
-    pub(crate) sftp_panel: (), // Native SFTP UI removed
     pub(crate) right_panel: crate::ui::right_panel::RightPanelState,
     pub(crate) scm: crate::ui::scm::ScmPanelState,
     pub(crate) diff_probes_inflight:
@@ -971,7 +939,6 @@ pub struct Tty7App {
     _sidebar_search_sub: Subscription,
     _file_search_sub: Subscription,
     settings: Option<SettingsState>,
-    pub(crate) ssh_prompt: (), // Native SSH prompt UI removed
     /// A close question is on screen. It carries no target: the answer acts on
     /// the tab or pane captured when the question was raised, not on whatever
     /// the app happens to be pointing at by the time it is answered.
@@ -1324,16 +1291,8 @@ impl Tty7App {
                 cfg.scrollback_limit,
             )
         };
-        let sftp_panel = (); // Native SFTP UI abolished
         let file_tree = crate::ui::file_tree::FileTreeState::new(window, cx);
         let editor = crate::ui::code_editor::EditorPanelState::new(window, cx);
-        let mf_bind_host = cx.new(|cx| InputState::new(window, cx).default_value("127.0.0.1"));
-        let mf_bind_port = cx.new(|cx| InputState::new(window, cx).placeholder("8080"));
-        let mf_target_host = cx.new(|cx| InputState::new(window, cx).placeholder("127.0.0.1"));
-        let mf_target_port = cx.new(|cx| InputState::new(window, cx).placeholder("80"));
-        let mf_description = cx.new(|cx| {
-            InputState::new(window, cx).placeholder(t(L10nKey::AppPlaceholderDescription))
-        });
         let sidebar_width = cx.global::<Config>().sidebar_width;
         let right_panel_width = cx.global::<Config>().right_panel_width;
         let document_ratio = cx.global::<Config>().document_ratio;
@@ -1476,21 +1435,6 @@ impl Tty7App {
             home_cursor_on: true,
             shells: ShellInventory::default(),
             shells_host: HostId::LOCAL,
-            loopback_panel: LoopbackForwardPanelState {
-                form_pane_id: None,
-                managed: Vec::new(),
-                mf_kind: crate::ui::native_gone::SshForwardKind::Local,
-                mf_bind_host,
-                mf_bind_port,
-                mf_target_host,
-                mf_target_port,
-                mf_description,
-                mf_editing: None,
-                mf_error: None,
-                mf_subs: Vec::new(),
-                mf_advanced: false,
-            },
-            sftp_panel,
             right_panel: Default::default(),
             scm: crate::ui::scm::ScmPanelState {
                 graph: crate::ui::scm::GraphState {
@@ -1532,7 +1476,6 @@ impl Tty7App {
             file_search,
             _file_search_sub: file_search_sub,
             settings: None,
-            ssh_prompt: (),
             close_prompt_open: false,
             window_bounds: window_bounds_to_remember(window),
             workspace,
@@ -1693,31 +1636,7 @@ impl Tty7App {
         window.remove_window();
     }
 
-    pub(crate) fn teardown_workspace_forwards(&self, cx: &gpui::App) {
-        let Some(route) = self
-            .tabs
-            .iter()
-            .flat_map(|tab| tab.pane.terminals())
-            .find_map(|leaf| {
-                let view = leaf.read(cx);
-                let workspace = view.workspace().cloned()?;
-                Some(ForwardRoute {
-                    pane_id: view.pane_id,
-                    workspace: Some(workspace),
-                })
-            })
-        else {
-            return;
-        };
-        cx.background_executor()
-            .spawn(async move {
-                let left = route.teardown();
-                if !left.is_empty() {
-                    log::warn!("{} forwards survived a workspace teardown", left.len());
-                }
-            })
-            .detach();
-    }
+    pub(crate) fn teardown_workspace_forwards(&self, _cx: &gpui::App) {}
 
     pub(crate) fn stop_workspace(
         &mut self,
@@ -2801,341 +2720,23 @@ impl Tty7App {
         ForwardRoute { pane_id, workspace }
     }
 
-    pub(crate) fn refresh_managed_forwards(&mut self, pane_id: u64, cx: &mut Context<Self>) {
-        self.loopback_panel.managed = self.forward_route(pane_id, cx).list();
-        cx.notify();
+    pub(crate) fn toggle_sftp(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        self.set_right_panel_tab(crate::core::config::RightPanelTab::Files, cx);
     }
 
-    pub(crate) fn set_managed_forward_kind(
-        &mut self,
-        kind: crate::ui::native_gone::SshForwardKind,
-        cx: &mut Context<Self>,
-    ) {
-        self.loopback_panel.mf_kind = kind;
-        cx.notify();
-    }
-
-    /// The managed-forward form's fields as plain text, for the two callers
-    /// that have to agree on what they add up to.
-    pub(crate) fn managed_forward_fields(&self, cx: &gpui::App) -> crate::ui::native_gone::ForwardFields {
-        let val = |input: &Entity<InputState>| input.read(cx).value().to_string();
-        crate::ui::native_gone::ForwardFields {
-            advanced: self.loopback_panel.mf_advanced,
-            kind: self.loopback_panel.mf_kind,
-            bind_host: val(&self.loopback_panel.mf_bind_host),
-            bind_port: val(&self.loopback_panel.mf_bind_port),
-            target_host: val(&self.loopback_panel.mf_target_host),
-            target_port: val(&self.loopback_panel.mf_target_port),
-            description: val(&self.loopback_panel.mf_description),
-        }
-    }
-
-    pub(crate) fn add_managed_forward(
-        &mut self,
-        pane_id: u64,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let fields = self.managed_forward_fields(cx);
-        let Some(rule) = fields.collect() else {
-            // Add is disabled while the fields do not make a rule and the form
-            // already says what is missing, so there is nothing to do here and
-            // nothing left to explain.
-            return;
-        };
-        let route = self.forward_route(pane_id, cx);
-        let previous = self.loopback_panel.mf_editing.clone();
-        // A saved edit is a replace, and the rule being replaced has to come
-        // out first: the ordinary edit keeps the bind port, and the far side
-        // really does bind it, so adding first would collide with the very
-        // rule it is replacing and fail every edit that only renames a rule or
-        // moves its target.
-        if let Some(old) = &previous {
-            let Some(list) = route.remove(old.id) else {
-                // Nothing came back, so what the far side still has is
-                // unknown — most likely the old rule, still listening. Adding
-                // on top of that would collide with it, and putting it back
-                // afterwards would leave two of it. Stop while nothing has
-                // changed.
-                self.loopback_panel.mf_error = Some(t(L10nKey::ForwardRequestFailed).to_string());
-                cx.notify();
-                return;
-            };
-            self.loopback_panel.managed = list;
-        }
-
-        // The short form aims at the same number on both ends because that is
-        // the address people can predict. When it is already taken here, the
-        // useful answer is another port rather than a complaint: somebody who
-        // typed one number to forward one port has not been asked to care
-        // which local port it lands on, and the row says where it came out.
-        let retry_free_port = !fields.advanced && rule.bind_port != 0;
-        let mut failure = match self.place_forward(&route, rule.clone()) {
-            PlaceOutcome::Placed => None,
-            // Nobody answered, so nothing was bound and nothing would be bound
-            // by asking again — a second round trip would only spend another
-            // timeout on the way to the same sentence.
-            PlaceOutcome::Unreachable(msg) => Some(msg),
-            PlaceOutcome::Rejected(msg) if !retry_free_port => Some(msg),
-            PlaceOutcome::Rejected(_) => {
-                match self.place_forward(
-                    &route,
-                    crate::ui::native_gone::SshForwardRule {
-                        bind_port: 0,
-                        ..rule.clone()
-                    },
-                ) {
-                    PlaceOutcome::Placed => None,
-                    PlaceOutcome::Rejected(msg) | PlaceOutcome::Unreachable(msg) => Some(msg),
-                }
-            }
-        };
-
-        if let Some(msg) = failure {
-            // Put back what the edit took out, so the worst a failed Save can
-            // do is leave everything exactly as it was — with the form still
-            // open on the rule and the reason underneath it.
-            if let Some(old) = &previous {
-                let before: Vec<u64> = self.loopback_panel.managed.iter().map(|m| m.id).collect();
-                if let Some(list) = route.add(crate::ui::native_gone::rule_of(old)) {
-                    // The rule comes back under a new id and the form is still
-                    // editing it, so the form has to be pointed at the entry
-                    // that now exists — otherwise the next Save would remove
-                    // an id nobody has and add a second copy of the rule.
-                    if let Some(restored) = crate::ui::native_gone::added_forward(&before, &list) {
-                        self.loopback_panel.mf_editing = Some(restored.clone());
-                    }
-                    self.loopback_panel.managed = list;
-                }
-            }
-            self.loopback_panel.mf_error = Some(msg);
-            cx.notify();
-            return;
-        }
-
-        self.loopback_panel.mf_editing = None;
-        self.loopback_panel.mf_error = None;
-        self.loopback_panel.form_pane_id = None;
-        for input in [
-            &self.loopback_panel.mf_bind_port,
-            &self.loopback_panel.mf_target_host,
-            &self.loopback_panel.mf_target_port,
-            &self.loopback_panel.mf_description,
-        ] {
-            input.update(cx, |input, cx| input.set_value("", window, cx));
-        }
-        cx.notify();
-    }
-
-    /// Ask the far side for one rule, and say what became of it.
-    ///
-    /// A rule that could not be started is registered all the same, with the
-    /// reason in its status, so whether the add worked is a question about the
-    /// entry it appended rather than about whether the call returned. The dead
-    /// entry is taken back out — a forward listed as listening on nothing is
-    /// worse than no forward.
-    fn place_forward(
-        &mut self,
-        route: &ForwardRoute,
-        rule: crate::ui::native_gone::SshForwardRule,
-    ) -> PlaceOutcome {
-        use crate::ui::native_gone::ForwardStatus;
-
-        let before: Vec<u64> = self.loopback_panel.managed.iter().map(|m| m.id).collect();
-        // The request never got an answer. An empty list here is not "this
-        // pane has no forwards", it is "nobody said" — assigning it is what
-        // used to blank the panel on a dropped connection.
-        let Some(list) = route.add(rule) else {
-            return PlaceOutcome::Unreachable(t(L10nKey::ForwardRequestFailed).to_string());
-        };
-        let broken = crate::ui::native_gone::added_forward(&before, &list).and_then(|added| match &added.status {
-            ForwardStatus::Error(msg) => Some((added.id, msg.clone())),
-            ForwardStatus::Listening => None,
-        });
-        self.loopback_panel.managed = list;
-        let Some((id, msg)) = broken else {
-            return PlaceOutcome::Placed;
-        };
-        if let Some(list) = route.remove(id) {
-            self.loopback_panel.managed = list;
-        }
-        PlaceOutcome::Rejected(msg)
-    }
-
-    pub(crate) fn edit_managed_forward(
-        &mut self,
-        forward: crate::ui::native_gone::ManagedForward,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.loopback_panel.mf_kind = forward.kind;
-        self.loopback_panel.form_pane_id = Some(forward.pane_id);
-        self.loopback_panel.mf_error = None;
-        // A rule that already exists is shown whole: the short form cannot
-        // spell a bind host or a remote forward, so editing one through it
-        // would silently rewrite the parts it cannot see.
-        self.loopback_panel.mf_advanced = true;
-        let target_port = if forward.target_port == 0 {
-            String::new()
-        } else {
-            forward.target_port.to_string()
-        };
-        let fields: [(&Entity<InputState>, String); 5] = [
-            (&self.loopback_panel.mf_bind_host, forward.bind_host.clone()),
-            (
-                &self.loopback_panel.mf_bind_port,
-                forward.bind_port.to_string(),
-            ),
-            (
-                &self.loopback_panel.mf_target_host,
-                forward.target_host.clone(),
-            ),
-            (&self.loopback_panel.mf_target_port, target_port),
-            (
-                &self.loopback_panel.mf_description,
-                forward.description.clone().unwrap_or_default(),
-            ),
-        ];
-        for (input, value) in fields {
-            input.update(cx, |input, cx| input.set_value(&value, window, cx));
-        }
-        self.loopback_panel.mf_editing = Some(forward);
-        cx.notify();
-    }
-
-    pub(crate) fn cancel_managed_forward_edit(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.loopback_panel.mf_editing = None;
-        self.loopback_panel.mf_error = None;
-        for input in [
-            &self.loopback_panel.mf_bind_port,
-            &self.loopback_panel.mf_target_host,
-            &self.loopback_panel.mf_target_port,
-            &self.loopback_panel.mf_description,
-        ] {
-            input.update(cx, |input, cx| input.set_value("", window, cx));
-        }
-        self.loopback_panel
-            .mf_bind_host
-            .update(cx, |input, cx| input.set_value("127.0.0.1", window, cx));
-        cx.notify();
-    }
-
-    pub(crate) fn remove_managed_forward(
-        &mut self,
-        pane_id: u64,
-        forward_id: u64,
-        cx: &mut Context<Self>,
-    ) {
-        // Only what the far side actually answered with. A request that never
-        // got a reply knows nothing about the remaining forwards, and writing
-        // its empty list into the panel would blank a list that is still there.
-        if let Some(list) = self.forward_route(pane_id, cx).remove(forward_id) {
-            self.loopback_panel.managed = list;
-        }
-        cx.notify();
-    }
-
-    pub(crate) fn show_ssh_forwards(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        // Whatever the panel would let this pane forward, which is a wider set
-        // than "a connected native-ssh pane": a pane in a remote workspace
-        // forwards over the workspace's own connection, and the command used
-        // to do nothing at all there while the panel beside it worked.
-        let Some(ctx) = self.pane_forward_ctx(window, cx) else {
-            return;
-        };
-        if ctx.route.is_none() {
-            return;
-        }
+    pub(crate) fn show_ssh_forwards(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         self.set_right_panel_tab(crate::core::config::RightPanelTab::Info, cx);
-        if self.loopback_panel.form_pane_id != Some(ctx.pane_id) {
-            self.toggle_managed_forward_form(ctx.pane_id, window, cx);
-        }
     }
 
-    pub(crate) fn toggle_managed_forward_form(
+    pub(crate) fn push_ssh_connect_error(
         &mut self,
-        pane_id: u64,
+        reason: String,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.loopback_panel.form_pane_id == Some(pane_id) {
-            self.close_managed_forward_form(window, cx);
-            return;
-        }
-        self.loopback_panel.form_pane_id = Some(pane_id);
-        self.loopback_panel.mf_advanced = false;
-        self.loopback_panel.mf_kind = crate::ui::native_gone::SshForwardKind::Local;
-        self.cancel_managed_forward_edit(window, cx);
-        self.refresh_managed_forwards(pane_id, cx);
-        self.arm_managed_forward_form(pane_id, window, cx);
+        window.push_notification(reason, cx);
     }
 
-    /// Opens the form focused and listening for Return.
-    ///
-    /// It had neither. Every other form in the app opens with the caret in the
-    /// first field and answers Return — this one opened cold, so adding a rule
-    /// meant clicking into Bind first, and once you were there the only way to
-    /// commit was the mouse again. Escape did nothing either, which is handled
-    /// on the form itself in `forwards.rs`; a key event only reaches it while
-    /// something inside it holds focus, so the focus below is what makes that
-    /// work too.
-    fn arm_managed_forward_form(
-        &mut self,
-        pane_id: u64,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let inputs = [
-            self.loopback_panel.mf_bind_host.clone(),
-            self.loopback_panel.mf_bind_port.clone(),
-            self.loopback_panel.mf_target_host.clone(),
-            self.loopback_panel.mf_target_port.clone(),
-            self.loopback_panel.mf_description.clone(),
-        ];
-        self.loopback_panel.mf_subs = inputs
-            .iter()
-            .map(|input| {
-                cx.subscribe_in(
-                    input,
-                    window,
-                    move |this, _input, ev: &InputEvent, window, cx| {
-                        if let InputEvent::PressEnter { .. } = ev {
-                            // A no-op when the fields do not make a rule yet:
-                            // `add_managed_forward` already guards on that and
-                            // the form already says what is missing.
-                            this.add_managed_forward(pane_id, window, cx);
-                        }
-                    },
-                )
-            })
-            .collect();
-        inputs[0].update(cx, |s, cx| s.focus(window, cx));
-    }
-
-    pub(crate) fn toggle_managed_forward_advanced(&mut self, cx: &mut Context<Self>) {
-        self.loopback_panel.mf_advanced = !self.loopback_panel.mf_advanced;
-        self.loopback_panel.mf_error = None;
-        cx.notify();
-    }
-
-    pub(crate) fn close_managed_forward_form(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let was_open = self.loopback_panel.form_pane_id.take().is_some();
-        self.loopback_panel.mf_subs.clear();
-        self.cancel_managed_forward_edit(window, cx);
-        if was_open {
-            // The form held the focus, so taking it down has to hand it back —
-            // otherwise the next keystroke goes nowhere until the user clicks.
-            self.focus_active(window, cx);
-        }
-    }
 
     fn open_typed_ssh_connect(&mut self, input: &str, window: &mut Window, cx: &mut Context<Self>) {
         match parse_ssh_connect_input(input) {
@@ -3176,7 +2777,7 @@ impl Tty7App {
                 let profiles = cx.global::<Config>().ssh_profiles.clone();
                 self.open_system_ssh(&profile, &profiles, SpawnWhere::NewTab, window, cx);
             }
-            Err(reason) => self.push_ssh_connect_error(reason, cx),
+            Err(reason) => self.push_ssh_connect_error(reason, window, cx),
         }
     }
 
@@ -3856,79 +3457,14 @@ impl Tty7App {
         cx.notify();
     }
 
-    pub(crate) fn open_native_ssh_tab(
-        &mut self,
-        spec: Box<crate::ui::native_gone::NativeSshSpec>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let cwd = self.tabs.get(self.active).and_then(|t| {
-            t.pane
-                .focused_or_first(window, cx)
-                .and_then(|leaf| leaf.read(cx).cwd())
-        });
-        let view = match new_terminal_native(self.font_size, cwd, spec, window, cx) {
-            Ok(view) => view,
-            Err(e) => {
-                log::error!("native SSH spawn failed: {e}");
-                window.push_notification(
-                    t_fmt(
-                        L10nKey::AppSshConnectionFailed,
-                        &[("error", &e.to_string())],
-                    ),
-                    cx,
-                );
-                return;
-            }
-        };
-        self.remember_active_pane(window, cx);
-        self.maximized = None;
-        let insert_at = self.new_tab_insert_at(cx);
-        self.tabs
-            .insert(insert_at, Tab::new(Pane::leaf(PaneSlot::Ready(view))));
-        self.active = insert_at;
-        self.focus_active(window, cx);
-        self.save_session(cx);
-        cx.notify();
-    }
-
-    pub(crate) fn respawn_native_ssh_in_place(
-        &mut self,
-        dead: &Entity<TerminalView>,
-        spec: Box<crate::ui::native_gone::NativeSshSpec>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let cwd = dead.read(cx).cwd();
-        let fresh = match new_terminal_native(self.font_size, cwd, spec, window, cx) {
-            Ok(view) => view,
-            Err(e) => {
-                log::error!("native SSH respawn failed: {e}");
-                window.push_notification(
-                    t_fmt(L10nKey::AppSshReconnectFailed, &[("error", &e.to_string())]),
-                    cx,
-                );
-                return;
-            }
-        };
-        replace_leaf_in(
-            &mut self.tabs,
-            dead.entity_id(),
-            PaneSlot::Ready(fresh.clone()),
-        );
-        self.maximized = None;
-        self.focus_leaf(&PaneSlot::Ready(fresh), window, cx);
-        self.save_session(cx);
-        cx.notify();
-    }
-
     pub(crate) fn split(&mut self, axis: Axis, window: &mut Window, cx: &mut Context<Self>) {
         self.split_into(axis, None, window, cx);
     }
 
-    /// `spawn` of `None` is what ⌘D has always done: copy the pane being split
-    /// — same shell / Native host / shell-ssh hop, landing in the same cwd when
-    /// known. A `Some` names the new pane outright (new-tab menu ⌥ → split).
+    /// `spawn` of `None` is what ⌘D has always done: clone the pane being split
+    /// — same local shell, same OpenSSH host-picker argv, or the same in-shell
+    /// hop, landing in the same cwd when known. A `Some` names the new pane
+    /// outright (new-tab menu ⌥ → split).
     pub(crate) fn split_into(
         &mut self,
         axis: Axis,
@@ -3984,7 +3520,7 @@ impl Tty7App {
                 }
             }
         };
-        self.apply_clone_follow_up(&new, &follow_up, window, cx);
+        self.apply_clone_follow_up(&new, &follow_up, cx);
         if let Some(tab) = self.tabs.get_mut(self.active) {
             if tab
                 .pane
@@ -4039,7 +3575,7 @@ impl Tty7App {
                 }
             }
         };
-        self.apply_clone_follow_up(&tab_slot, &plan.follow_up, window, cx);
+        self.apply_clone_follow_up(&tab_slot, &plan.follow_up, cx);
         self.remember_active_pane(window, cx);
         self.maximized = None;
         let insert_at = self.new_tab_insert_at(cx);
@@ -4054,26 +3590,16 @@ impl Tty7App {
         cx.notify();
     }
 
-    fn apply_clone_follow_up(
-        &self,
-        slot: &PaneSlot,
-        follow_up: &[String],
-        window: &Window,
-        cx: &App,
-    ) {
+    fn apply_clone_follow_up(&self, slot: &PaneSlot, follow_up: &[String], cx: &mut Context<Self>) {
         if follow_up.is_empty() {
             return;
         }
-        let Some(view) = slot.terminal() else {
+        let Some(view) = slot.terminal().cloned() else {
             return;
         };
-        for line in follow_up {
-            if line.is_empty() {
-                continue;
-            }
-            view.read(cx).run_command_line(line);
-        }
-        let _ = window;
+        view.update(cx, |view, cx| {
+            view.queue_clone_follow_up(follow_up.to_vec(), cx);
+        });
     }
 
     fn close_pane(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -6688,42 +6214,17 @@ impl Tty7App {
     }
 
     pub(crate) fn tab_ssh_dot(&self, tab: &Tab, cx: &App) -> Option<u32> {
-        use crate::ui::native_gone::SshPhase;
         let leaf = tab.pane.first_leaf()?;
         let v = leaf.terminal()?.read(cx);
-        if let Some(phase) = v.ssh_phase() {
-            let rgb = if v.ssh_disconnected() {
-                0xEF4444
-            } else {
-                match phase {
-                    SshPhase::Connecting | SshPhase::Authenticating => 0xF59E0B,
-                    SshPhase::Connected => 0x22C55E,
-                    SshPhase::Failed { .. } => 0xEF4444,
-                }
-            };
-            Some(rgb)
-        } else if v.remote_context().is_some() {
-            Some(0x9CA3AF)
-        } else {
-            None
-        }
+        v.remote_context().is_some().then_some(0x9CA3AF)
     }
 
     fn leaf_is_warn_ssh(&self, leaf: &Entity<TerminalView>, cx: &App) -> bool {
-        use crate::ui::native_gone::SshPhase;
         let v = leaf.read(cx);
-        let connected = matches!(v.ssh_phase(), Some(SshPhase::Connected)) && !v.terminal.exited;
-        if !connected {
+        if v.remote_context().is_none() || v.terminal.exited {
             return false;
         }
-        let cfg = cx.global::<Config>();
-        let per_profile = v
-            .ssh_spec()
-            .and_then(|s| s.profile_id.clone())
-            .and_then(|id| uuid::Uuid::parse_str(&id).ok())
-            .and_then(|id| cfg.ssh_profiles.iter().find(|p| p.id == id))
-            .and_then(|p| p.warn_on_close);
-        per_profile.unwrap_or(cfg.ssh_warn_on_close)
+        cx.global::<Config>().ssh_warn_on_close
     }
 
     /// The app asks every other question of this class through the platform's
@@ -6834,15 +6335,6 @@ impl Tty7App {
         let pane = pane.read(cx);
         let remote = pane.remote_context()?;
         Some((pane.pane_id, remote))
-    }
-
-    pub(crate) fn active_connected_native_ssh_pane(
-        &self,
-        window: &Window,
-        cx: &App,
-    ) -> Option<(u64, RemoteContext)> {
-        let _ = (window, cx);
-        None
     }
 
     pub(crate) fn select_settings_section(
@@ -7504,17 +6996,6 @@ pub(crate) struct ForwardRoute {
     workspace: Option<crate::terminal::PaneWorkspace>,
 }
 
-/// What came of asking the far side to put one forward up.
-enum PlaceOutcome {
-    Placed,
-    /// The far side answered and the rule could not be started — a bind that
-    /// collided, a port this process may not have. Another bind port might.
-    Rejected(String),
-    /// Nobody answered. Nothing was bound, and nothing about the rule is what
-    /// went wrong.
-    Unreachable(String),
-}
-
 /// Who a set of forwards belongs to on the far side.
 ///
 /// A workspace's forwards outlive any one of its panes and are shared between
@@ -7539,34 +7020,14 @@ impl ForwardRoute {
         }
     }
 
-    pub(crate) fn list(&self) -> Vec<crate::ui::native_gone::ManagedForward> {
-        Vec::new()
-    }
-
-    pub(crate) fn add(
-        &self,
-        _rule: crate::ui::native_gone::SshForwardRule,
-    ) -> Option<Vec<crate::ui::native_gone::ManagedForward>> {
-        None
-    }
-
-    pub(crate) fn teardown(&self) -> Vec<crate::ui::native_gone::ManagedForward> {
-        Vec::new()
-    }
-
     pub(crate) fn ensure_loopback(
         &self,
         _remote_host: &str,
         _remote_port: u16,
     ) -> anyhow::Result<crate::daemon::protocol::LoopbackForward> {
-        Err(anyhow::anyhow!("Native SSH port forwarding has been removed"))
-    }
-
-    pub(crate) fn remove(
-        &self,
-        _forward_id: u64,
-    ) -> Option<Vec<crate::ui::native_gone::ManagedForward>> {
-        None
+        Err(anyhow::anyhow!(
+            "managed SSH port forwarding was removed; use OpenSSH -L/-R/-D"
+        ))
     }
 }
 
@@ -7639,11 +7100,6 @@ impl Render for Tty7App {
         let detach_caret = self.detach_caret(window, cx);
         let strip = self.tab_strip(!vertical, window, cx);
         let sidebar = rail.then(|| self.tab_sidebar(window, cx));
-        let ssh_status = self
-            .tabs
-            .get(self.active)
-            .and_then(|t| t.pane.focused_or_first(window, cx))
-            .and_then(|leaf| self.render_ssh_status_strip(&leaf, cx));
         self.sync_broadcast_roles(window, cx);
         let body = match self.tabs.get(self.active) {
             None => self.render_home(cx).into_any_element(),
@@ -7739,7 +7195,7 @@ impl Render for Tty7App {
             // the one carrying buttons.
             .when_some(
                 crate::ui::notice::anchor(
-                    [self.render_remote_input_notice(cx), ssh_status]
+                    [self.render_remote_input_notice(cx)]
                         .into_iter()
                         .flatten()
                         .collect(),
@@ -8307,9 +7763,6 @@ impl Render for Tty7App {
                 // of them: nothing in the window can proceed until the password
                 // is answered, so the scrim has to cover the whole window and
                 // not stop at the terminal area.
-                .when_some(self.render_ssh_prompt_overlay(window, cx), |this, el| {
-                    this.child(el)
-                })
                 .children(self.render_switcher(window, cx))
                 .when_some(self.palette.clone(), |this, palette| this.child(palette))
                 .children(gpui_component::Root::render_notification_layer(window, cx));
@@ -8551,8 +8004,8 @@ fn tabs_from_session(
     (tabs, active, dropped)
 }
 
-fn leaf_shares_the_window_daemon(window_is_remote: bool, leaf_is_native_ssh: bool) -> bool {
-    !(window_is_remote && leaf_is_native_ssh)
+fn leaf_shares_the_window_daemon(window_is_remote: bool) -> bool {
+    !window_is_remote
 }
 
 fn session_to_pane(
@@ -8573,8 +8026,7 @@ fn session_to_pane(
             agent_session_id,
             agent_launch_argv,
         } => {
-            let same_daemon =
-                leaf_shares_the_window_daemon(workspace.is_some(), false /* Native SSH abolished */);
+            let same_daemon = leaf_shares_the_window_daemon(workspace.is_some());
             let restore = match workspace.is_some() {
                 true => (*pane_id).filter(|_| same_daemon),
                 // Not `pane_attachable`: a dead pane's id is what the restore
@@ -8759,14 +8211,6 @@ fn build_terminal_view(
         },
     )
     .detach();
-    cx.subscribe_in(
-        &view,
-        window,
-        |app, view, _: &crate::terminal::view::AuthPromptReady, window, cx| {
-            app.on_auth_prompt_ready(view.clone(), window, cx);
-        },
-    )
-    .detach();
     watch_open_file_requests(&view, window, cx);
     let handle = view.read(cx).focus_handle.clone();
     watch_pane_focus(&handle, view.entity_id(), window, cx);
@@ -8860,16 +8304,6 @@ fn watch_pane_focus(
             }
         })
         .detach();
-}
-
-pub(crate) fn new_terminal_native(
-    _font_size: f32,
-    _cwd: Option<std::path::PathBuf>,
-    _spec: Box<crate::ui::native_gone::NativeSshSpec>,
-    _window: &mut Window,
-    _cx: &mut Context<Tty7App>,
-) -> anyhow::Result<Entity<TerminalView>> {
-    Err(anyhow::anyhow!("Native SSH has been removed; use OpenSSH host picker"))
 }
 
 /// Reads the Settings "Shell Arguments" field as a command line (#551).
@@ -9752,11 +9186,9 @@ mod tests {
     }
 
     #[test]
-    fn a_native_ssh_leaf_in_a_remote_window_is_not_looked_up_in_the_remote_daemon() {
-        assert!(!leaf_shares_the_window_daemon(true, true));
-        assert!(leaf_shares_the_window_daemon(true, false));
-        assert!(leaf_shares_the_window_daemon(false, true));
-        assert!(leaf_shares_the_window_daemon(false, false));
+    fn a_leaf_in_a_remote_window_is_not_looked_up_in_the_remote_daemon() {
+        assert!(!leaf_shares_the_window_daemon(true));
+        assert!(leaf_shares_the_window_daemon(false));
     }
 
     #[test]
@@ -10203,130 +9635,6 @@ mod cursor_blink_gpui_tests {
                 "the unfocused cursor must keep a steady phase"
             );
         });
-    }
-}
-
-#[cfg(test)]
-mod ssh_rebuild_gpui_tests {
-    use super::test_window::harness_with_pane;
-    use crate::core::session::{
-        RemoteRef, RemoteTarget, WindowView, WindowViews, WorkspaceId, WorkspaceStore,
-    };
-    use crate::ui::pane::{Pane, PaneSlot};
-    use gpui::TestAppContext;
-    use tty7_core::core::machine::{LayoutDelta, PaneNode, Tab as TreeTab};
-
-    #[gpui::test]
-    fn a_tree_rebuild_keeps_the_native_ssh_split_a_remote_tab_holds(cx: &mut TestAppContext) {
-        let (app, mut vcx, _remote_pane_stream) = harness_with_pane(cx);
-
-        let remote = WindowView::on_remote(RemoteRef::new(
-            RemoteTarget::Alias {
-                alias: "build-box".into(),
-            },
-            WorkspaceId::new(),
-        ));
-        let remote_id = remote.id;
-        let _ssh_stream = app.update_in(&mut vcx, |app, window, cx| {
-            WorkspaceStore::install_for_test(
-                cx,
-                WindowViews {
-                    views: vec![remote],
-                    active: None,
-                },
-            );
-            app.workspace = remote_id;
-            let (ssh_view, stream) = crate::terminal::view::quiet_test_ssh_pane(2, window, cx);
-            let existing = std::mem::replace(&mut app.tabs[0].pane, Pane::Empty);
-            app.tabs[0].pane = Pane::split_node(
-                gpui::Axis::Horizontal,
-                0.5,
-                existing,
-                Pane::leaf(PaneSlot::Ready(ssh_view)),
-            );
-            stream
-        });
-
-        let applied = app.update_in(&mut vcx, |app, window, cx| {
-            let tab = TreeTab {
-                id: app.tabs[0].tree_id.get(),
-                name: None,
-                sidebar_group: None,
-                root: PaneNode::Leaf { pane: 1 },
-            };
-            app.apply_layout_delta(
-                &LayoutDelta::TabRestructured { tab, pane: None },
-                window,
-                cx,
-            )
-        });
-        assert!(
-            applied,
-            "the delta must apply without falling back to a resync"
-        );
-
-        app.update_in(&mut vcx, |app, _, cx| {
-            let leaves = app.tabs[0].pane.leaves();
-            assert_eq!(leaves.len(), 2, "the ssh split must survive the rebuild");
-            assert!(
-                leaves.iter().any(|slot| match slot {
-                    PaneSlot::Ready(view) => view.read(cx).ssh_spec().is_some(),
-                    _ => false,
-                }),
-                "one leaf is still the native-SSH pane"
-            );
-            assert!(
-                leaves.iter().any(|slot| match slot {
-                    PaneSlot::Ready(view) => {
-                        let view = view.read(cx);
-                        view.ssh_spec().is_none() && view.pane_id == 1
-                    }
-                    _ => false,
-                }),
-                "the remote pane's existing view is reused, not re-attached"
-            );
-        });
-    }
-
-    #[gpui::test]
-    fn a_pure_native_ssh_tab_is_invisible_to_the_tree_not_held(cx: &mut TestAppContext) {
-        let (app, mut vcx, _remote_pane_stream) = harness_with_pane(cx);
-
-        let remote = WindowView::on_remote(RemoteRef::new(
-            RemoteTarget::Alias {
-                alias: "build-box".into(),
-            },
-            WorkspaceId::new(),
-        ));
-        let remote_id = remote.id;
-        let _ssh_stream = app.update_in(&mut vcx, |app, window, cx| {
-            WorkspaceStore::install_for_test(
-                cx,
-                WindowViews {
-                    views: vec![remote],
-                    active: None,
-                },
-            );
-            app.workspace = remote_id;
-            let (ssh_view, stream) = crate::terminal::view::quiet_test_ssh_pane(2, window, cx);
-            app.tabs
-                .push(super::Tab::new(Pane::leaf(PaneSlot::Ready(ssh_view))));
-            stream
-        });
-
-        let (desired, _active, held) = app.update_in(&mut vcx, |app, _, cx| {
-            crate::ui::tree_sync::desired_tabs(app, cx)
-        });
-        assert_eq!(
-            desired.len(),
-            1,
-            "only the remote-backed tab can be named in the machine's tree"
-        );
-        assert!(
-            held.is_empty(),
-            "the pure-SSH tab is permanently invisible, not held — holding it \
-             would freeze ordering and active-tab sync for the whole window"
-        );
     }
 }
 
@@ -10980,156 +10288,6 @@ mod zoom_gpui_tests {
 
             assert!(!app.tab_is_zoomed(9), "there is no tab 9 to mark");
             drop(held);
-        });
-    }
-}
-
-// A test window has no daemon behind it — its socket path is under the pinned
-// test config dir and nothing is listening on it — so every forward request
-// fails. That is exactly the case these are about: what the panel and the form
-// are left holding when the far side does not answer.
-#[cfg(test)]
-mod managed_forward_gpui_tests {
-    use gpui::{Focusable as _, TestAppContext};
-    use gpui_component::input::InputState;
-
-    use crate::ui::native_gone::{ForwardStatus, ManagedForward, SshForwardKind};
-
-    use crate::ui::app::test_window::harness_with_tabs;
-
-    fn listening(id: u64) -> ManagedForward {
-        ManagedForward {
-            id,
-            pane_id: 1,
-            kind: SshForwardKind::Local,
-            bind_host: "127.0.0.1".to_string(),
-            bind_port: 8080,
-            target_host: "10.0.0.5".to_string(),
-            target_port: 80,
-            description: None,
-            status: ForwardStatus::Listening,
-        }
-    }
-
-    /// The form had no keyboard contract at all: no Return, no Escape, and it
-    /// opened cold, with the caret still in the terminal behind it. Every
-    /// sibling form in the app has all three.
-    ///
-    /// Escape is a `on_key_down` on the form itself and only fires while
-    /// something inside it holds focus, so the focus below is what makes both
-    /// halves work; the subscriptions are what answer Return. Asserting on
-    /// both together is the point — arming one without the other is the state
-    /// this test exists to catch.
-    #[gpui::test]
-    fn opening_the_forward_form_arms_the_keyboard_and_closing_disarms_it(cx: &mut TestAppContext) {
-        let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-
-        app.update_in(&mut vcx, |app, window, cx| {
-            assert!(
-                app.loopback_panel.mf_subs.is_empty(),
-                "nothing is listening before the form is up"
-            );
-
-            app.toggle_managed_forward_form(1, window, cx);
-
-            assert_eq!(
-                app.loopback_panel.form_pane_id,
-                Some(1),
-                "the form is up for the pane that asked"
-            );
-            assert_eq!(
-                app.loopback_panel.mf_subs.len(),
-                5,
-                "Return has to be answered on every box, not just the first"
-            );
-            assert!(
-                app.loopback_panel
-                    .mf_bind_host
-                    .read(cx)
-                    .focus_handle(cx)
-                    .is_focused(window),
-                "the form opens with the caret in Bind, so Escape reaches it too"
-            );
-
-            app.close_managed_forward_form(window, cx);
-
-            assert_eq!(app.loopback_panel.form_pane_id, None);
-            assert!(
-                app.loopback_panel.mf_subs.is_empty(),
-                "a live subscription on a box nothing is showing would answer \
-                 Return for a form that is gone"
-            );
-        });
-    }
-
-    #[gpui::test]
-    fn an_add_that_never_reaches_the_session_leaves_the_panel_as_it_was(cx: &mut TestAppContext) {
-        let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-
-        app.update_in(&mut vcx, |app, window, cx| {
-            app.loopback_panel.managed = vec![listening(1)];
-            app.loopback_panel.form_pane_id = Some(1);
-            // These three fields are the long form's; without this the short
-            // form would read them as the one number it asks for.
-            app.loopback_panel.mf_advanced = true;
-            let typed: [(&gpui::Entity<InputState>, &str); 3] = [
-                (&app.loopback_panel.mf_bind_port, "9000"),
-                (&app.loopback_panel.mf_target_host, "127.0.0.1"),
-                (&app.loopback_panel.mf_target_port, "22"),
-            ];
-            for (input, value) in typed {
-                input.update(cx, |input, cx| input.set_value(value, window, cx));
-            }
-
-            app.add_managed_forward(1, window, cx);
-
-            assert_eq!(
-                app.loopback_panel.managed.len(),
-                1,
-                "a request that failed says nothing about the forwards that are up"
-            );
-            assert!(
-                app.loopback_panel.mf_error.is_some(),
-                "and the form has to say why the Add did nothing"
-            );
-            assert_eq!(
-                app.loopback_panel.form_pane_id,
-                Some(1),
-                "the form stays open on what was typed"
-            );
-        });
-    }
-
-    #[gpui::test]
-    fn a_save_that_cannot_be_made_leaves_the_rule_it_would_replace_alone(cx: &mut TestAppContext) {
-        let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-
-        app.update_in(&mut vcx, |app, window, cx| {
-            app.loopback_panel.managed = vec![listening(1)];
-            app.loopback_panel.form_pane_id = Some(1);
-            app.loopback_panel.mf_editing = Some(listening(1));
-            app.loopback_panel.mf_advanced = true;
-            let typed: [(&gpui::Entity<InputState>, &str); 3] = [
-                (&app.loopback_panel.mf_bind_port, "8080"),
-                (&app.loopback_panel.mf_target_host, "10.0.0.6"),
-                (&app.loopback_panel.mf_target_port, "80"),
-            ];
-            for (input, value) in typed {
-                input.update(cx, |input, cx| input.set_value(value, window, cx));
-            }
-
-            app.add_managed_forward(1, window, cx);
-
-            assert_eq!(
-                app.loopback_panel.managed,
-                vec![listening(1)],
-                "the rule being edited must survive an edit that could not be made"
-            );
-            assert!(
-                app.loopback_panel.mf_editing.is_some(),
-                "the form is still editing it"
-            );
-            assert!(app.loopback_panel.mf_error.is_some());
         });
     }
 }
