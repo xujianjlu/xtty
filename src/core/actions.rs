@@ -67,6 +67,11 @@ actions!(
         TogglePalette,
         ReopenClosedTab,
         ToggleMaximizePane,
+        /// Mirror keyboard/paste input to every non-opted-out pane in the
+        /// current tab (iTerm-style broadcast; not cross-tab).
+        ToggleBroadcastInput,
+        /// Exclude / re-include the focused pane from the tab's broadcast group.
+        ToggleBroadcastPane,
         ToggleFullscreen,
         ToggleTabSidebar,
         ToggleLeftPanel,

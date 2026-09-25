@@ -1,4 +1,5 @@
 mod boxdraw;
+pub(crate) mod broadcast;
 mod cmd_editor;
 mod completion;
 pub mod element;

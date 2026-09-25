@@ -438,6 +438,9 @@ pub struct Tab {
     pub pane: Pane,
     pub name: Option<String>,
     last_focused: Option<gpui::EntityId>,
+    /// When true, keyboard/paste input in the focused pane is mirrored to every
+    /// non-opted-out sibling pane in this tab only (not across tabs).
+    pub(crate) broadcast_input: bool,
     /// The pane zoomed in this tab, stashed here by `activate` while another
     /// tab is on screen — zoom is a tab's view state, not the window's, so
     /// looking at another tab and coming back must not lose it (#599). `None`
@@ -494,6 +497,7 @@ impl Tab {
             pane,
             name: None,
             last_focused: None,
+            broadcast_input: false,
             zoomed: None,
             diff_overlay: None,
             code: None,
@@ -511,6 +515,7 @@ impl Tab {
             pane,
             name: tree.name.clone(),
             last_focused: None,
+            broadcast_input: false,
             zoomed: None,
             diff_overlay: None,
             code: None,
@@ -1868,6 +1873,7 @@ impl Tty7App {
                 pane,
                 name: st.name,
                 last_focused: None,
+                broadcast_input: false,
                 zoomed: None,
                 diff_overlay: None,
                 code: None,
@@ -3197,6 +3203,120 @@ impl Tty7App {
 
     pub(crate) fn set_dim_inactive_panes(&mut self, on: bool, cx: &mut Context<Self>) {
         self.update_config(cx, |cfg| cfg.dim_inactive_panes = on);
+    }
+
+    pub(crate) fn toggle_broadcast_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(tab) = self.tabs.get_mut(self.active) else {
+            return;
+        };
+        tab.broadcast_input = !tab.broadcast_input;
+        // Fresh group: clear stale opt-outs so every pane rejoins until the
+        // user excludes one again.
+        if tab.broadcast_input {
+            for leaf in tab.pane.terminals() {
+                leaf.update(cx, |view, cx| {
+                    if view.broadcast_opt_out() {
+                        view.toggle_broadcast_opt_out(cx);
+                    }
+                });
+            }
+        }
+        self.sync_broadcast_roles(window, cx);
+        cx.notify();
+    }
+
+    pub(crate) fn toggle_broadcast_pane(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(leaf) = self.focused_leaf(window, cx) else {
+            return;
+        };
+        let Some(tab) = self.tabs.get(self.active) else {
+            return;
+        };
+        if !tab.broadcast_input {
+            // Opt-out only makes sense inside an active broadcast group.
+            return;
+        }
+        leaf.update(cx, |view, cx| view.toggle_broadcast_opt_out(cx));
+        self.sync_broadcast_roles(window, cx);
+        cx.notify();
+    }
+
+    /// Paint each pane's broadcast border for the active tab.
+    fn sync_broadcast_roles(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let Some(tab) = self.tabs.get(self.active) else {
+            return;
+        };
+        let enabled = tab.broadcast_input;
+        let focused = tab
+            .pane
+            .focused_or_first(window, cx)
+            .map(|v| v.entity_id());
+        let leaves = tab.pane.terminals();
+        for leaf in leaves {
+            let id = leaf.entity_id();
+            leaf.update(cx, |view, cx| {
+                let role = crate::terminal::broadcast::broadcast_role(
+                    enabled,
+                    id,
+                    focused,
+                    view.broadcast_opt_out(),
+                );
+                view.set_broadcast_role(role);
+                cx.notify();
+            });
+        }
+    }
+
+    fn on_broadcast_input(
+        &mut self,
+        source: Entity<TerminalView>,
+        bytes: &[u8],
+        _window: &Window,
+        cx: &mut Context<Self>,
+    ) {
+        if bytes.is_empty() {
+            return;
+        }
+        let source_id = source.entity_id();
+        let Some(tab_idx) = self
+            .tabs
+            .iter()
+            .position(|tab| tab.pane.terminals().iter().any(|t| t.entity_id() == source_id))
+        else {
+            return;
+        };
+        // Only the active tab's broadcast domain is live — inactive tabs never
+        // receive mirrored input (V1: current-tab only, never cross-tab).
+        if tab_idx != self.active {
+            return;
+        }
+        let tab = &self.tabs[tab_idx];
+        if !tab.broadcast_input {
+            return;
+        }
+        let members: Vec<_> = tab
+            .pane
+            .terminals()
+            .into_iter()
+            .map(|t| {
+                let opted = t.read(cx).broadcast_opt_out();
+                (t.entity_id(), opted)
+            })
+            .collect();
+        let targets =
+            crate::terminal::broadcast::broadcast_receivers(true, source_id, &members);
+        if targets.is_empty() {
+            return;
+        }
+        let terminals = tab.pane.terminals();
+        for leaf in terminals {
+            if !targets.contains(&leaf.entity_id()) {
+                continue;
+            }
+            leaf.update(cx, |view, cx| {
+                view.receive_broadcast_bytes(bytes, cx);
+            });
+        }
     }
 
     pub(crate) fn set_cursor_blink(&mut self, on: bool, cx: &mut Context<Self>) {
@@ -5361,6 +5481,8 @@ impl Tty7App {
             NextTab => self.cycle_tab(true, window, cx),
             PrevTab => self.cycle_tab(false, window, cx),
             ToggleMaximizePane => self.toggle_maximize(window, cx),
+            ToggleBroadcastInput => self.toggle_broadcast_input(window, cx),
+            ToggleBroadcastPane => self.toggle_broadcast_pane(window, cx),
             ToggleFullscreen => self.toggle_fullscreen(window, cx),
             ToggleTabSidebar => self.toggle_tab_sidebar(cx),
             ToggleLeftPanel => self.toggle_left_panel(cx),
@@ -7546,6 +7668,7 @@ impl Render for Tty7App {
             .get(self.active)
             .and_then(|t| t.pane.focused_or_first(window, cx))
             .and_then(|leaf| self.render_ssh_status_strip(&leaf, cx));
+        self.sync_broadcast_roles(window, cx);
         let body = match self.tabs.get(self.active) {
             None => self.render_home(cx).into_any_element(),
             Some(active_tab) => {
@@ -8012,6 +8135,12 @@ impl Render for Tty7App {
                 .on_action(cx.listener(|this, _: &ToggleMaximizePane, window, cx| {
                     this.toggle_maximize(window, cx)
                 }))
+                .on_action(cx.listener(|this, _: &ToggleBroadcastInput, window, cx| {
+                    this.toggle_broadcast_input(window, cx)
+                }))
+                .on_action(cx.listener(|this, _: &ToggleBroadcastPane, window, cx| {
+                    this.toggle_broadcast_pane(window, cx)
+                }))
                 .on_action(cx.listener(|this, _: &ToggleFullscreen, window, cx| {
                     this.toggle_fullscreen(window, cx)
                 }))
@@ -8427,6 +8556,7 @@ fn tabs_from_session(
             pane,
             name: st.name.clone(),
             last_focused: None,
+            broadcast_input: false,
             zoomed: None,
             diff_overlay: None,
             code: None,
@@ -8649,6 +8779,14 @@ fn build_terminal_view(
     cx.subscribe_in(
         &view,
         window,
+        |app, view, ev: &crate::terminal::broadcast::BroadcastInput, window, cx| {
+            app.on_broadcast_input(view.clone(), &ev.bytes, window, cx);
+        },
+    )
+    .detach();
+    cx.subscribe_in(
+        &view,
+        window,
         |app, _view, _: &crate::terminal::view::AgentSessionChanged, _window, cx| {
             app.save_session(cx);
         },
@@ -8773,6 +8911,14 @@ pub(crate) fn new_terminal_native(
     cx.subscribe_in(&view, window, |app, view, _: &ChildExited, window, cx| {
         app.on_child_exited(view.clone(), window, cx);
     })
+    .detach();
+    cx.subscribe_in(
+        &view,
+        window,
+        |app, view, ev: &crate::terminal::broadcast::BroadcastInput, window, cx| {
+            app.on_broadcast_input(view.clone(), &ev.bytes, window, cx);
+        },
+    )
     .detach();
     cx.subscribe_in(
         &view,

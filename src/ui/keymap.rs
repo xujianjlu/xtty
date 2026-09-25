@@ -402,6 +402,9 @@ pub(crate) fn default_bindings() -> Vec<(&'static str, &'static str)> {
             per_platform("secondary-shift-t", "alt-shift-t"),
         ),
         ("ToggleMaximizePane", "secondary-shift-enter"),
+        // Avoid secondary-shift-i (Chrome DevTools). Align with Warp's ⌘⌥I.
+        ("ToggleBroadcastInput", "secondary-alt-i"),
+        ("ToggleBroadcastPane", "secondary-alt-shift-i"),
         // The one default that sits on a bare function key, and it stays
         // there: F11 is the fullscreen chord Windows Terminal, GNOME Terminal
         // and konsole all train their users on, and no shell binds it — the
@@ -609,6 +612,14 @@ fn authored_entry(action: &str) -> Option<(CommandGroup, String)> {
             t(L10nKey::CmdSplitDown).to_string(),
         ),
         "ToggleMaximizePane" => (CommandGroup::TabsPanes, t(L10nKey::CmdZoomPane).to_string()),
+        "ToggleBroadcastInput" => (
+            CommandGroup::TabsPanes,
+            t(L10nKey::CmdToggleBroadcastInput).to_string(),
+        ),
+        "ToggleBroadcastPane" => (
+            CommandGroup::TabsPanes,
+            t(L10nKey::CmdToggleBroadcastPane).to_string(),
+        ),
         "FocusNextPane" => (CommandGroup::TabsPanes, t(L10nKey::CmdNextPane).to_string()),
         "FocusPrevPane" => (
             CommandGroup::TabsPanes,
@@ -1364,6 +1375,8 @@ fn make_binding(action: &str, keystroke: &str) -> Option<KeyBinding> {
         "TogglePalette" => KeyBinding::new(keystroke, TogglePalette, None),
         "ReopenClosedTab" => KeyBinding::new(keystroke, ReopenClosedTab, None),
         "ToggleMaximizePane" => KeyBinding::new(keystroke, ToggleMaximizePane, None),
+        "ToggleBroadcastInput" => KeyBinding::new(keystroke, ToggleBroadcastInput, None),
+        "ToggleBroadcastPane" => KeyBinding::new(keystroke, ToggleBroadcastPane, None),
         "ToggleFullscreen" => KeyBinding::new(keystroke, ToggleFullscreen, None),
         "ToggleTabSidebar" => KeyBinding::new(keystroke, ToggleTabSidebar, None),
         "ToggleLeftPanel" => KeyBinding::new(keystroke, ToggleLeftPanel, None),
