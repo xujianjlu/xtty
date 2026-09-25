@@ -103,6 +103,8 @@ struct ReaderSignals {
     zmodem: Arc<crate::terminal::zmodem::ZmodemPipe>,
     /// Nested-SSH history dump divert (`terminal::history_probe`).
     history_probe: Arc<crate::terminal::history_probe::HistoryProbePipe>,
+    /// Nested-SSH git status divert (`terminal::git_probe`).
+    git_probe: Arc<crate::terminal::git_probe::GitProbePipe>,
     auth: Arc<Mutex<VecDeque<(u64, AuthPromptKind)>>>,
     phase: Arc<Mutex<Option<SshPhase>>>,
     /// Kitty-graphics images the daemon lifted out of the stream (issue #213),
@@ -541,6 +543,7 @@ pub struct RemoteTerminal {
     trigger_output: Arc<Mutex<Vec<u8>>>,
     zmodem: Arc<crate::terminal::zmodem::ZmodemPipe>,
     history_probe: Arc<crate::terminal::history_probe::HistoryProbePipe>,
+    git_probe: Arc<crate::terminal::git_probe::GitProbePipe>,
     auth_prompts: Arc<Mutex<VecDeque<(u64, AuthPromptKind)>>>,
     ssh_phase: Arc<Mutex<Option<SshPhase>>>,
     ssh_endpoint: Option<(String, u16)>,
@@ -601,6 +604,11 @@ impl RemoteTerminal {
         &self,
     ) -> Arc<crate::terminal::history_probe::HistoryProbePipe> {
         self.history_probe.clone()
+    }
+
+    /// Nested-SSH git status divert for this pane.
+    pub(crate) fn git_probe_pipe(&self) -> Arc<crate::terminal::git_probe::GitProbePipe> {
+        self.git_probe.clone()
     }
 
     pub fn spawn(
@@ -906,6 +914,7 @@ impl RemoteTerminal {
                 trigger_output: self.trigger_output.clone(),
                 zmodem: self.zmodem.clone(),
                 history_probe: self.history_probe.clone(),
+                git_probe: self.git_probe.clone(),
                 auth: self.auth_prompts.clone(),
                 phase: self.ssh_phase.clone(),
                 images: self.images.clone(),
@@ -986,6 +995,7 @@ impl RemoteTerminal {
         let trigger_output: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
         let zmodem = crate::terminal::zmodem::ZmodemPipe::new();
         let history_probe = crate::terminal::history_probe::HistoryProbePipe::new();
+        let git_probe = crate::terminal::git_probe::GitProbePipe::new();
         let auth_prompts: Arc<Mutex<VecDeque<(u64, AuthPromptKind)>>> =
             Arc::new(Mutex::new(VecDeque::new()));
         let ssh_phase: Arc<Mutex<Option<SshPhase>>> = Arc::new(Mutex::new(None));
@@ -1015,6 +1025,7 @@ impl RemoteTerminal {
                 trigger_output: trigger_output.clone(),
                 zmodem: zmodem.clone(),
                 history_probe: history_probe.clone(),
+                git_probe: git_probe.clone(),
                 auth: auth_prompts.clone(),
                 phase: ssh_phase.clone(),
                 images: images.clone(),
@@ -1048,6 +1059,7 @@ impl RemoteTerminal {
             trigger_output,
             zmodem,
             history_probe,
+            git_probe,
             auth_prompts,
             ssh_phase,
             ssh_endpoint: None,
@@ -1130,6 +1142,7 @@ impl RemoteTerminal {
                     trigger_output,
                     zmodem,
                     history_probe,
+                    git_probe,
                     auth,
                     phase,
                     images,
@@ -1354,9 +1367,15 @@ impl RemoteTerminal {
                                 // Nested-SSH history probe: divert the dump so
                                 // it never paints, then wake the UI to parse it.
                                 let bytes = history_probe.filter_output(&bytes);
+                                // Nested-SSH git status probe: same divert
+                                // pattern as history (no Host/SFTP on the hop).
+                                let bytes = git_probe.filter_output(&bytes);
                                 if bytes.is_empty() {
                                     // Still wake the UI so it can poll the pipe.
-                                    if zmodem.is_diverting() || history_probe.is_active() {
+                                    if zmodem.is_diverting()
+                                        || history_probe.is_active()
+                                        || git_probe.is_active()
+                                    {
                                         flush_batch!();
                                         proxy.send_event(AlacEvent::Wakeup);
                                     }
