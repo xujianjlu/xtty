@@ -2002,7 +2002,14 @@ impl DaemonPane {
                             // must stop us honoring host-local object names. Cheap
                             // and only meaningful when a probe follows.
                             graphics.set_local(st.remote.is_none());
-                            if let Some(agent) = agent {
+                            // The process-table probe only sees this machine's
+                            // foreground. Over shell-ssh that is `ssh` itself,
+                            // which would wipe an agent the OSC 133 path just
+                            // learned from the far shell. Native SSH already
+                            // returns no probe; skip here for every remote.
+                            if let Some(agent) = agent
+                                && st.remote.is_none()
+                            {
                                 apply_agent(&mut st, agent);
                             }
                             apply_probed_cwd(&mut st, probed_cwd);
@@ -2756,6 +2763,18 @@ fn apply_signals(st: &mut PaneState, signals: SniffSignals) {
         if let Some(cmd) = shell.command.as_deref() {
             try_ssh_command_hop(st, cmd);
         }
+        // Local panes learn the agent from the process table. A remote pane
+        // (Native SSH or a shell-in-ssh hop) has no local child to inspect —
+        // the far `claude` is invisible here — so the OSC 133;C command
+        // capture is the only process-shaped signal. Apply it only when the
+        // capture actually changes: A/B prompt marks keep the previous
+        // command and must not re-stamp (or clear) the agent.
+        if st.remote.is_some() && shell_mark_capture_changed(&st.shell, &shell) {
+            apply_agent(
+                st,
+                agent_from_shell_mark(&shell, &crate::core::config::agent_commands_cached()),
+            );
+        }
         st.shell = shell.clone();
         notify(
             st,
@@ -2815,12 +2834,10 @@ fn apply_osc7_host_identity(st: &mut PaneState, host: &str) {
     st.osc_title = Some(next);
 }
 
-#[cfg_attr(not(windows), allow(dead_code))]
 fn shell_mark_capture_changed(prev: &ShellState, next: &ShellState) -> bool {
     prev.command != next.command
 }
 
-#[cfg_attr(not(windows), allow(dead_code))]
 fn agent_from_shell_mark(
     shell: &ShellState,
     custom: &std::collections::HashMap<String, String>,
@@ -4342,6 +4359,121 @@ mod tests {
             Some("claude --resume abc"),
             "stale session flags are dropped, not replayed"
         );
+    }
+
+    #[test]
+    fn remote_pane_detects_agent_from_osc133_command_mark() {
+        use crate::core::cli_agent::CLIAgent;
+        use crate::daemon::protocol::{RemoteContext, RemoteKind};
+
+        let mut st = test_state(true);
+        st.remote = Some(RemoteContext {
+            kind: RemoteKind::NativeSsh,
+            argv: Vec::new(),
+            target: "dev@box".into(),
+        });
+        let (tx, rx) = mpsc::channel();
+        st.subscriber = Some(tx);
+        let mut sniffer = OscSniffer::new();
+
+        apply_signals(&mut st, sniffer.feed(b"\x1b]133;C;claude\x07"));
+        assert_eq!(st.agent, Some(CLIAgent::Claude));
+        assert_eq!(
+            st.agent_argv.as_deref(),
+            Some(["claude".to_string()].as_slice())
+        );
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(DaemonMsg::Agent(Some(CLIAgent::Claude)))
+        ));
+        while rx.try_recv().is_ok() {}
+
+        // Stray A/B marks keep the same command capture — do not re-stamp.
+        apply_signals(&mut st, sniffer.feed(b"\x1b]133;A\x1b]133;B\x07"));
+        assert_eq!(st.agent, Some(CLIAgent::Claude));
+        while let Ok(msg) = rx.try_recv() {
+            assert!(
+                !matches!(msg, DaemonMsg::Agent(_)),
+                "A/B must not re-stamp the agent: {msg:?}"
+            );
+        }
+
+        // Hooks still refine status on a remote pane once the agent is known.
+        let submit = concat!(
+            "\x1b]777;notify;tty7://cli-agent;",
+            r#"{"v":1,"agent":"claude","event":"prompt-submit"}"#,
+            "\x07",
+        );
+        apply_signals(&mut st, sniffer.feed(submit.as_bytes()));
+        assert_eq!(
+            st.agent_session.as_ref().map(|s| s.status),
+            Some(crate::core::cli_agent::AgentStatus::Working)
+        );
+        while rx.try_recv().is_ok() {}
+
+        apply_signals(&mut st, sniffer.feed(b"\x1b]133;D;0\x07"));
+        assert_eq!(st.agent, None);
+        assert!(st.agent_session.is_none());
+        let mut saw_status_clear = false;
+        let mut saw_agent_clear = false;
+        while let Ok(msg) = rx.try_recv() {
+            match msg {
+                DaemonMsg::AgentStatus(None) => saw_status_clear = true,
+                DaemonMsg::Agent(None) => saw_agent_clear = true,
+                DaemonMsg::Prompt { .. } => {}
+                other => panic!("unexpected after D: {other:?}"),
+            }
+        }
+        assert!(saw_status_clear && saw_agent_clear);
+    }
+
+    #[test]
+    fn shell_ssh_pane_also_detects_agent_from_osc133() {
+        use crate::core::cli_agent::CLIAgent;
+        use crate::daemon::protocol::{RemoteContext, RemoteKind};
+
+        let mut st = test_state(true);
+        st.remote = Some(RemoteContext {
+            kind: RemoteKind::Ssh,
+            argv: vec!["ssh".into(), "dev@box".into()],
+            target: "dev@box".into(),
+        });
+        let mut sniffer = OscSniffer::new();
+        apply_signals(&mut st, sniffer.feed(b"\x1b]133;C;codex\x07"));
+        assert_eq!(st.agent, Some(CLIAgent::Codex));
+        apply_signals(&mut st, sniffer.feed(b"\x1b]133;D;0\x07"));
+        assert_eq!(st.agent, None);
+    }
+
+    #[test]
+    fn local_pane_does_not_use_shell_mark_agent_detection() {
+        // Local panes keep the process-table probe as the source of truth.
+        // OSC 133 alone must not flip the agent — that would race the probe.
+        let mut st = test_state(true);
+        assert!(st.remote.is_none());
+        let mut sniffer = OscSniffer::new();
+        apply_signals(&mut st, sniffer.feed(b"\x1b]133;C;claude\x07"));
+        assert_eq!(st.agent, None);
+    }
+
+    #[test]
+    fn process_probe_is_ignored_while_pane_is_remote() {
+        use crate::core::cli_agent::CLIAgent;
+        use crate::daemon::protocol::{RemoteContext, RemoteKind};
+
+        let mut st = test_state(true);
+        st.remote = Some(RemoteContext {
+            kind: RemoteKind::Ssh,
+            argv: vec!["ssh".into(), "host".into()],
+            target: "host".into(),
+        });
+        st.agent = Some(CLIAgent::Claude);
+        // Same gate the reader uses: a local probe of `ssh` must not wipe
+        // the far agent once the pane is remote.
+        if st.remote.is_none() {
+            apply_agent(&mut st, None);
+        }
+        assert_eq!(st.agent, Some(CLIAgent::Claude));
     }
 
     #[test]
