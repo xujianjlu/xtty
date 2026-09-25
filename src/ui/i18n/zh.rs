@@ -1483,8 +1483,6 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::CmdSshReconnect => "SSH：重新连接",
         L10nKey::CmdSshRemoteFiles => "SSH：远程文件",
         L10nKey::CmdSshPortForwarding => "SSH：端口转发",
-        L10nKey::CmdSshSaveConnection => "SSH：将当前连接保存为主机…",
-        L10nKey::CmdSshSaveConnectionSubtitle => "把这条连接存成一个主机配置。",
         L10nKey::CmdSshConnectWithInput => "SSH：连接 {input}",
         L10nKey::CmdAgentSendSelection => "Agent：发送选区",
         L10nKey::CmdAgentSendSelectionSubtitle => "选区 → 运行中的编码 agent",

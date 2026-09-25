@@ -4921,21 +4921,6 @@ impl Tty7App {
             },
         );
 
-        // Offered only where it would do something. A connection opened from a
-        // saved host has nothing to save, and a pane that is not an SSH one has
-        // no connection at all — either would be a row that quietly did nothing
-        // (#549).
-        if self.unsaved_ssh_session(window, cx).is_some() {
-            commands.push(
-                Command::localized(
-                    L10nKey::CmdSshSaveConnection,
-                    CommandKind::SaveSshSessionAsHost,
-                )
-                .with_subtitle(t(L10nKey::CmdSshSaveConnectionSubtitle))
-                .in_group(CommandGroup::Ssh),
-            );
-        }
-
         for p in crate::ui::ssh_connect::ssh_profiles_by_frecency(cx) {
             let subtitle = crate::core::ssh_profile::to_connect_string(&p);
             let title = if p.name.is_empty() {
@@ -5182,7 +5167,6 @@ impl Tty7App {
                 }
             }
             SaveQuickConnect(target) => self.open_ssh_profile_new_from_target(target, window, cx),
-            SaveSshSessionAsHost => self.save_ssh_session_as_host(window, cx),
             OpenSshProfiles => self.open_settings_section(SettingsSection::Ssh, window, cx),
             SendSelectionToAgent => self.send_selection_to_agent(window, cx),
             SendGitDiffToAgent => self.send_git_diff_to_agent(window, cx),

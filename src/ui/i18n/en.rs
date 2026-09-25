@@ -1583,8 +1583,6 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::CmdSshReconnect => "SSH: Reconnect",
         L10nKey::CmdSshRemoteFiles => "SSH: Remote Files",
         L10nKey::CmdSshPortForwarding => "SSH: Port Forwarding",
-        L10nKey::CmdSshSaveConnection => "SSH: Save Connection as Host…",
-        L10nKey::CmdSshSaveConnectionSubtitle => "Keep this connection as a saved host.",
         L10nKey::CmdSshConnectWithInput => "SSH: Connect {input}",
         L10nKey::CmdAgentSendSelection => "Agent: Send Selection",
         L10nKey::CmdAgentSendSelectionSubtitle => "selection → running coding agent",

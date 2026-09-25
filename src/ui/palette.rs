@@ -105,7 +105,6 @@ pub enum CommandKind {
     ActivateTab(usize),
     ConnectSavedProfile(Uuid),
     EditSavedProfile(Uuid),
-    SaveSshSessionAsHost,
     QuickConnect(String),
     SaveQuickConnect(String),
     OpenSshProfiles,
@@ -212,7 +211,6 @@ impl CommandKind {
             OpenThemePicker => "change-theme",
             OpenSshConnectInput => "ssh-add-connection",
             OpenSshProfiles => "ssh-manage-profiles",
-            SaveSshSessionAsHost => "ssh-save-connection",
             OpenSshConnect(_)
             | SetTheme(_)
             | ActivateTab(_)
@@ -329,7 +327,6 @@ impl CommandKind {
             | ActivateTab(_)
             | ConnectSavedProfile(_)
             | EditSavedProfile(_)
-            | SaveSshSessionAsHost
             | QuickConnect(_)
             | SaveQuickConnect(_) => return None,
         };

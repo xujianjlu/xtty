@@ -1290,8 +1290,6 @@ l10n_keys! {
     CmdSshReconnect,
     CmdSshRemoteFiles,
     CmdSshPortForwarding,
-    CmdSshSaveConnection,
-    CmdSshSaveConnectionSubtitle,
     CmdSshConnectWithInput,
     CmdAgentSendSelection,
     CmdAgentSendSelectionSubtitle,

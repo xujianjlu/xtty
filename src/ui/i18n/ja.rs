@@ -1642,8 +1642,6 @@ pub fn translate_ja(key: L10nKey) -> Option<&'static str> {
         L10nKey::CmdSshReconnect => "SSH: 再接続",
         L10nKey::CmdSshRemoteFiles => "SSH: リモートファイル",
         L10nKey::CmdSshPortForwarding => "SSH: ポートフォワーディング",
-        L10nKey::CmdSshSaveConnection => "SSH: この接続をホストとして保存…",
-        L10nKey::CmdSshSaveConnectionSubtitle => "この接続を保存済みホストとして残します",
         L10nKey::CmdSshConnectWithInput => "SSH: {input} に接続",
         L10nKey::CmdAgentSendSelection => "エージェント: 選択範囲を送信",
         L10nKey::CmdAgentSendSelectionSubtitle => "選択範囲 → 実行中のコーディングエージェント",
