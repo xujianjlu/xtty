@@ -17,13 +17,9 @@ use std::collections::VecDeque;
 use crate::core::cli_agent::{AgentSessionState, AgentStatus, CLIAgent};
 use crate::core::config::CursorStyle as ConfigCursorStyle;
 use crate::core::osc::OscTokenizer;
-use crate::daemon::protocol::{
-    AuthPromptKind, AuthResponse, ClientMsg, DaemonMsg, KnownHostEntry, KnownHostId,
-    LoopbackForward, LoopbackForwardRequest, ManagedForward, NativeSshSpec, PaneProcs,
-    RemoteContext, RemoteKind, RestoreFrom, SftpEntry, SftpJobProgress, SftpOp, SftpOpResult,
-    SftpTransferSpec, ShellSpec, SshForwardRule, SshPhase, SshTestReport, WinSize, WorkspaceOp,
-    WorkspaceRequest,
-};
+use crate::daemon::protocol::{ClientMsg, DaemonMsg, PaneProcs, RemoteContext, RemoteKind, RestoreFrom, ShellSpec, WinSize};
+
+
 use crate::daemon::transport::{self, Stream};
 use gpui::EntityId;
 
@@ -105,8 +101,6 @@ struct ReaderSignals {
     history_probe: Arc<crate::terminal::history_probe::HistoryProbePipe>,
     /// Nested-SSH git status divert (`terminal::git_probe`).
     git_probe: Arc<crate::terminal::git_probe::GitProbePipe>,
-    auth: Arc<Mutex<VecDeque<(u64, AuthPromptKind)>>>,
-    phase: Arc<Mutex<Option<SshPhase>>>,
     /// Kitty-graphics images the daemon lifted out of the stream (issue #213),
     /// anchored to the grid for the paint path to blit. Shared with the reader,
     /// which places/deletes them as `DaemonMsg::Image`/`DeleteImage` frames land.
@@ -119,7 +113,6 @@ struct ReaderSignals {
 pub struct PaneWorkspace {
     pub workspace: crate::core::session::WorkspaceId,
     pub target: crate::core::session::RemoteTarget,
-    pub spec: Option<Box<NativeSshSpec>>,
     /// The name the workspace answers to — its own label, or its machine's
     /// when it has none. A pane keeps answering to this name when its link
     /// dies (#438 gave SSH panes their host here; without this, a workspace
@@ -145,31 +138,22 @@ impl PaneWorkspace {
     pub fn route_header(&self) -> anyhow::Result<crate::daemon::router::RouteHeader> {
         use crate::core::session::RemoteTarget;
         use crate::daemon::router::RouteHeader;
-        let header = match (&self.target, &self.spec) {
-            (RemoteTarget::LocalStdio { program, args }, _) => {
+        let header = match &self.target {
+            RemoteTarget::LocalStdio { program, args } => {
                 let mut argv: Vec<&str> = args.iter().map(String::as_str).collect();
                 if !argv.contains(&"--pane") {
                     argv.push("--pane");
                 }
                 RouteHeader::local_stdio(program.clone(), &argv)
             }
-            (_, Some(spec)) => RouteHeader::ssh((**spec).clone()),
-            (_, None) => {
-                // Deliberately not the target: a `Profile` spells itself as
-                // its config UUID in `Display` and in `Debug` alike, and a
-                // deleted profile is exactly what empties `spec` here. This
-                // sentence is not only logged — `land_pane` hands it to the
-                // pending pane, which prints the reason verbatim under
-                // "could not reach {machine}", so the UUID reached the screen
-                // (#485). The workspace's own name is what every other
-                // surface calls this thing.
+            _ => {
+                // Native SSH workspace dial abolished — only LocalStdio routes remain.
                 return Err(match self.label.as_deref() {
                     Some(label) => anyhow::anyhow!(
-                        "{label} has no SSH connection details, so its panes cannot be routed"
+                        "{label} uses Native SSH which is no longer supported"
                     ),
                     None => anyhow::anyhow!(
-                        "this workspace has no SSH connection details, so its panes \
-                         cannot be routed"
+                        "this workspace uses Native SSH which is no longer supported"
                     ),
                 });
             }
@@ -221,11 +205,8 @@ impl PaneRoute {
 
     fn allow_remote_clipboard_write(&self) -> bool {
         match self {
-            PaneRoute::Remote { header, .. } => match &header.target {
-                crate::daemon::router::RouteTarget::Ssh(spec) => spec.remote_clipboard_write,
-                _ => false,
-            },
-            PaneRoute::Local | PaneRoute::Unroutable(_) => false,
+            // Native SSH routes abolished — never allow remote clipboard writes via Native.
+            PaneRoute::Remote { .. } | PaneRoute::Local | PaneRoute::Unroutable(_) => false,
         }
     }
 }
@@ -544,8 +525,6 @@ pub struct RemoteTerminal {
     zmodem: Arc<crate::terminal::zmodem::ZmodemPipe>,
     history_probe: Arc<crate::terminal::history_probe::HistoryProbePipe>,
     git_probe: Arc<crate::terminal::git_probe::GitProbePipe>,
-    auth_prompts: Arc<Mutex<VecDeque<(u64, AuthPromptKind)>>>,
-    ssh_phase: Arc<Mutex<Option<SshPhase>>>,
     ssh_endpoint: Option<(String, u16)>,
     /// The account the SSH connection authenticates as. `ssh_endpoint` is what
     /// the disconnect strip and the forward sheet need; the keychain files a
@@ -915,8 +894,6 @@ impl RemoteTerminal {
                 zmodem: self.zmodem.clone(),
                 history_probe: self.history_probe.clone(),
                 git_probe: self.git_probe.clone(),
-                auth: self.auth_prompts.clone(),
-                phase: self.ssh_phase.clone(),
                 images: self.images.clone(),
                 clipboard_writes: self.clipboard_writes.clone(),
                 clipboard_write_busy: self.clipboard_write_busy.clone(),
@@ -996,9 +973,6 @@ impl RemoteTerminal {
         let zmodem = crate::terminal::zmodem::ZmodemPipe::new();
         let history_probe = crate::terminal::history_probe::HistoryProbePipe::new();
         let git_probe = crate::terminal::git_probe::GitProbePipe::new();
-        let auth_prompts: Arc<Mutex<VecDeque<(u64, AuthPromptKind)>>> =
-            Arc::new(Mutex::new(VecDeque::new()));
-        let ssh_phase: Arc<Mutex<Option<SshPhase>>> = Arc::new(Mutex::new(None));
         let images = crate::terminal::images::ImageStore::new();
         let clipboard_writes = Arc::new(Mutex::new(VecDeque::new()));
         let clipboard_write_busy = Arc::new(AtomicBool::new(false));
@@ -1026,8 +1000,6 @@ impl RemoteTerminal {
                 zmodem: zmodem.clone(),
                 history_probe: history_probe.clone(),
                 git_probe: git_probe.clone(),
-                auth: auth_prompts.clone(),
-                phase: ssh_phase.clone(),
                 images: images.clone(),
                 clipboard_writes: clipboard_writes.clone(),
                 clipboard_write_busy: clipboard_write_busy.clone(),
@@ -1060,8 +1032,6 @@ impl RemoteTerminal {
             zmodem,
             history_probe,
             git_probe,
-            auth_prompts,
-            ssh_phase,
             ssh_endpoint: None,
             ssh_user: None,
             auto_supplied_password: false,
@@ -1143,8 +1113,6 @@ impl RemoteTerminal {
                     zmodem,
                     history_probe,
                     git_probe,
-                    auth,
-                    phase,
                     images,
                     clipboard_writes,
                     clipboard_write_busy,
@@ -1549,20 +1517,6 @@ impl RemoteTerminal {
                                 // the chip on the previous machine after `ssh`/`exit`.
                                 proxy.send_event(AlacEvent::Wakeup);
                             }
-                            DaemonMsg::AuthPrompt { request_id, prompt } => {
-                                flush_batch!();
-                                if let Ok(mut guard) = auth.lock() {
-                                    guard.push_back((request_id, prompt));
-                                }
-                                proxy.send_event(AlacEvent::Wakeup);
-                            }
-                            DaemonMsg::SshStatus { phase: p } => {
-                                flush_batch!();
-                                if let Ok(mut guard) = phase.lock() {
-                                    *guard = Some(p);
-                                }
-                                proxy.send_event(AlacEvent::Wakeup);
-                            }
                             DaemonMsg::Agent(a) => {
                                 flush_batch!();
                                 if let Ok(mut guard) = agent.lock() {
@@ -1880,126 +1834,6 @@ impl RemoteTerminal {
         }
     }
 
-    pub fn ensure_loopback_forward(
-        pane_id: u64,
-        remote_host: &str,
-        remote_port: u16,
-    ) -> anyhow::Result<LoopbackForward> {
-        let mut stream = connect()?;
-        ClientMsg::EnsureLoopbackForward(LoopbackForwardRequest {
-            pane_id,
-            remote_host: remote_host.to_string(),
-            remote_port,
-        })
-        .encode(&mut stream)?;
-        match DaemonMsg::read(&mut stream)? {
-            DaemonMsg::LoopbackForward(forward) => Ok(forward),
-            DaemonMsg::Error(msg) => Err(anyhow::anyhow!(msg)),
-            other => Err(anyhow::anyhow!(
-                "unexpected reply to EnsureLoopbackForward: {other:?}"
-            )),
-        }
-    }
-
-    pub fn spawn_native_ssh(
-        size: TermSize,
-        cell_w: u16,
-        cell_h: u16,
-        cwd: Option<PathBuf>,
-        spec: Box<NativeSshSpec>,
-    ) -> anyhow::Result<(Self, u64)> {
-        match Self::spawn_native_ssh_once(size, cell_w, cell_h, cwd.clone(), spec.clone()) {
-            Err(first_err) if daemon_disconnected_before_spawn_reply(&first_err) => {
-                if let Err(restart_err) = crate::daemon::spawn::restart() {
-                    return Err(anyhow::anyhow!(
-                        "daemon disconnected before SpawnNativeSsh reply ({first_err}); restart failed: {restart_err}"
-                    ));
-                }
-                Self::spawn_native_ssh_once(size, cell_w, cell_h, cwd, spec).map_err(|second_err| {
-                    anyhow::anyhow!(
-                        "daemon disconnected before SpawnNativeSsh reply ({first_err}); restarted daemon but it still failed: {second_err}"
-                    )
-                })
-            }
-            other => other,
-        }
-    }
-
-    fn spawn_native_ssh_once(
-        size: TermSize,
-        cell_w: u16,
-        cell_h: u16,
-        cwd: Option<PathBuf>,
-        spec: Box<NativeSshSpec>,
-    ) -> anyhow::Result<(Self, u64)> {
-        let mut stream = connect()?;
-        let win = win_size(size, cell_w, cell_h);
-        let endpoint = (spec.host.clone(), spec.port);
-        let user = spec.user.clone();
-        let auto_supplied_password = spec.password.is_some();
-
-        ClientMsg::SpawnNativeSsh {
-            cwd,
-            size: win,
-            spec,
-        }
-        .encode(&mut stream)?;
-        // Native SSH is always dialled through the local daemon, whatever the
-        // far end turns out to be, so this waits on the local budget.
-        let pane_id = match spawn_reply(
-            &mut stream,
-            attach_reply_wait(&PaneRoute::Local),
-            "SpawnNativeSsh",
-        )? {
-            DaemonMsg::Spawned { pane_id } => pane_id,
-            DaemonMsg::Error(msg) => {
-                return Err(anyhow::anyhow!("daemon refused SpawnNativeSsh: {msg}"));
-            }
-            other => {
-                return Err(anyhow::anyhow!(
-                    "unexpected daemon reply to SpawnNativeSsh: {other:?}"
-                ));
-            }
-        };
-
-        // The local daemon dialled this one, but it opened no pty for it: the
-        // pane is an ssh channel bridged straight through, so the bytes are the
-        // far host's raw pty and no conhost ever sees them.
-        let mut term = Self::from_stream_with(stream, size, Vec::new())?;
-        term.ssh_endpoint = Some(endpoint);
-        term.ssh_user = Some(user);
-        term.auto_supplied_password = auto_supplied_password;
-        Ok((term, pane_id))
-    }
-
-    pub fn take_auth_prompt(&self) -> Option<(u64, AuthPromptKind)> {
-        self.auth_prompts
-            .lock()
-            .ok()
-            .and_then(|mut q| q.pop_front())
-    }
-
-    pub fn take_auth_banner(&self) -> Option<String> {
-        let mut q = self.auth_prompts.lock().ok()?;
-        if matches!(q.front(), Some((_, AuthPromptKind::Banner { .. }))) {
-            if let Some((_, AuthPromptKind::Banner { text })) = q.pop_front() {
-                return Some(text);
-            }
-        }
-        None
-    }
-
-    pub fn has_pending_auth(&self) -> bool {
-        self.auth_prompts
-            .lock()
-            .map(|q| !q.is_empty())
-            .unwrap_or(false)
-    }
-
-    pub fn ssh_phase(&self) -> Option<SshPhase> {
-        self.ssh_phase.lock().ok().and_then(|g| g.clone())
-    }
-
     pub fn ssh_endpoint(&self) -> Option<(String, u16)> {
         self.ssh_endpoint.clone()
     }
@@ -2012,245 +1846,12 @@ impl RemoteTerminal {
         self.auto_supplied_password
     }
 
-    pub fn respond_auth(&self, request_id: u64, response: AuthResponse) {
-        self.link.send(ClientMsg::AuthResponse {
-            request_id,
-            response,
-        });
-    }
-
-    /// The client half of known-hosts management.
-    ///
-    /// Nothing calls this yet: there is no known-hosts surface in the window or
-    /// the CLI. What sits behind it is not a stub, though — `ssh::known_hosts`
-    /// parses the real file, fingerprints each key, and rewrites through a
-    /// 0600 temp file — so this is an interface waiting for a screen, not
-    /// scaffolding around nothing. Deleting it would throw away the finished
-    /// half of the feature.
-    pub fn list_known_hosts() -> Vec<KnownHostEntry> {
-        fn query() -> anyhow::Result<Vec<KnownHostEntry>> {
-            let mut stream = connect()?;
-            ClientMsg::ListKnownHosts.encode(&mut stream)?;
-            match DaemonMsg::read(&mut stream)? {
-                DaemonMsg::KnownHostsList(list) => Ok(list),
-                other => Err(anyhow::anyhow!(
-                    "unexpected reply to ListKnownHosts: {other:?}"
-                )),
-            }
-        }
-        query().unwrap_or_default()
-    }
-
-    /// Ask the daemon to dial this spec and say what happened. Blocking, and
-    /// bounded by the spec's own connect timeout on the far side — call it off
-    /// the UI thread.
-    pub fn test_ssh(spec: Box<NativeSshSpec>) -> SshTestReport {
-        fn query(spec: Box<NativeSshSpec>) -> anyhow::Result<SshTestReport> {
-            let mut stream = connect()?;
-            ClientMsg::TestSsh { spec }.encode(&mut stream)?;
-            match DaemonMsg::read(&mut stream)? {
-                DaemonMsg::SshTestResult(report) => Ok(report),
-                other => Err(anyhow::anyhow!("unexpected reply to TestSsh: {other:?}")),
-            }
-        }
-        query(spec).unwrap_or_else(|e| SshTestReport::Failed {
-            reason: e.to_string(),
-        })
-    }
-
-    /// See [`Self::list_known_hosts`] — same story, and it returns the list
-    /// after the removal so a caller can redraw from one round trip.
-    pub fn delete_known_host(id: KnownHostId) -> Vec<KnownHostEntry> {
-        fn query(id: KnownHostId) -> anyhow::Result<Vec<KnownHostEntry>> {
-            let mut stream = connect()?;
-            ClientMsg::DeleteKnownHost(id).encode(&mut stream)?;
-            match DaemonMsg::read(&mut stream)? {
-                DaemonMsg::KnownHostsList(list) => Ok(list),
-                other => Err(anyhow::anyhow!(
-                    "unexpected reply to DeleteKnownHost: {other:?}"
-                )),
-            }
-        }
-        query(id).unwrap_or_default()
-    }
-
-    pub fn sftp_list(pane_id: u64, path: &str) -> Result<Vec<SftpEntry>, String> {
-        fn query(pane_id: u64, path: String) -> anyhow::Result<Result<Vec<SftpEntry>, String>> {
-            let mut stream = connect()?;
-            ClientMsg::SftpList { pane_id, path }.encode(&mut stream)?;
-            Ok(match DaemonMsg::read(&mut stream)? {
-                DaemonMsg::SftpEntries(entries) => Ok(entries),
-                DaemonMsg::Error(msg) => Err(msg),
-                other => Err(format!("unexpected reply to SftpList: {other:?}")),
-            })
-        }
-        query(pane_id, path.to_string()).unwrap_or_else(|e| Err(e.to_string()))
-    }
-
-    pub fn sftp_op(pane_id: u64, op: SftpOp) -> SftpOpResult {
-        fn query(pane_id: u64, op: SftpOp) -> anyhow::Result<SftpOpResult> {
-            let mut stream = connect()?;
-            ClientMsg::SftpOp { pane_id, op }.encode(&mut stream)?;
-            Ok(match DaemonMsg::read(&mut stream)? {
-                DaemonMsg::SftpOpResult(result) => result,
-                DaemonMsg::Error(msg) => SftpOpResult::Error(msg),
-                other => SftpOpResult::Error(format!("unexpected reply to SftpOp: {other:?}")),
-            })
-        }
-        query(pane_id, op).unwrap_or_else(|e| SftpOpResult::Error(e.to_string()))
-    }
-
-    pub fn sftp_transfer_start(spec: SftpTransferSpec) -> Result<u64, String> {
-        fn query(spec: SftpTransferSpec) -> anyhow::Result<Result<u64, String>> {
-            let mut stream = connect()?;
-            ClientMsg::SftpTransferStart(spec).encode(&mut stream)?;
-            Ok(match DaemonMsg::read(&mut stream)? {
-                DaemonMsg::SftpTransferStarted { job_id } => Ok(job_id),
-                DaemonMsg::Error(msg) => Err(msg),
-                other => Err(format!("unexpected reply to SftpTransferStart: {other:?}")),
-            })
-        }
-        query(spec).unwrap_or_else(|e| Err(e.to_string()))
-    }
-
-    pub fn sftp_transfer_cancel(job_id: u64) -> Vec<SftpJobProgress> {
-        fn query(job_id: u64) -> anyhow::Result<Vec<SftpJobProgress>> {
-            let mut stream = connect()?;
-            ClientMsg::SftpTransferCancel { job_id }.encode(&mut stream)?;
-            match DaemonMsg::read(&mut stream)? {
-                DaemonMsg::SftpTransferProgress(jobs) => Ok(jobs),
-                other => Err(anyhow::anyhow!(
-                    "unexpected reply to SftpTransferCancel: {other:?}"
-                )),
-            }
-        }
-        query(job_id).unwrap_or_default()
-    }
-
-    /// A failed poll is not an empty transfer list: the caller has to be able
-    /// to keep the jobs it already knows about, so this reports the failure
-    /// the way `sftp_list` does rather than answering with an empty `Vec`.
-    pub fn sftp_transfer_list(pane_id: u64) -> Result<Vec<SftpJobProgress>, String> {
-        fn query(pane_id: u64) -> anyhow::Result<Result<Vec<SftpJobProgress>, String>> {
-            let mut stream = connect()?;
-            ClientMsg::SftpTransferList { pane_id }.encode(&mut stream)?;
-            Ok(match DaemonMsg::read(&mut stream)? {
-                DaemonMsg::SftpTransferProgress(jobs) => Ok(jobs),
-                DaemonMsg::Error(msg) => Err(msg),
-                other => Err(format!("unexpected reply to SftpTransferList: {other:?}")),
-            })
-        }
-        query(pane_id).unwrap_or_else(|e| Err(e.to_string()))
-    }
-
     /// Run a command on the far side of a native-SSH pane (extra session channel).
-    pub fn ssh_exec(pane_id: u64, command: &str) -> Result<tty7_core::host::Output, String> {
-        fn query(
-            pane_id: u64,
-            command: String,
-        ) -> anyhow::Result<Result<tty7_core::host::Output, String>> {
-            let mut stream = connect()?;
-            ClientMsg::SshExec { pane_id, command }.encode(&mut stream)?;
-            Ok(match DaemonMsg::read(&mut stream)? {
-                DaemonMsg::SshExecResult(out) => Ok(out),
-                DaemonMsg::Error(msg) => Err(msg),
-                other => Err(format!("unexpected reply to SshExec: {other:?}")),
-            })
-        }
-        query(pane_id, command.to_string()).unwrap_or_else(|e| Err(e.to_string()))
-    }
-
-    /// `None` when the request never got a list back — which is not the same
-    /// as getting an empty one, because only the caller of a *failed* request
-    /// still has to keep showing what it had.
-    pub fn add_forward(pane_id: u64, rule: SshForwardRule) -> Option<Vec<ManagedForward>> {
-        fn query(pane_id: u64, rule: SshForwardRule) -> anyhow::Result<Vec<ManagedForward>> {
-            let mut stream = connect()?;
-            ClientMsg::AddForward { pane_id, rule }.encode(&mut stream)?;
-            match DaemonMsg::read(&mut stream)? {
-                DaemonMsg::ForwardList(list) => Ok(list),
-                DaemonMsg::Error(msg) => Err(anyhow::anyhow!(msg)),
-                other => Err(anyhow::anyhow!("unexpected reply to AddForward: {other:?}")),
-            }
-        }
-        query(pane_id, rule)
-            .inspect_err(|e| log::warn!("AddForward failed: {e}"))
-            .ok()
-    }
-
-    /// `None` when the request never got a list back — see `add_forward`.
-    pub fn remove_forward(pane_id: u64, forward_id: u64) -> Option<Vec<ManagedForward>> {
-        fn query(pane_id: u64, forward_id: u64) -> anyhow::Result<Vec<ManagedForward>> {
-            let mut stream = connect()?;
-            ClientMsg::RemoveForward {
-                pane_id,
-                forward_id,
-            }
-            .encode(&mut stream)?;
-            match DaemonMsg::read(&mut stream)? {
-                DaemonMsg::ForwardList(list) => Ok(list),
-                other => Err(anyhow::anyhow!(
-                    "unexpected reply to RemoveForward: {other:?}"
-                )),
-            }
-        }
-        query(pane_id, forward_id)
-            .inspect_err(|e| log::warn!("RemoveForward failed: {e}"))
-            .ok()
-    }
-
-    pub fn list_forwards(pane_id: u64) -> Vec<ManagedForward> {
-        fn query(pane_id: u64) -> anyhow::Result<Vec<ManagedForward>> {
-            let mut stream = connect()?;
-            ClientMsg::ListForwards { pane_id }.encode(&mut stream)?;
-            match DaemonMsg::read(&mut stream)? {
-                DaemonMsg::ForwardList(list) => Ok(list),
-                other => Err(anyhow::anyhow!(
-                    "unexpected reply to ListForwards: {other:?}"
-                )),
-            }
-        }
-        query(pane_id).unwrap_or_default()
+    pub fn ssh_exec(_pane_id: u64, _command: &str) -> Result<tty7_core::host::Output, String> {
+        Err("Native SSH exec abolished".into())
     }
 
     const WORKSPACE_OP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
-
-    pub fn on_workspace(req: WorkspaceRequest) -> anyhow::Result<DaemonMsg> {
-        let mut stream = connect()?;
-        let _ = stream.set_read_timeout(Some(Self::WORKSPACE_OP_TIMEOUT));
-        ClientMsg::OnWorkspace(Box::new(req)).encode(&mut stream)?;
-        match DaemonMsg::read(&mut stream)? {
-            DaemonMsg::Error(msg) => Err(anyhow::anyhow!(msg)),
-            reply => Ok(reply),
-        }
-    }
-
-    pub fn on_workspace_forwards(req: WorkspaceRequest) -> Vec<ManagedForward> {
-        match Self::on_workspace(req) {
-            Ok(DaemonMsg::ForwardList(list)) => list,
-            Ok(other) => {
-                log::warn!("unexpected reply to a workspace forward request: {other:?}");
-                Vec::new()
-            }
-            Err(e) => {
-                log::warn!("workspace forward request failed: {e}");
-                Vec::new()
-            }
-        }
-    }
-
-    pub fn workspace_request(
-        ws: &PaneWorkspace,
-        view_pane: u64,
-        op: WorkspaceOp,
-    ) -> Option<WorkspaceRequest> {
-        Some(WorkspaceRequest {
-            workspace: ws.workspace,
-            spec: ws.spec.clone()?,
-            view_pane,
-            op,
-        })
-    }
 
     pub fn query_procs(pane_id: u64) -> PaneProcs {
         fn query(pane_id: u64) -> anyhow::Result<PaneProcs> {
@@ -2728,7 +2329,6 @@ mod route_header_tests {
         PaneWorkspace {
             workspace: WorkspaceId::new(),
             target,
-            spec: None,
             label: label.map(str::to_string),
             resize_echo: false,
         }
@@ -2842,25 +2442,6 @@ mod tests {
     use std::io::Write;
     use std::os::unix::net::UnixStream;
 
-    fn ssh_workspace() -> PaneWorkspace {
-        PaneWorkspace {
-            workspace: crate::core::session::WorkspaceId::new(),
-            target: crate::core::session::RemoteTarget::Direct {
-                user: "me".into(),
-                host: "build-box".into(),
-                port: 22,
-            },
-            spec: Some(Box::new(
-                serde_json::from_str(
-                    r#"{"host":"build-box","port":22,"user":"me","auth_mode":"auto"}"#,
-                )
-                .unwrap(),
-            )),
-            label: None,
-            resize_echo: false,
-        }
-    }
-
     #[test]
     fn a_local_pane_prefixes_nothing() {
         assert!(PaneRoute::Local.header().is_none());
@@ -2902,7 +2483,6 @@ mod tests {
                 program: "/tmp/tty7-server".into(),
                 args: vec!["--stdio".into()],
             },
-            spec: None,
             label: None,
             resize_echo: false,
         };
@@ -2925,7 +2505,6 @@ mod tests {
             target: crate::core::session::RemoteTarget::Alias {
                 alias: "build-box".into(),
             },
-            spec: None,
             label: None,
             resize_echo: false,
         };
@@ -3368,42 +2947,6 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         assert_eq!(shape, CursorShape::Underline);
-    }
-
-    #[test]
-    fn reader_surfaces_auth_prompt_and_status() {
-        let (client_side, mut daemon_side) = UnixStream::pair().unwrap();
-        let term = RemoteTerminal::from_stream(client_side, TermSize::new(80, 24)).unwrap();
-
-        DaemonMsg::SshStatus {
-            phase: SshPhase::Authenticating,
-        }
-        .encode(&mut daemon_side)
-        .unwrap();
-        DaemonMsg::AuthPrompt {
-            request_id: 7,
-            prompt: AuthPromptKind::Password {
-                user: "deploy".into(),
-                host: "10.0.0.5".into(),
-            },
-        }
-        .encode(&mut daemon_side)
-        .unwrap();
-        daemon_side.flush().unwrap();
-
-        let mut prompt = None;
-        for _ in 0..200 {
-            if let Some(p) = term.take_auth_prompt() {
-                prompt = Some(p);
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-        let (id, kind) = prompt.expect("auth prompt should have surfaced");
-        assert_eq!(id, 7);
-        assert!(matches!(kind, AuthPromptKind::Password { .. }));
-        assert_eq!(term.ssh_phase(), Some(SshPhase::Authenticating));
-        assert!(!term.has_pending_auth());
     }
 
     #[test]

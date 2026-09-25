@@ -2388,7 +2388,7 @@ mod ssh_host_row_tests {
     use crate::core::config::Config;
     use crate::core::session::RemoteTarget;
     use crate::core::ssh_profile::SshProfile;
-    use crate::daemon::protocol::SshProxy;
+    use crate::ui::native_gone::SshProxy;
     use crate::terminal::view::{
         quiet_test_pane, quiet_test_ssh_pane, quiet_test_ssh_pane_of, quiet_test_ssh_pane_with,
     };
@@ -2504,7 +2504,7 @@ mod ssh_host_row_tests {
         set_locale("en");
         let (app, mut vcx) = harness(cx);
         let _end = app.update_in(&mut vcx, |app, window, cx| {
-            let mut spec: crate::daemon::protocol::NativeSshSpec = serde_json::from_str(
+            let mut spec: crate::ui::native_gone::NativeSshSpec = serde_json::from_str(
                 r#"{"host":"build-box","port":2222,"user":"me","auth_mode":"auto"}"#,
             )
             .expect("a minimal NativeSshSpec decodes");

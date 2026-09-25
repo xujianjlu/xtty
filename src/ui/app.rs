@@ -26,6 +26,7 @@ use crate::core::shells::ShellInventory;
 use crate::core::ssh_config;
 use crate::core::window_state::{WindowGeometry as _, WindowState};
 use crate::daemon::protocol::{RemoteContext, ShellSpec, ssh_option_takes_value};
+
 use crate::daemon::spawn::DaemonMismatch;
 use crate::terminal::view::{ChildExited, TerminalView};
 use crate::ui::host_registry::HostId;
@@ -808,8 +809,8 @@ pub(crate) struct GroupRename {
 
 pub(crate) struct LoopbackForwardPanelState {
     pub(crate) form_pane_id: Option<u64>,
-    pub(crate) managed: Vec<crate::daemon::protocol::ManagedForward>,
-    pub(crate) mf_kind: crate::daemon::protocol::SshForwardKind,
+    pub(crate) managed: Vec<crate::ui::native_gone::ManagedForward>,
+    pub(crate) mf_kind: crate::ui::native_gone::SshForwardKind,
     pub(crate) mf_bind_host: Entity<InputState>,
     pub(crate) mf_bind_port: Entity<InputState>,
     pub(crate) mf_target_host: Entity<InputState>,
@@ -818,7 +819,7 @@ pub(crate) struct LoopbackForwardPanelState {
     /// The rule the form is editing, whole rather than by id: an edit that
     /// fails has to be able to put back what it took out, and the id alone
     /// cannot describe the rule it named.
-    pub(crate) mf_editing: Option<crate::daemon::protocol::ManagedForward>,
+    pub(crate) mf_editing: Option<crate::ui::native_gone::ManagedForward>,
     /// Why the last Add or Save did not take, in the far side's own words.
     /// Cleared the moment the form is closed or the edit is abandoned.
     pub(crate) mf_error: Option<String>,
@@ -1323,7 +1324,7 @@ impl Tty7App {
                 cfg.scrollback_limit,
             )
         };
-        let sftp_panel = crate::ui::sftp::SftpPanelState::new(window, cx);
+        let sftp_panel = (); // Native SFTP UI abolished
         let file_tree = crate::ui::file_tree::FileTreeState::new(window, cx);
         let editor = crate::ui::code_editor::EditorPanelState::new(window, cx);
         let mf_bind_host = cx.new(|cx| InputState::new(window, cx).default_value("127.0.0.1"));
@@ -1478,7 +1479,7 @@ impl Tty7App {
             loopback_panel: LoopbackForwardPanelState {
                 form_pane_id: None,
                 managed: Vec::new(),
-                mf_kind: crate::daemon::protocol::SshForwardKind::Local,
+                mf_kind: crate::ui::native_gone::SshForwardKind::Local,
                 mf_bind_host,
                 mf_bind_port,
                 mf_target_host,
@@ -2807,7 +2808,7 @@ impl Tty7App {
 
     pub(crate) fn set_managed_forward_kind(
         &mut self,
-        kind: crate::daemon::protocol::SshForwardKind,
+        kind: crate::ui::native_gone::SshForwardKind,
         cx: &mut Context<Self>,
     ) {
         self.loopback_panel.mf_kind = kind;
@@ -2816,9 +2817,9 @@ impl Tty7App {
 
     /// The managed-forward form's fields as plain text, for the two callers
     /// that have to agree on what they add up to.
-    pub(crate) fn managed_forward_fields(&self, cx: &gpui::App) -> ForwardFields {
+    pub(crate) fn managed_forward_fields(&self, cx: &gpui::App) -> crate::ui::native_gone::ForwardFields {
         let val = |input: &Entity<InputState>| input.read(cx).value().to_string();
-        ForwardFields {
+        crate::ui::native_gone::ForwardFields {
             advanced: self.loopback_panel.mf_advanced,
             kind: self.loopback_panel.mf_kind,
             bind_host: val(&self.loopback_panel.mf_bind_host),
@@ -2879,7 +2880,7 @@ impl Tty7App {
             PlaceOutcome::Rejected(_) => {
                 match self.place_forward(
                     &route,
-                    crate::daemon::protocol::SshForwardRule {
+                    crate::ui::native_gone::SshForwardRule {
                         bind_port: 0,
                         ..rule.clone()
                     },
@@ -2896,12 +2897,12 @@ impl Tty7App {
             // open on the rule and the reason underneath it.
             if let Some(old) = &previous {
                 let before: Vec<u64> = self.loopback_panel.managed.iter().map(|m| m.id).collect();
-                if let Some(list) = route.add(rule_of(old)) {
+                if let Some(list) = route.add(crate::ui::native_gone::rule_of(old)) {
                     // The rule comes back under a new id and the form is still
                     // editing it, so the form has to be pointed at the entry
                     // that now exists — otherwise the next Save would remove
                     // an id nobody has and add a second copy of the rule.
-                    if let Some(restored) = added_forward(&before, &list) {
+                    if let Some(restored) = crate::ui::native_gone::added_forward(&before, &list) {
                         self.loopback_panel.mf_editing = Some(restored.clone());
                     }
                     self.loopback_panel.managed = list;
@@ -2936,9 +2937,9 @@ impl Tty7App {
     fn place_forward(
         &mut self,
         route: &ForwardRoute,
-        rule: crate::daemon::protocol::SshForwardRule,
+        rule: crate::ui::native_gone::SshForwardRule,
     ) -> PlaceOutcome {
-        use crate::daemon::protocol::ForwardStatus;
+        use crate::ui::native_gone::ForwardStatus;
 
         let before: Vec<u64> = self.loopback_panel.managed.iter().map(|m| m.id).collect();
         // The request never got an answer. An empty list here is not "this
@@ -2947,7 +2948,7 @@ impl Tty7App {
         let Some(list) = route.add(rule) else {
             return PlaceOutcome::Unreachable(t(L10nKey::ForwardRequestFailed).to_string());
         };
-        let broken = added_forward(&before, &list).and_then(|added| match &added.status {
+        let broken = crate::ui::native_gone::added_forward(&before, &list).and_then(|added| match &added.status {
             ForwardStatus::Error(msg) => Some((added.id, msg.clone())),
             ForwardStatus::Listening => None,
         });
@@ -2963,7 +2964,7 @@ impl Tty7App {
 
     pub(crate) fn edit_managed_forward(
         &mut self,
-        forward: crate::daemon::protocol::ManagedForward,
+        forward: crate::ui::native_gone::ManagedForward,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -3067,7 +3068,7 @@ impl Tty7App {
         }
         self.loopback_panel.form_pane_id = Some(pane_id);
         self.loopback_panel.mf_advanced = false;
-        self.loopback_panel.mf_kind = crate::daemon::protocol::SshForwardKind::Local;
+        self.loopback_panel.mf_kind = crate::ui::native_gone::SshForwardKind::Local;
         self.cancel_managed_forward_edit(window, cx);
         self.refresh_managed_forwards(pane_id, cx);
         self.arm_managed_forward_form(pane_id, window, cx);
@@ -3857,7 +3858,7 @@ impl Tty7App {
 
     pub(crate) fn open_native_ssh_tab(
         &mut self,
-        spec: Box<crate::daemon::protocol::NativeSshSpec>,
+        spec: Box<crate::ui::native_gone::NativeSshSpec>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -3894,7 +3895,7 @@ impl Tty7App {
     pub(crate) fn respawn_native_ssh_in_place(
         &mut self,
         dead: &Entity<TerminalView>,
-        spec: Box<crate::daemon::protocol::NativeSshSpec>,
+        spec: Box<crate::ui::native_gone::NativeSshSpec>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -6085,9 +6086,7 @@ impl Tty7App {
         });
         // The remote Files panel is built once with the app, so its placeholder
         // is the one input that would otherwise keep the old language.
-        self.sftp_panel.filter_input.update(cx, |state, cx| {
-            state.set_placeholder(t(L10nKey::SearchFiles), window, cx)
-        });
+        /* sftp filter abolished */
         if let Some(s) = self.active_settings() {
             let rows = crate::ui::i18n::SUPPORTED_LANGUAGES
                 .iter()
@@ -6689,7 +6688,7 @@ impl Tty7App {
     }
 
     pub(crate) fn tab_ssh_dot(&self, tab: &Tab, cx: &App) -> Option<u32> {
-        use crate::daemon::protocol::SshPhase;
+        use crate::ui::native_gone::SshPhase;
         let leaf = tab.pane.first_leaf()?;
         let v = leaf.terminal()?.read(cx);
         if let Some(phase) = v.ssh_phase() {
@@ -6711,7 +6710,7 @@ impl Tty7App {
     }
 
     fn leaf_is_warn_ssh(&self, leaf: &Entity<TerminalView>, cx: &App) -> bool {
-        use crate::daemon::protocol::SshPhase;
+        use crate::ui::native_gone::SshPhase;
         let v = leaf.read(cx);
         let connected = matches!(v.ssh_phase(), Some(SshPhase::Connected)) && !v.terminal.exited;
         if !connected {
@@ -6842,17 +6841,8 @@ impl Tty7App {
         window: &Window,
         cx: &App,
     ) -> Option<(u64, RemoteContext)> {
-        use crate::daemon::protocol::{RemoteKind, SshPhase};
-        let (pane_id, remote) = self.active_ssh_pane(window, cx)?;
-        if remote.kind != RemoteKind::NativeSsh {
-            return None;
-        }
-        let leaf = self
-            .tabs
-            .get(self.active)?
-            .pane
-            .focused_or_first(window, cx)?;
-        matches!(leaf.read(cx).ssh_phase(), Some(SshPhase::Connected)).then_some((pane_id, remote))
+        let _ = (window, cx);
+        None
     }
 
     pub(crate) fn select_settings_section(
@@ -7542,8 +7532,6 @@ impl ForwardRoute {
         Self { pane_id, workspace }
     }
 
-    /// Which side of the daemon's own forward registry this route addresses —
-    /// the same split `ForwardOwner` makes there.
     pub(crate) fn owner_key(&self) -> ForwardOwnerKey {
         match &self.workspace {
             Some(ws) => ForwardOwnerKey::Workspace(ws.workspace),
@@ -7551,110 +7539,34 @@ impl ForwardRoute {
         }
     }
 
-    fn workspace_op(
-        &self,
-        op: crate::daemon::protocol::WorkspaceOp,
-    ) -> Option<crate::daemon::protocol::WorkspaceRequest> {
-        crate::terminal::RemoteTerminal::workspace_request(
-            self.workspace.as_ref()?,
-            self.pane_id,
-            op,
-        )
-    }
-
-    /// The list a forward request answered with, or `None` when it did not
-    /// answer at all.
-    ///
-    /// The two are not the same and the panel has to be able to tell them
-    /// apart: an empty list is a pane with no forwards left, while a request
-    /// that failed says nothing about what the far side still has. Reporting
-    /// the second as the first is what blanked the panel whenever the daemon
-    /// was briefly unreachable.
-    fn forwards(
-        reply: anyhow::Result<crate::daemon::protocol::DaemonMsg>,
-    ) -> Option<Vec<crate::daemon::protocol::ManagedForward>> {
-        match reply {
-            Ok(crate::daemon::protocol::DaemonMsg::ForwardList(list)) => Some(list),
-            Ok(other) => {
-                log::warn!("unexpected reply to a workspace forward request: {other:?}");
-                None
-            }
-            Err(e) => {
-                log::warn!("a workspace forward request failed: {e}");
-                None
-            }
-        }
-    }
-
-    pub(crate) fn list(&self) -> Vec<crate::daemon::protocol::ManagedForward> {
-        let Some(req) = self.workspace_op(crate::daemon::protocol::WorkspaceOp::ListForwards)
-        else {
-            return crate::terminal::RemoteTerminal::list_forwards(self.pane_id);
-        };
-        Self::forwards(crate::terminal::RemoteTerminal::on_workspace(req)).unwrap_or_default()
+    pub(crate) fn list(&self) -> Vec<crate::ui::native_gone::ManagedForward> {
+        Vec::new()
     }
 
     pub(crate) fn add(
         &self,
-        rule: crate::daemon::protocol::SshForwardRule,
-    ) -> Option<Vec<crate::daemon::protocol::ManagedForward>> {
-        let Some(req) = self
-            .workspace_op(crate::daemon::protocol::WorkspaceOp::AddForward { rule: rule.clone() })
-        else {
-            return crate::terminal::RemoteTerminal::add_forward(self.pane_id, rule);
-        };
-        Self::forwards(crate::terminal::RemoteTerminal::on_workspace(req))
+        _rule: crate::ui::native_gone::SshForwardRule,
+    ) -> Option<Vec<crate::ui::native_gone::ManagedForward>> {
+        None
     }
 
-    pub(crate) fn teardown(&self) -> Vec<crate::daemon::protocol::ManagedForward> {
-        let Some(req) = self.workspace_op(crate::daemon::protocol::WorkspaceOp::TeardownForwards)
-        else {
-            return Vec::new();
-        };
-        Self::forwards(crate::terminal::RemoteTerminal::on_workspace(req)).unwrap_or_default()
+    pub(crate) fn teardown(&self) -> Vec<crate::ui::native_gone::ManagedForward> {
+        Vec::new()
     }
 
-    /// The local port that reaches `remote_host:remote_port` over this route,
-    /// building the forward if there is not one yet.
-    ///
-    /// The far side keeps one automatic forward per endpoint and hands the
-    /// same port back on the next ask, so callers may treat this as "what is
-    /// the address here" rather than as an action with a cost — which is what
-    /// lets the Ports list call it on a click and the watcher call it on a
-    /// port it has only just noticed.
     pub(crate) fn ensure_loopback(
         &self,
-        remote_host: &str,
-        remote_port: u16,
+        _remote_host: &str,
+        _remote_port: u16,
     ) -> anyhow::Result<crate::daemon::protocol::LoopbackForward> {
-        let Some(req) = self.workspace_op(crate::daemon::protocol::WorkspaceOp::EnsureLoopback {
-            remote_host: remote_host.to_string(),
-            remote_port,
-        }) else {
-            return crate::terminal::RemoteTerminal::ensure_loopback_forward(
-                self.pane_id,
-                remote_host,
-                remote_port,
-            );
-        };
-        match crate::terminal::RemoteTerminal::on_workspace(req)? {
-            crate::daemon::protocol::DaemonMsg::LoopbackForward(f) => Ok(f),
-            other => Err(anyhow::anyhow!(
-                "unexpected reply to EnsureLoopback: {other:?}"
-            )),
-        }
+        Err(anyhow::anyhow!("Native SSH port forwarding has been removed"))
     }
 
     pub(crate) fn remove(
         &self,
-        forward_id: u64,
-    ) -> Option<Vec<crate::daemon::protocol::ManagedForward>> {
-        let Some(req) =
-            self.workspace_op(crate::daemon::protocol::WorkspaceOp::RemoveForward { forward_id })
-        else {
-            return crate::terminal::RemoteTerminal::remove_forward(self.pane_id, forward_id);
-        };
-        Self::forwards(crate::terminal::RemoteTerminal::on_workspace(req))
+        _forward_id: u64,
+    ) -> Option<Vec<crate::ui::native_gone::ManagedForward>> {
+        None
     }
 }
 
@@ -8460,7 +8372,6 @@ fn pane_to_session(pane: &Pane, cx: &App) -> SessionPane {
                 cwd: spawn.working_directory.clone(),
                 pane_id: spawn.restore_pane,
                 shell: spawn.shell.clone(),
-                ssh_spec: None,
                 agent: spawn.agent,
                 agent_session_id: spawn.agent_session_id.clone(),
                 agent_launch_argv: spawn.agent_launch_argv.clone(),
@@ -8476,7 +8387,6 @@ fn pane_to_session(pane: &Pane, cx: &App) -> SessionPane {
                 // does — the daemon records it — and that is what a restore
                 // reads, so the gap here costs nothing it can see.
                 shell: view.shell_spec(),
-                ssh_spec: view.ssh_spec(),
                 agent: view.agent(),
                 agent_session_id: view.agent_session().and_then(|s| s.session_id),
                 agent_launch_argv: view.agent_session().and_then(|s| s.launch_argv),
@@ -8497,7 +8407,6 @@ fn pane_to_session(pane: &Pane, cx: &App) -> SessionPane {
             cwd: None,
             pane_id: None,
             shell: None,
-            ssh_spec: None,
             agent: None,
             agent_session_id: None,
             agent_launch_argv: None,
@@ -8660,13 +8569,12 @@ fn session_to_pane(
             cwd,
             pane_id,
             shell,
-            ssh_spec,
             agent,
             agent_session_id,
             agent_launch_argv,
         } => {
             let same_daemon =
-                leaf_shares_the_window_daemon(workspace.is_some(), ssh_spec.is_some());
+                leaf_shares_the_window_daemon(workspace.is_some(), false /* Native SSH abolished */);
             let restore = match workspace.is_some() {
                 true => (*pane_id).filter(|_| same_daemon),
                 // Not `pane_attachable`: a dead pane's id is what the restore
@@ -8674,15 +8582,7 @@ fn session_to_pane(
                 // still attempted first and still gives way to a fresh spawn.
                 false => (*pane_id).filter(|id| same_daemon && pane_free_for(alive, *id, owner)),
             };
-            if restore.is_none() {
-                if let Some(spec) = ssh_spec.clone() {
-                    let resolved = crate::ui::ssh_connect::resolve_persisted_ssh_spec(spec, cx);
-                    match new_terminal_native(font_size, cwd.clone(), resolved, window, cx) {
-                        Ok(view) => return Some(Pane::leaf(PaneSlot::Ready(view))),
-                        Err(e) => log::error!("restoring native SSH pane failed: {e}"),
-                    }
-                }
-            }
+            // Native SSH session restore abolished.
             let view = match new_terminal(
                 workspace.cloned(),
                 Some(owner),
@@ -8963,42 +8863,13 @@ fn watch_pane_focus(
 }
 
 pub(crate) fn new_terminal_native(
-    font_size: f32,
-    working_directory: Option<std::path::PathBuf>,
-    spec: Box<crate::daemon::protocol::NativeSshSpec>,
-    window: &mut Window,
-    cx: &mut Context<Tty7App>,
+    _font_size: f32,
+    _cwd: Option<std::path::PathBuf>,
+    _spec: Box<crate::ui::native_gone::NativeSshSpec>,
+    _window: &mut Window,
+    _cx: &mut Context<Tty7App>,
 ) -> anyhow::Result<Entity<TerminalView>> {
-    let parts = TerminalView::spawn_native_ssh_terminal(spec, working_directory)?;
-    let view = cx.new(|cx| {
-        let mut view = TerminalView::from_native_ssh_parts(parts, window, cx);
-        view.font_size = px(font_size);
-        view
-    });
-    cx.subscribe_in(&view, window, |app, view, _: &ChildExited, window, cx| {
-        app.on_child_exited(view.clone(), window, cx);
-    })
-    .detach();
-    cx.subscribe_in(
-        &view,
-        window,
-        |app, view, ev: &crate::terminal::broadcast::BroadcastInput, window, cx| {
-            app.on_broadcast_input(view.clone(), &ev.bytes, window, cx);
-        },
-    )
-    .detach();
-    cx.subscribe_in(
-        &view,
-        window,
-        |app, view, _: &crate::terminal::view::AuthPromptReady, window, cx| {
-            app.on_auth_prompt_ready(view.clone(), window, cx);
-        },
-    )
-    .detach();
-    watch_open_file_requests(&view, window, cx);
-    let handle = view.read(cx).focus_handle.clone();
-    watch_pane_focus(&handle, view.entity_id(), window, cx);
-    Ok(view)
+    Err(anyhow::anyhow!("Native SSH has been removed; use OpenSSH host picker"))
 }
 
 /// Reads the Settings "Shell Arguments" field as a command line (#551).
@@ -11122,7 +10993,8 @@ mod managed_forward_gpui_tests {
     use gpui::{Focusable as _, TestAppContext};
     use gpui_component::input::InputState;
 
-    use crate::daemon::protocol::{ForwardStatus, ManagedForward, SshForwardKind};
+    use crate::ui::native_gone::{ForwardStatus, ManagedForward, SshForwardKind};
+
     use crate::ui::app::test_window::harness_with_tabs;
 
     fn listening(id: u64) -> ManagedForward {

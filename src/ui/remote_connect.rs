@@ -13,7 +13,8 @@ use crate::daemon::install::{
     InstallConfirm, InstallDecision, InstallPhase, InstallProgress, InstallRequest,
     MismatchedRemoteDaemon,
 };
-use crate::daemon::protocol::{AuthPromptKind, AuthResponse, NativeSshSpec};
+use crate::ui::native_gone::{AuthPromptKind, AuthResponse, NativeSshSpec};
+
 use crate::daemon::router::RouteHeader;
 use crate::ui::i18n::{L10nKey, t, t_fmt};
 use tty7_core::host::remote::RemoteHost;
@@ -189,55 +190,22 @@ fn endpoint_label(user: &str, host: &str, port: u16) -> String {
 }
 
 pub fn spec_for(target: &RemoteTarget, cx: &App) -> Result<NativeSshSpec, String> {
-    let cfg = cx.global::<Config>();
-    match target {
-        RemoteTarget::Profile { id } => {
-            let profile = cfg
-                .ssh_profiles
-                .iter()
-                .find(|p| p.id == *id)
-                .ok_or_else(|| t(L10nKey::RemoteProfileMissing).to_string())?;
-            Ok(crate::ui::ssh_connect::build_native_ssh_spec(
-                profile,
-                &cfg.ssh_profiles,
-                &crate::core::keychain::OsCredentialStore,
-                cfg.verify_host_keys,
-            ))
-        }
-        RemoteTarget::Alias { alias } => {
-            let resolved = crate::core::ssh_config::resolve_alias_to_profile(alias)
-                .ok_or_else(|| t_fmt(L10nKey::RemoteAliasMissing, &[("alias", alias)]))?;
-            Ok(crate::ui::ssh_connect::native_spec_from_transient_profile(
-                &resolved.profile,
-                resolved.proxy_jump,
-                &crate::core::keychain::OsCredentialStore,
-                cfg.verify_host_keys,
-                &crate::ui::ssh_connect::config_alias_resolver,
-            ))
-        }
-        RemoteTarget::Direct { user, host, port } => {
-            let mut profile = crate::core::ssh_profile::SshProfile::new(host.clone());
-            profile.host = host.clone();
-            profile.user = user.clone();
-            profile.port = *port;
-            Ok(crate::ui::ssh_connect::build_native_ssh_spec(
-                &profile,
-                &cfg.ssh_profiles,
-                &crate::core::keychain::OsCredentialStore,
-                cfg.verify_host_keys,
-            ))
-        }
-        RemoteTarget::LocalStdio { .. } => Err(t(L10nKey::RemoteLocalStdioNoSsh).to_string()),
-    }
+    let _ = (target, cx);
+    Err("remote workspaces require Native SSH which was removed".into())
 }
 
 pub fn control_route(target: &RemoteTarget, cx: &App) -> Result<RouteHeader, String> {
+    let _ = cx;
     let header = match target {
         RemoteTarget::LocalStdio { program, args } => RouteHeader::local_stdio(
             program.clone(),
             &args.iter().map(String::as_str).collect::<Vec<_>>(),
         ),
-        _ => spec_for(target, cx).map(RouteHeader::ssh)?,
+        _ => {
+            return Err(
+                "Native SSH remote workspaces are no longer supported; use OpenSSH hosts".into(),
+            );
+        }
     };
     note_origin(&header.target, target);
     Ok(header)
@@ -254,6 +222,10 @@ pub fn connect_blocking(
     header: RouteHeader,
     label: &str,
 ) -> Result<Connected, String> {
+    if !matches!(target, RemoteTarget::LocalStdio { .. }) {
+        return Err("remote workspaces require Native SSH which was removed".into());
+    }
+
     note_origin(&header.target, target);
     crate::daemon::spawn::ensure_running().map_err(|e| {
         t_fmt(
@@ -546,7 +518,7 @@ pub fn clear_install_progress(host: HostId) {
 pub fn register(cx: &mut App) {
     crate::daemon::install::set_install_confirm(Arc::new(GuiInstallConfirm));
     crate::daemon::install::set_install_progress(Arc::new(GuiInstallProgress));
-    crate::daemon::router::set_route_auth_responder(Arc::new(GuiRouteAuth));
+    /* Native route auth abolished */;
     let _ = HostLinks::len(cx);
 }
 
@@ -565,7 +537,7 @@ pub struct PendingAuth {
     /// auto-supplied", so a routed prompt for a non-22 endpoint wrote its
     /// password under the wrong key and a rejected stored one was never
     /// noticed, let alone cleared.
-    pub endpoint: Option<crate::ui::ssh_prompt::PromptEndpoint>,
+    pub endpoint: Option<crate::ui::native_gone::PromptEndpoint>,
     /// The route already carried a stored password into this attempt, so a
     /// password prompt arriving anyway means the server turned it down.
     pub auto_supplied_password: bool,
@@ -622,42 +594,7 @@ pub fn origin_target(key: &str) -> Option<RemoteTarget> {
 
 pub struct GuiRouteAuth;
 
-impl crate::daemon::router::RouteAuthResponder for GuiRouteAuth {
-    fn respond(
-        &self,
-        machine: &crate::daemon::router::RouteTarget,
-        prompt: &AuthPromptKind,
-    ) -> AuthResponse {
-        let key = machine.origin_key();
-        let host = origin_host(&key).unwrap_or_else(|| HostId::from_connection_key(&key));
-        let (endpoint, auto_supplied_password) = match machine {
-            crate::daemon::router::RouteTarget::Ssh(spec) => (
-                Some(crate::ui::ssh_prompt::PromptEndpoint {
-                    user: spec.user.clone(),
-                    host: spec.host.clone(),
-                    port: spec.port,
-                }),
-                spec.password.is_some(),
-            ),
-            _ => (None, false),
-        };
-        let (tx, rx) = std::sync::mpsc::sync_channel(1);
-        {
-            let Ok(mut mailbox) = AUTH_MAILBOX.lock() else {
-                return AuthResponse::Cancelled;
-            };
-            mailbox.push(PendingAuth {
-                host,
-                prompt: prompt.clone(),
-                endpoint,
-                auto_supplied_password,
-                reply: tx,
-            });
-        }
-        rx.recv_timeout(CONSENT_TIMEOUT)
-            .unwrap_or(AuthResponse::Cancelled)
-    }
-}
+/* RouteAuthResponder abolished with Native SSH */
 
 pub fn take_pending_auth() -> Option<PendingAuth> {
     AUTH_MAILBOX.lock().ok()?.pop()

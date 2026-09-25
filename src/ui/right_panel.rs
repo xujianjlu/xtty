@@ -8,7 +8,9 @@ use gpui_component::{
 use std::path::PathBuf;
 
 use crate::core::config::{Config, RightPanelTab};
-use crate::daemon::protocol::{ManagedForward, PaneProcs, PortProbe};
+use crate::daemon::protocol::{PaneProcs, PortProbe};
+use crate::ui::native_gone::{ManagedForward};
+
 use crate::ui::app::{
     CONTENT_INSET, TILE_GLYPH_SM, TILE_GLYPH_XS, TILE_SIZE_SM, TILE_SIZE_XS, Tty7App,
     tile_trailing_inset, tile_trailing_inset_sm,
@@ -97,7 +99,7 @@ pub(crate) const ROW_INSET: f32 = 4.;
 /// a forward to some third machine happens to carry the same number, and
 /// pairing it with the port row would claim it leads somewhere it does not.
 pub(crate) fn forwards_port(m: &ManagedForward, port: u16) -> bool {
-    m.kind == crate::daemon::protocol::SshForwardKind::Local
+    m.kind == crate::ui::native_gone::SshForwardKind::Local
         && m.target_port == port
         && crate::daemon::protocol::PortEntry::reaches_loopback(&m.target_host)
 }
@@ -431,7 +433,7 @@ impl Tty7App {
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let panel_open = self.right_panel_open(cx);
-        if let Some(open) = self.sftp_panel.open_pane_id
+        if let Some(open) = None::<u64>
             && (!panel_open || self.remote_files_pane(window, cx).map(|(id, _)| id) != Some(open))
         {
             self.sftp_close_browser(cx);
@@ -1501,10 +1503,10 @@ impl Tty7App {
         // a live native-ssh connection, or the workspace's shared one.
         let connected_ssh = view
             .remote_context()
-            .is_some_and(|c| c.kind == crate::daemon::protocol::RemoteKind::NativeSsh)
+            .is_some_and(|c| false /* NativeSsh abolished */)
             && matches!(
                 view.ssh_phase(),
-                Some(crate::daemon::protocol::SshPhase::Connected)
+                Some(crate::ui::native_gone::SshPhase::Connected)
             );
         Some(PaneForwardCtx {
             pane_id: view.pane_id,
@@ -1775,12 +1777,7 @@ impl Tty7App {
     }
 
     fn render_panel_files(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let remote = self.remote_files_pane(window, cx);
-        let host = remote.as_ref().map(|(_, host)| host.clone());
-        if self.sftp_sync_pane(remote.map(|(id, _)| id), window, cx) {
-            return self.render_panel_sftp(host.unwrap_or_default(), window, cx);
-        }
-
+        // SFTP / remote Files abolished; local tree only.
         let title = self.panel_title(t(L10nKey::PanelFilesTitle), None, None, window, cx);
         let search = self.panel_search(&self.file_search.clone(), cx);
         let rows = self.render_file_tree_rows(window, cx);
@@ -1808,16 +1805,8 @@ impl Tty7App {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<(u64, String)> {
-        use crate::daemon::protocol::{RemoteKind, SshPhase};
-        let leaf = self.tabs.get(self.active)?.detail_pane(window, cx)?;
-        let view = leaf.read(cx);
-        let remote = view.remote_context()?;
-        if remote.kind != RemoteKind::NativeSsh
-            || !matches!(view.ssh_phase(), Some(SshPhase::Connected))
-        {
-            return None;
-        }
-        Some((view.pane_id, remote.target))
+        let _ = (window, cx);
+        None
     }
 }
 
@@ -1894,7 +1883,8 @@ fn compact_path(path: &std::path::Path, home: Option<&std::path::Path>) -> Strin
 #[cfg(test)]
 mod tests {
     use super::{InfoRow, InfoValue, format_rtt, forwards_port};
-    use crate::daemon::protocol::{ForwardStatus, ManagedForward, SshForwardKind};
+    use crate::ui::native_gone::{ForwardStatus, ManagedForward, SshForwardKind};
+
 
     fn forward(kind: SshForwardKind, target_host: &str, target_port: u16) -> ManagedForward {
         ManagedForward {

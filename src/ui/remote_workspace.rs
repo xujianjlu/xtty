@@ -1186,7 +1186,6 @@ pub(crate) fn pane_workspace_for(
     let pane = crate::terminal::PaneWorkspace {
         workspace,
         target: host.target,
-        spec,
         label,
         resize_echo,
     };
@@ -2029,7 +2028,7 @@ fn finish_attempt(
             // which is the half of #820 where the window "cannot be closed".
             // Suspend the machine instead: the strip says why and offers
             // Retry, which is the user asking to be asked again.
-            let declined = !parked && crate::daemon::ssh::is_auth_declined(&e);
+            let declined = !parked && false /* Native auth declined check abolished */;
             if parked {
                 log::warn!("{label} is served by a build this one cannot speak to: {e}");
             } else if declined {
@@ -2336,24 +2335,9 @@ pub(crate) enum SheetOutcome {
     Lost,
 }
 
-fn raise_auth_sheet(cx: &mut gpui::App, pending: remote_connect::PendingAuth) -> SheetOutcome {
-    let host = pending.host;
-    let Some((workspace, _)) = workspaces_on(cx, host).into_iter().next() else {
-        return SheetOutcome::GiveBack(pending);
-    };
-    let Some(handle) = crate::ui::windows::WindowRegistry::window_for(cx, workspace) else {
-        return SheetOutcome::GiveBack(pending);
-    };
-    let Some(app) =
-        crate::ui::windows::WindowRegistry::app_for(cx, workspace).and_then(|app| app.upgrade())
-    else {
-        return SheetOutcome::GiveBack(pending);
-    };
-    handle
-        .update(cx, move |_, window, cx| {
-            app.update(cx, |app, cx| app.raise_routed_auth(pending, window, cx))
-        })
-        .unwrap_or(SheetOutcome::Lost)
+fn raise_auth_sheet(_cx: &mut gpui::App, pending: remote_connect::PendingAuth) -> SheetOutcome {
+    // Native auth sheet abolished — park the prompt unhandled.
+    SheetOutcome::GiveBack(pending)
 }
 
 pub(crate) fn release_auth_sheet(host: HostId, cx: &mut gpui::App) {

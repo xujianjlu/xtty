@@ -174,7 +174,6 @@ fn desired_node(pane: &Pane, remote_window: bool, cx: &App) -> Option<DesiredNod
                     cwd: view
                         .spawnable_cwd()
                         .map(|p| p.to_string_lossy().into_owned()),
-                    ssh_spec,
                     agent,
                     // Only a pane this window spawned knows this; one it
                     // attached to never saw the command line. The daemon fills
@@ -201,7 +200,6 @@ fn desired_node(pane: &Pane, remote_window: bool, cx: &App) -> Option<DesiredNod
                         .working_directory
                         .as_ref()
                         .map(|p| p.to_string_lossy().into_owned()),
-                    ssh_spec: None,
                     agent,
                     shell: spawn.shell.clone(),
                 },
@@ -1608,7 +1606,7 @@ fn session_pane_from_node(node: &PaneNode, panes: &[PaneRecord]) -> SessionPane 
             let (cwd, ssh_spec, agent, shell) = match record {
                 Some(r) => (
                     r.cwd.clone().map(std::path::PathBuf::from),
-                    r.ssh_spec.clone(),
+                    None::<Box<crate::ui::native_gone::NativeSshSpec>>,
                     r.agent.clone(),
                     r.shell.clone(),
                 ),
@@ -1632,7 +1630,6 @@ fn session_pane_from_node(node: &PaneNode, panes: &[PaneRecord]) -> SessionPane 
                 // what to show, never the judge of what to destroy.
                 pane_id: Some(*pane),
                 shell,
-                ssh_spec,
                 agent: agent.as_ref().map(|a| a.agent),
                 agent_session_id: agent.as_ref().and_then(|a| a.session_id.clone()),
                 agent_launch_argv: agent.as_ref().and_then(|a| a.launch_argv.clone()),
@@ -4281,7 +4278,6 @@ mod tests {
         PaneSeed {
             pane,
             cwd: Some(format!("/work/{pane}")),
-            ssh_spec: None,
             agent: None,
             shell: None,
         }
