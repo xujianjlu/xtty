@@ -37,8 +37,6 @@ const CHIP_GAP: f32 = 6.;
 
 pub(crate) const GRAB_HANDLE_W: f32 = 80.;
 
-const KEEP_SEGMENTS: usize = 3;
-
 /// Builds a launch specification without recomputing argument ownership locally.
 /// The inventory may originate from a remote host, so only its transported
 /// metadata can distinguish tty7 launch defaults from user-authored arguments.
@@ -84,6 +82,14 @@ fn join_segments(segments: &[&str], sep: char) -> String {
     segments.join(sep.encode_utf8(&mut [0u8; 4]) as &str)
 }
 
+/// Chip label for a path-shaped title: the last directory name (basename).
+///
+/// Long absolute paths do not fit a tab chip; the leaf is what tells tabs
+/// apart (`~/a/b/c` → `c`). `/` and `~` stay as themselves. The abbreviated
+/// full path is what [`tooltip_of`] hangs on hover — this only names the chip.
+///
+/// Both separators: Windows shells report `C:\Users\…` while git and the
+/// terminal integration use `/`.
 pub(crate) fn short_title(raw: &str, home: Option<&std::path::Path>) -> String {
     let raw = raw.trim();
     if raw.is_empty() {
@@ -94,47 +100,16 @@ pub(crate) fn short_title(raw: &str, home: Option<&std::path::Path>) -> String {
     if after_host.is_empty() {
         return String::new();
     }
+    // Home of the machine the path is on first: `/Users/x` becomes `~` so the
+    // chip says `~` rather than the username (#580). Tooltip keeps this same
+    // abbreviated spelling.
     let abbreviated = abbreviate_home(after_host, home);
     let path: &str = abbreviated.as_ref();
-
-    enum Kind {
-        Home,
-        Absolute,
-        Relative,
-    }
-    let (kind, body) = if let Some(rest) = path.strip_prefix("~/") {
-        (Kind::Home, rest)
-    } else if path == "~" {
-        return "~".to_string();
-    } else if let Some(rest) = path.strip_prefix('/') {
-        (Kind::Absolute, rest)
-    } else {
-        (Kind::Relative, path)
-    };
-
-    // Both separators: Windows shells report `C:\Users\…` while git and the
-    // terminal integration use `/`, and a path must be cut on either one.
-    let segments: Vec<&str> = body.split(['/', '\\']).filter(|s| !s.is_empty()).collect();
-    if segments.is_empty() {
-        return match kind {
-            Kind::Home => "~",
-            Kind::Absolute => "/",
-            Kind::Relative => "",
-        }
-        .to_string();
-    }
-
-    let sep = path_separator(path);
-    let depth = segments.len() + usize::from(matches!(kind, Kind::Home));
-    let mut label = if depth > KEEP_SEGMENTS {
-        let tail = &segments[segments.len() - KEEP_SEGMENTS..];
-        format!("…{sep}{}", join_segments(tail, sep))
-    } else {
-        match kind {
-            Kind::Home => format!("~{sep}{}", join_segments(&segments, sep)),
-            Kind::Absolute => format!("/{}", join_segments(&segments, sep)),
-            Kind::Relative => join_segments(&segments, sep),
-        }
+    let trimmed = path.trim_end_matches(['/', '\\']);
+    let mut label = match trimmed.rsplit(['/', '\\']).next() {
+        Some(leaf) if !leaf.is_empty() => leaf.to_string(),
+        // Bare `/` (or `\`) trims to nothing — keep the root marker.
+        _ => path.to_string(),
     };
     // Clamped on cluster boundaries, or a label ending in an emoji comes back
     // holding half of one.
@@ -144,6 +119,7 @@ pub(crate) fn short_title(raw: &str, home: Option<&std::path::Path>) -> String {
     }
     label
 }
+
 
 /// The one place a tab gets its displayed name, whichever surface is asking.
 ///
@@ -205,16 +181,15 @@ pub(crate) fn label_of(
     }
 }
 
-/// What a row can add on hover: the name behind the one [`label_of`] cut down,
-/// or `None` when it cut nothing and the tooltip would only repeat the row.
+/// What a row can add on hover: the abbreviated absolute path behind the
+/// basename [`label_of`] put on the chip, or `None` when the tooltip would
+/// only repeat the row.
 ///
 /// The comparison has to happen on the *same* spelling, which is the whole
-/// trick here. `label_of` abbreviates a path under the home before it elides
-/// it, and this returns the abbreviated form too, so a raw `/Users/x/repo`
-/// measured against a label of `~/repo` looks like a difference that isn't
-/// one — and every tab named after a directory inside the home would hang a
-/// tooltip saying exactly what it already says. Abbreviate first, compare
-/// after.
+/// trick here. `label_of` abbreviates a path under the home before taking its
+/// leaf, and this returns the abbreviated form too, so a raw `/Users/x/repo`
+/// measured against a label of `repo` is a real difference — while a bare
+/// `~` measured against `~` is not. Abbreviate first, compare after.
 fn tooltip_of(
     view: &crate::ui::machine_mirror::TabView,
     index: usize,
@@ -305,10 +280,10 @@ pub(crate) fn elide_path_keep_tail(
     let segments: Vec<&str> = path.split(['/', '\\']).collect();
     // A leading slash splits into an empty first segment; `~` and drive
     // letters (`E:`) carry the same "where this tree lives" weight, and a
-    // leading `…` means `short_title` already elided once — that marker is
-    // replaced by the new elision instead of stacking two ellipses. Keep
-    // whichever marker there is so the result never reads as a bare
-    // relative path.
+    // leading `…` means a prior width elision already cut the head — that
+    // marker is replaced by the new elision instead of stacking two
+    // ellipses. Keep whichever marker there is so the result never reads as
+    // a bare relative path.
     let root: &str = match segments.first() {
         Some(&"") => "/",
         Some(&"~") => "~",
@@ -1462,11 +1437,10 @@ impl Tty7App {
 
     /// The full title behind a shortened one, for the row to name on hover.
     ///
-    /// `tab_label` hands back a path elided to its last three segments and then
-    /// capped, and the chip truncates whatever is left over — so a tab could
-    /// read `…/a/b/c` with no way to find out which `a` that was. `None` when
-    /// nothing was dropped, so tabs that already show their whole name stay
-    /// quiet under the pointer.
+    /// `tab_label` hands back a path's basename (`~/a/b/c` → `c`), so a tab
+    /// chip alone cannot say which `c` that was. Hover spells the abbreviated
+    /// absolute path. `None` when nothing was dropped, so a bare `~` or `/`
+    /// (or a non-path name) stays quiet under the pointer.
     ///
     /// It has to unshorten whatever the label was *made of*, which is why it
     /// reads the same [`TabView`](crate::ui::machine_mirror::TabView) the label
@@ -2554,11 +2528,11 @@ mod tests {
     }
 
     #[test]
-    fn short_title_strips_user_host_and_shows_shallow_path_in_full() {
-        assert_eq!(short_title("user@host:~/projects/app"), "~/projects/app");
+    fn short_title_strips_user_host_and_shows_path_basename() {
+        assert_eq!(short_title("user@host:~/projects/app"), "app");
         // Debian's stock bash title, which spaces the path off the colon.
-        assert_eq!(short_title("user@host: ~/projects/app"), "~/projects/app");
-        assert_eq!(short_title("/usr/local/bin"), "/usr/local/bin");
+        assert_eq!(short_title("user@host: ~/projects/app"), "app");
+        assert_eq!(short_title("/usr/local/bin"), "bin");
         assert_eq!(short_title("plain"), "plain");
     }
 
@@ -2567,21 +2541,25 @@ mod tests {
     #[test]
     fn short_title_shortens_under_the_home_it_was_given() {
         let server = Path::new("/home/deploy");
+        // Chip is the leaf either way; home only decides whether the bare
+        // home directory itself collapses to `~` rather than its username.
         assert_eq!(
             super::short_title("/home/deploy/app", Some(server)),
-            "~/app"
+            "app"
+        );
+        assert_eq!(
+            super::short_title("/home/deploy", Some(server)),
+            "~"
         );
         // This machine's home is not a stand-in for the server's: the same
-        // path stays whole when the home naming it is somewhere else.
+        // path keeps its last segment as the username, not `~`.
         assert_eq!(
-            super::short_title("/home/deploy/app", Some(Path::new("/Users/thomas"))),
-            "/home/deploy/app"
+            super::short_title("/home/deploy", Some(Path::new("/Users/thomas"))),
+            "deploy"
         );
-        // And a pane nothing here can place — no link to its host, or a
-        // shell that has ssh'd on — shortens against nothing.
         assert_eq!(
-            super::short_title("/home/deploy/app", None),
-            "/home/deploy/app"
+            super::short_title("/home/deploy", None),
+            "deploy"
         );
     }
 
@@ -2594,21 +2572,21 @@ mod tests {
         assert_eq!(short_title("prod-web"), "prod-web");
         // Only a port stops the cut: a drive letter is still a path, and this
         // is the title tty7's own pwsh integration writes on Windows.
-        assert_eq!(short_title(r"ann@BOX:C:/Users/app"), r"C:/Users/app");
+        assert_eq!(short_title(r"ann@BOX:C:/Users/app"), "app");
     }
 
     #[test]
-    fn short_title_truncates_deep_paths_to_trailing_segments() {
-        assert_eq!(short_title("user@host:~/repo/025/tty7"), "…/repo/025/tty7");
-        assert_eq!(short_title("/usr/local/share/man"), "…/local/share/man");
-        assert_eq!(short_title("a/b/c/d"), "…/b/c/d");
+    fn short_title_takes_the_basename_of_deep_paths() {
+        assert_eq!(short_title("user@host:~/repo/025/tty7"), "tty7");
+        assert_eq!(short_title("/usr/local/share/man"), "man");
+        assert_eq!(short_title("a/b/c/d"), "d");
     }
 
     #[test]
     fn short_title_keeps_home_tilde_and_normalizes_trailing_slash() {
         assert_eq!(short_title("user@host:~"), "~");
         assert_eq!(short_title("~"), "~");
-        assert_eq!(short_title("a/b/c/"), "a/b/c");
+        assert_eq!(short_title("a/b/c/"), "c");
     }
 
     #[test]
@@ -2845,16 +2823,12 @@ mod tests {
 
     #[test]
     fn short_title_cuts_windows_paths_on_backslashes() {
-        assert_eq!(
-            short_title(r"C:\Users\dev\projects\app"),
-            r"…\dev\projects\app"
-        );
+        assert_eq!(short_title(r"C:\Users\dev\projects\app"), "app");
         assert_eq!(
             short_title(r"C:\Users\dev\repo\deep\path\src\ui"),
-            r"…\path\src\ui"
+            "ui"
         );
-        // A shallow Windows path keeps its drive and its backslashes.
-        assert_eq!(short_title(r"C:\Users\app"), r"C:\Users\app");
+        assert_eq!(short_title(r"C:\Users\app"), "app");
     }
 
     /// Every way of slicing `text` that lands on a grapheme-cluster boundary.
@@ -3086,7 +3060,7 @@ mod tests {
         let mut tab = strip_tab();
         tab.cwd = Some("/Users/x/repo/tty7".into());
 
-        assert_eq!(label_of(&tab, 0, Some(home())), "~/repo/tty7");
+        assert_eq!(label_of(&tab, 0, Some(home())), "tty7");
         // Through the same shortener as a title, so a deep directory is cut
         // where a deep path in a title would be.
         tab.cwd = Some("/Users/x/repo/tty7/crates/tty7-core/src".into());
@@ -3094,39 +3068,44 @@ mod tests {
             label_of(&tab, 0, Some(home())),
             super::short_title("/Users/x/repo/tty7/crates/tty7-core/src", Some(home())),
         );
+        assert_eq!(label_of(&tab, 0, Some(home())), "src");
     }
 
-    /// A tooltip exists to say what the row had to leave out. One that repeats
-    /// the row is worse than none, and the label and the raw string it came
-    /// from are not comparable until both have been abbreviated: `~/repo` and
-    /// `/Users/x/repo` are the same name spelled two ways, and reading them as
-    /// a difference hung a tooltip on every tab named after a directory under
-    /// the home — which, after this change, is most of them.
+    /// A tooltip exists to say what the chip had to leave out. The chip shows
+    /// the basename; hover spells the home-abbreviated absolute path. A bare
+    /// `~` or `/` already is the whole name, so those stay quiet.
     #[test]
-    fn a_tab_named_after_a_directory_says_nothing_more_on_hover_unless_it_was_cut() {
+    fn a_tab_named_after_a_directory_shows_the_full_path_on_hover() {
         let mut tab = strip_tab();
         tab.cwd = Some("/Users/x/repo".into());
 
-        assert_eq!(label_of(&tab, 0, Some(home())), "~/repo");
+        assert_eq!(label_of(&tab, 0, Some(home())), "repo");
         assert_eq!(
-            tooltip_of(&tab, 0, Some(home())),
-            None,
-            "the row is already showing the whole directory"
+            tooltip_of(&tab, 0, Some(home())).as_deref(),
+            Some("~/repo")
         );
 
-        // Cut down to its last three segments, so the head is worth having.
         tab.cwd = Some("/Users/x/repo/crates/tty7-core/src".into());
-        assert_eq!(label_of(&tab, 0, Some(home())), "…/crates/tty7-core/src");
+        assert_eq!(label_of(&tab, 0, Some(home())), "src");
         assert_eq!(
             tooltip_of(&tab, 0, Some(home())).as_deref(),
             Some("~/repo/crates/tty7-core/src")
         );
 
-        // The same holds for a title that happens to be a path — the rung this
-        // guard was already getting wrong before a directory could reach it.
+        // A bare home directory collapses to `~` on the chip — nothing more
+        // to say on hover.
+        tab.cwd = Some("/Users/x".into());
+        assert_eq!(label_of(&tab, 0, Some(home())), "~");
+        assert_eq!(tooltip_of(&tab, 0, Some(home())), None);
+
+        // The same holds for a title that happens to be a path.
         let mut titled = strip_tab();
         titled.osc_title = Some("/Users/x/repo".into());
-        assert_eq!(tooltip_of(&titled, 0, Some(home())), None);
+        assert_eq!(label_of(&titled, 0, Some(home())), "repo");
+        assert_eq!(
+            tooltip_of(&titled, 0, Some(home())).as_deref(),
+            Some("~/repo")
+        );
 
         // A shell integration title that still carries `user@host:path` keeps
         // the identity on the chip; hover spells the path.
@@ -3171,7 +3150,7 @@ mod tests {
             assert_eq!(view.cwd.as_deref(), Some("/work/repo"));
 
             let strip = app.tab_label(tab, index, Some(window), cx);
-            assert_eq!(strip, "/work/repo");
+            assert_eq!(strip, "repo");
             assert_ne!(
                 strip,
                 crate::terminal::view::DEFAULT_TITLE,
@@ -3199,9 +3178,9 @@ mod tests {
             );
 
             assert_eq!(
-                app.tab_title_tooltip(tab, index, Some(window), cx),
-                None,
-                "and the row is showing the whole path, so it stays quiet"
+                app.tab_title_tooltip(tab, index, Some(window), cx).as_deref(),
+                Some("/work/repo"),
+                "hover still spells the absolute path the chip shortened"
             );
         });
     }
@@ -3247,25 +3226,37 @@ mod tests {
     fn a_cwd_is_cut_in_its_own_spelling_whichever_client_is_reading_it() {
         let windows_home = Path::new(r"C:\Users\x");
 
-        // A Windows pane: shortened under its own home, and a path too deep to
-        // fit is rejoined with its own separator rather than with `/`.
+        // A Windows pane: leaf under its own home; deep paths still yield the
+        // basename, with the abbreviated full path reserved for hover.
         let mut win = strip_tab();
         win.cwd = Some(r"C:\Users\x\repo".into());
-        assert_eq!(label_of(&win, 0, Some(windows_home)), "~/repo");
+        assert_eq!(label_of(&win, 0, Some(windows_home)), "repo");
+        assert_eq!(
+            tooltip_of(&win, 0, Some(windows_home)).as_deref(),
+            Some("~/repo")
+        );
         win.cwd = Some(r"D:\work\a\b\proj".into());
-        assert_eq!(label_of(&win, 0, Some(windows_home)), r"…\a\b\proj");
+        assert_eq!(label_of(&win, 0, Some(windows_home)), "proj");
+        assert_eq!(
+            tooltip_of(&win, 0, Some(windows_home)).as_deref(),
+            Some(r"D:\work\a\b\proj")
+        );
 
         // A remote pane's cwd is POSIX even when the client reading it is the
         // Windows one: no drive to hang it off, no `~` borrowed from this
         // machine's home, and no backslash anywhere in the answer.
         let mut remote = strip_tab();
         remote.cwd = Some("/srv/app".into());
-        assert_eq!(label_of(&remote, 0, Some(windows_home)), "/srv/app");
+        assert_eq!(label_of(&remote, 0, Some(windows_home)), "app");
         remote.cwd = Some("/home/deploy/app".into());
         assert_eq!(
             label_of(&remote, 0, Some(Path::new("/home/deploy"))),
-            "~/app",
+            "app",
             "measured against the home of the host it is on, not of this one"
+        );
+        assert_eq!(
+            tooltip_of(&remote, 0, Some(Path::new("/home/deploy"))).as_deref(),
+            Some("~/app")
         );
 
         // The root of a filesystem is a directory like any other: a tab
