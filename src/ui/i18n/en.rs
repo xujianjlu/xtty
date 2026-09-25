@@ -489,9 +489,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::SettingsBellModeAudible => "Audible",
         L10nKey::SettingsBellModeBoth => "Both",
         L10nKey::SettingsPrompt => "Prompt",
-        L10nKey::SettingsPromptIntro => {
-            "Prompt-related xtty menus such as history search."
-        }
+        L10nKey::SettingsPromptIntro => "Prompt-related xtty menus such as history search.",
         L10nKey::SettingsHistorySearch => "History search",
         L10nKey::SettingsHistorySearchDesc => {
             "⌃R / ⌘R opens xtty's fuzzy history menu. Off sends ⌃R to the shell — its own reverse-i-search, or whatever you bound there (fzf, percol)."
@@ -1492,6 +1490,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::CmdNextTab => "Next Tab",
         L10nKey::CmdPreviousTab => "Previous Tab",
         L10nKey::CmdCopyWorkingDirectory => "Copy Working Directory",
+        L10nKey::CmdCopyTab => "Copy Tab",
         L10nKey::CmdCopySessionId => "Copy Session ID",
         L10nKey::CmdCopySessionIdSubtitle => "the coding agent's own session id",
         L10nKey::CmdForkSession => "Fork Session",
@@ -1793,6 +1792,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::AppMenuSplitDown => "Split Down",
         L10nKey::AppMenuSplitUp => "Split Up",
         L10nKey::AppMenuRenameTab => "Rename Tab…",
+        L10nKey::AppMenuCopyTab => "Copy Tab",
         L10nKey::AppMenuCopyWorkingDirectory => "Copy Working Directory",
         L10nKey::AppMenuCopySessionId => "Copy Session ID",
         L10nKey::AppMenuForkSession => "Fork Session",

@@ -82,10 +82,7 @@ mod tests {
     #[test]
     fn receivers_exclude_source_and_opt_outs() {
         let members = [(id(1), false), (id(2), true), (id(3), false)];
-        assert_eq!(
-            broadcast_receivers(true, id(1), &members),
-            vec![id(3)]
-        );
+        assert_eq!(broadcast_receivers(true, id(1), &members), vec![id(3)]);
     }
 
     #[test]

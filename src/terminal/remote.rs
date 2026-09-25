@@ -1568,6 +1568,11 @@ impl RemoteTerminal {
                                 if let Ok(mut guard) = agent.lock() {
                                     *guard = a;
                                 }
+                                // Agent icon/status live on the tab chrome —
+                                // without a wake the chip keeps the previous
+                                // avatar until unrelated output arrives (remote
+                                // OSC 133 path is especially quiet after C).
+                                proxy.send_event(AlacEvent::Wakeup);
                             }
                             DaemonMsg::AgentStatus(state) => {
                                 flush_batch!();
@@ -1745,6 +1750,14 @@ impl RemoteTerminal {
 
     pub fn foreground_cwd(&self) -> Option<PathBuf> {
         self.cwd.lock().ok().and_then(|g| g.clone())
+    }
+
+    /// Plant a far-side cwd learned outside the daemon (nested-ssh PTY `pwd`
+    /// probe). OSC 7 / `DaemonMsg::Cwd` still win when they arrive later.
+    pub fn set_foreground_cwd(&self, path: Option<PathBuf>) {
+        if let Ok(mut guard) = self.cwd.lock() {
+            *guard = path;
+        }
     }
 
     pub fn remote_context(&self) -> Option<RemoteContext> {

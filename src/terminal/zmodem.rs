@@ -953,7 +953,10 @@ mod tests {
         let mut session = ZmodemSession::start_receive().expect("recv");
         assert!(session.is_awaiting_picker());
         let zrinit = session.take_initial_outgoing();
-        assert!(!zrinit.is_empty(), "ZRINIT must go out before the folder picker");
+        assert!(
+            !zrinit.is_empty(),
+            "ZRINIT must go out before the folder picker"
+        );
         let dir = std::env::temp_dir().join(format!(
             "tty7-zmodem-pick-{}-{}",
             std::process::id(),

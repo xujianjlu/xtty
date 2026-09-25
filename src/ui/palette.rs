@@ -32,6 +32,7 @@ pub enum CommandKind {
     CloseOtherTabs,
     CloseTabsToTheRight,
     CopyWorkingDirectory,
+    CopyTab,
     MarkTabUnread,
     ForkAgentSession,
     CopyAgentSessionId,
@@ -138,6 +139,7 @@ impl CommandKind {
             CloseOtherTabs => "close-other-tabs",
             CloseTabsToTheRight => "close-tabs-right",
             CopyWorkingDirectory => "copy-cwd",
+            CopyTab => "copy-tab",
             MarkTabUnread => "mark-tab-unread",
             ForkAgentSession => "fork-agent-session",
             CopyAgentSessionId => "copy-agent-session-id",
@@ -248,6 +250,7 @@ impl CommandKind {
             CloseOtherTabs => "CloseOtherTabs",
             CloseTabsToTheRight => "CloseTabsToTheRight",
             CopyWorkingDirectory => "CopyWorkingDirectory",
+            CopyTab => "CopyTab",
             MarkTabUnread => "MarkTabUnread",
             ForkAgentSession => "ForkAgentSession",
             CopyAgentSessionId => "CopyAgentSessionId",
@@ -458,6 +461,7 @@ impl Command {
             Command::localized(L10nKey::CmdNextTab, NextTab),
             Command::localized(L10nKey::CmdPreviousTab, PrevTab),
             Command::localized(L10nKey::CmdCopyWorkingDirectory, CopyWorkingDirectory),
+            Command::localized(L10nKey::CmdCopyTab, CopyTab),
             Command::localized(L10nKey::CmdCopySessionId, CopyAgentSessionId)
                 .with_subtitle(t(L10nKey::CmdCopySessionIdSubtitle)),
             Command::localized(L10nKey::CmdForkSession, ForkAgentSession)

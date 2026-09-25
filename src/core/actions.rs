@@ -26,6 +26,8 @@ actions!(
         CloseOtherTabs,
         CloseTabsToTheRight,
         CopyWorkingDirectory,
+        /// Open a new tab that reconnects like the current pane (host + cwd).
+        CopyTab,
         OpenLinkUnderPointer,
         RevealLinkUnderPointer,
         CopyLinkPathUnderPointer,

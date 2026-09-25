@@ -500,9 +500,7 @@ pub fn translate_ja(key: L10nKey) -> Option<&'static str> {
         L10nKey::SettingsBellModeAudible => "音声（効果音）",
         L10nKey::SettingsBellModeBoth => "点滅 + 音声",
         L10nKey::SettingsPrompt => "プロンプト",
-        L10nKey::SettingsPromptIntro => {
-            "プロンプト関連の xtty メニュー（履歴検索など）。"
-        }
+        L10nKey::SettingsPromptIntro => "プロンプト関連の xtty メニュー（履歴検索など）。",
         L10nKey::SettingsHistorySearch => "履歴検索",
         L10nKey::SettingsHistorySearchDesc => {
             "⌃R / ⌘R で xtty のファジー履歴メニューを開きます。オフなら ⌃R はシェルへ — 逆方向検索や、そこでバインドしたもの（fzf、percol）"
@@ -1551,6 +1549,7 @@ pub fn translate_ja(key: L10nKey) -> Option<&'static str> {
         L10nKey::CmdNextTab => "次のタブ",
         L10nKey::CmdPreviousTab => "前のタブ",
         L10nKey::CmdCopyWorkingDirectory => "作業ディレクトリをコピー",
+        L10nKey::CmdCopyTab => "タブをコピー",
         L10nKey::CmdCopySessionId => "セッション ID をコピー",
         L10nKey::CmdCopySessionIdSubtitle => "コーディングエージェント自身のセッション ID",
         L10nKey::CmdForkSession => "セッションをフォーク",
@@ -1866,6 +1865,7 @@ pub fn translate_ja(key: L10nKey) -> Option<&'static str> {
         L10nKey::AppMenuSplitDown => "下に分割",
         L10nKey::AppMenuSplitUp => "上に分割",
         L10nKey::AppMenuRenameTab => "タブの名前を変更…",
+        L10nKey::AppMenuCopyTab => "タブをコピー",
         L10nKey::AppMenuCopyWorkingDirectory => "作業ディレクトリをコピー",
         L10nKey::AppMenuCopySessionId => "セッション ID をコピー",
         L10nKey::AppMenuForkSession => "セッションをフォーク",

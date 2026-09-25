@@ -427,9 +427,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::SettingsBellModeAudible => "声音",
         L10nKey::SettingsBellModeBoth => "闪烁 + 声音",
         L10nKey::SettingsPrompt => "提示符",
-        L10nKey::SettingsPromptIntro => {
-            "提示符相关的 xtty 菜单（历史搜索等）。"
-        }
+        L10nKey::SettingsPromptIntro => "提示符相关的 xtty 菜单（历史搜索等）。",
         L10nKey::SettingsHistorySearch => "历史搜索",
         L10nKey::SettingsHistorySearchDesc => {
             "按 ⌃R / ⌘R 打开 xtty 的模糊历史菜单。关闭本项后 ⌃R 交给 shell——它自带的反向搜索，或你绑定的其它功能（fzf、percol）。"
@@ -1394,6 +1392,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::CmdNextTab => "下一标签页",
         L10nKey::CmdPreviousTab => "上一标签页",
         L10nKey::CmdCopyWorkingDirectory => "复制工作目录",
+        L10nKey::CmdCopyTab => "复制标签页",
         L10nKey::CmdCopySessionId => "复制会话 ID",
         L10nKey::CmdCopySessionIdSubtitle => "编码 agent 自身的会话 ID",
         L10nKey::CmdForkSession => "Fork 会话",
@@ -1685,6 +1684,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::AppMenuSplitDown => "向下分屏",
         L10nKey::AppMenuSplitUp => "向上分屏",
         L10nKey::AppMenuRenameTab => "重命名标签页…",
+        L10nKey::AppMenuCopyTab => "复制标签页",
         L10nKey::AppMenuCopyWorkingDirectory => "复制工作目录",
         L10nKey::AppMenuCopySessionId => "复制会话 ID",
         L10nKey::AppMenuForkSession => "Fork 会话",
