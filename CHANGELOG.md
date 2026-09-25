@@ -32,6 +32,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 
+- **Native Finder panels for in-pane `rz` / `sz`.** Upload (`rz`) clears forced DarkAqua while `NSOpenPanel` is open so the sheet matches system Finder chrome. Download (`sz`) opens a directory picker before writing files instead of silently landing in `~/Downloads`.
+
 - **Sidebar tab cards, Tab colors, and Ctrl+C input retention (26.9.13).** Left
   tab rows are framed chrome-fill cards; idle/hover fills are swapped and the
   active tab is ~30% brighter. Command-line syntax colors stay on the local
