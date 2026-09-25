@@ -7,7 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Command-line keyword chrome is off (26.9.14).** The prompt editor no longer
+  paints tokenizer colors or ghost tint on the current input line, and the
+  anti-flicker `input_chrome_suppressed` / handoff recolor path is removed.
+  Product stance for bash (local + remote): plain echo, no terminal keyword
+  paint and no reliance on shell plugins such as zsh-syntax-highlighting.
+  Typing still uses the local editor when Prompt editor is on, but the line
+  reads as plain theme foreground. **Ctrl/Cmd+R history overlay and password
+  triggers are unchanged** — they do not share the keyword-paint path.
+
 ### Fixed
+
 
 - **Sidebar tab cards, Tab colors, and Ctrl+C input retention (26.9.13).** Left
   tab rows are framed chrome-fill cards; idle/hover fills are swapped and the

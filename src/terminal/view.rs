@@ -17,7 +17,6 @@ use super::TermSize;
 use super::cmd_editor::CmdEditor;
 use super::completion::{self, CandidateKind, CompletionSession};
 use super::element::{GridSnapshot, RenderCell, TerminalElement};
-use super::highlight::{self, TokenKind};
 use super::hold::{GapHold, Verdict};
 use super::remote::RemoteTerminal;
 use super::reverse_search::{self, ReverseSearch};
@@ -445,10 +444,6 @@ pub struct TerminalView {
     git_status_cwd: Option<std::path::PathBuf>,
     last_agent_activity: u64,
     cmd: CmdEditor,
-    /// After an empty Enter (or any submit), shell reprints PS1. Skip
-    /// command-highlight + ghost hint until the user types real input so the
-    /// overlay does not fight the prompt redraw (green↔white jitter).
-    input_chrome_suppressed: bool,
     /// Mirrors `Config::prompt_editor`. Cached rather than read from the global
     /// because the ownership question ("does this keystroke belong to the local
     /// editor?") is asked from `&self` helpers that have no `App` to read from;
@@ -1570,7 +1565,6 @@ impl TerminalView {
             git_status_cwd: None,
             last_agent_activity: 0,
             cmd: CmdEditor::new(),
-            input_chrome_suppressed: false,
             prompt_editor,
             typeahead: Typeahead::new(),
             hold: GapHold::new(),
@@ -5048,10 +5042,6 @@ impl TerminalView {
         let pasted = self.cmd.pasted();
         self.terminal.write(submit_bytes(&line, bracketed, pasted));
         self.cmd.clear();
-        // Prompt-only / empty-Enter (and any submit): shell reprints PS1.
-        // Hold off highlight+hint until the next real keystroke so chrome
-        // does not flicker against the prompt redraw.
-        self.input_chrome_suppressed = true;
         self.cursor_visible = true;
         self.jump_to_prompt();
         cx.notify();
@@ -5342,11 +5332,8 @@ impl TerminalView {
             }
         }
         self.cmd.clear();
-        // Local syntax overlay must not paint while the shell owns the line
-        // (Tab completion / echo redraw). Suppress keyword chrome until the
-        // next real insert after reclaim — same gate as post-Enter PS1.
-        // Do not invent a second "handoff_paint" that recolors shell echo.
-        self.input_chrome_suppressed = true;
+        // Keyword chrome is permanently off; handoff only transfers line
+        // ownership to the shell (no recolor / handoff_paint).
         self.editor_handoff = Some(self.terminal.prompt_cycle());
         self.editor_handoff_interrupt_seq = None;
         self.send_to_pty(chord, cx);
@@ -5784,7 +5771,6 @@ impl TerminalView {
         if self.input_active() {
             self.adopt_typeahead();
             self.cmd.insert_str(text);
-            self.input_chrome_suppressed = false;
             self.history_nav = None;
             self.editor_goal_col = None;
             self.last_word_nav = None;
@@ -6867,7 +6853,6 @@ impl TerminalView {
         let fg = theme.foreground;
         let line_bg = theme.background;
         let caret_col = theme.caret;
-        let muted = theme.muted_foreground;
         let mut sel_bg = theme.selection;
         sel_bg.a = 0.55;
         let cell_w = self.cell_width;
@@ -6875,22 +6860,11 @@ impl TerminalView {
         let caret_h = px((self.font_size.as_f32() * 1.2).min(lh.as_f32()));
         let caret_top = px((lh.as_f32() - caret_h.as_f32()) / 2.0);
 
-        let line: String = chars.iter().collect();
-        // Prompt-only / post-Enter PS redraw: paint plain caret only — no
-        // keyword colors, no ghost hint — so shell echo cannot flash the
-        // overlay green↔white. Re-enabled on the next real insert.
-        let paint_chrome = !self.input_chrome_suppressed && !line.trim().is_empty();
-        let mut colors: Vec<gpui::Hsla> = Vec::with_capacity(len);
-        if paint_chrome {
-            for span in highlight::highlight(&line) {
-                let c = self.kind_color(span.kind, cx);
-                for _ in span.text.chars() {
-                    colors.push(c);
-                }
-            }
-        } else {
-            colors.resize(len, fg);
-        }
+        // Keyword chrome / ghost tint permanently off (26.9.14): the local
+        // editor line paints in plain theme foreground only. No tokenizer
+        // colors, no handoff recolor — avoids fighting shell echo. Ctrl+R
+        // history overlay and password triggers are separate paths.
+        let colors: Vec<gpui::Hsla> = vec![fg; len];
 
         let cursor_style = cx.global::<Config>().cursor_style;
         let cursor_paint = input_caret_paint(focused, self.cursor_visible, cursor_style);
@@ -6934,9 +6908,8 @@ impl TerminalView {
                 .h(lh)
                 .flex()
                 .items_center()
-                // Opaque cell fill so shell echo / grid redraw under the
-                // overlay cannot flash the same glyphs back to default white
-                // between highlight frames.
+                // Opaque cell fill so the grid under the editor overlay does
+                // not show through while the local line is drawn.
                 .bg(if inverted {
                     caret_col
                 } else if selected {
@@ -6960,8 +6933,6 @@ impl TerminalView {
 
         let mut lines: Vec<Vec<gpui::AnyElement>> =
             vec![vec![blank(cell_w * (ccol as f32)).into_any_element()]];
-
-        let is_multiline = chars.contains(&'\n');
 
         let marked_cells = input_cells(&marked.chars().collect::<Vec<char>>());
         for c in input_cells(&chars) {
@@ -7012,36 +6983,18 @@ impl TerminalView {
                 .push(cell(colors[i], c.text, c.width, selected, caret, false));
         }
 
-        let ghost: Option<String> =
-            if paint_chrome && selection.is_none() && !has_marked && !is_multiline {
-                self.ghost_suggestion()
-                    .map(|full| full.chars().skip(len).collect::<String>())
-                    .filter(|r| !r.is_empty())
-            } else {
-                None
-            };
-
         if cursor == len {
             let last = lines.last_mut().unwrap();
             if has_marked {
                 for mc in &marked_cells {
                     last.push(cell(fg, mc.text.clone(), mc.width, false, false, true));
                 }
-            } else if ghost.is_none() {
+            } else {
                 let mut tail = opaque_blank(cell_w).relative();
                 if selection.is_none() && cursor_on {
                     tail = tail.child(caret_bar());
                 }
                 last.push(tail.into_any_element());
-            }
-        }
-
-        if let Some(rem) = ghost {
-            let last = lines.last_mut().unwrap();
-            let flat: Vec<char> = rem.chars().map(one_line_char).collect();
-            for (gi, gc) in input_cells(&flat).into_iter().enumerate() {
-                let caret = gi == 0 && cursor == len && cursor_on;
-                last.push(cell(muted, gc.text, gc.width, false, caret, false));
             }
         }
 
@@ -7413,18 +7366,6 @@ impl TerminalView {
         Some(Self::notice_pill(text, cx))
     }
 
-    fn kind_color(&self, kind: TokenKind, cx: &App) -> gpui::Hsla {
-        let theme = cx.theme();
-        match kind {
-            TokenKind::Command => theme.green,
-            TokenKind::Flag => theme.cyan,
-            TokenKind::Path => theme.blue,
-            TokenKind::StringLit => theme.yellow,
-            TokenKind::Operator => theme.magenta,
-            TokenKind::Comment => theme.muted_foreground,
-            TokenKind::Arg | TokenKind::Whitespace => theme.foreground,
-        }
-    }
 }
 
 fn typeahead_boundary(key: &str, modifiers: &Modifiers) -> Option<RawInput<'static>> {
@@ -12524,10 +12465,6 @@ mod gpui_tests {
                 assert!(
                     view.cmd.text().is_empty(),
                     "local editor releases the line after handoff"
-                );
-                assert!(
-                    view.input_chrome_suppressed,
-                    "keyword chrome stays off while the shell redraws"
                 );
             })
             .unwrap();

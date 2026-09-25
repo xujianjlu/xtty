@@ -570,11 +570,9 @@ pub(crate) fn apply_theme(mut window: Option<&mut Window>, cx: &mut App) {
     t.tokens.button_info_active = fill_active.into();
     t.tokens.button_info_foreground = on_fill.into();
 
-    // The command-line highlighter paints commands, flags, paths, strings and
-    // operators with these, and the find bar flags a bad regex with `red`.
-    // Unset they hold gpui-component's stock ramp, one ramp for every dark
-    // preset and one for every light one — so the line you were typing kept a
-    // palette the output right above it had already left behind.
+    // ANSI named inks for UI accents (find-bar bad regex uses `red`, etc.).
+    // Command-line keyword chrome no longer consumes these (26.9.14); they
+    // still keep each theme's ramp coherent for other surfaces.
     t.red = rgb(theme.ansi_ink(1)).into();
     t.green = rgb(theme.ansi_ink(2)).into();
     t.yellow = rgb(theme.ansi_ink(3)).into();
