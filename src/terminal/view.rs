@@ -183,6 +183,20 @@ pub(crate) fn stated_title(title: &str) -> Option<&str> {
     }
 }
 
+/// Absolute / home-relative path shaped like a working-directory OSC 0 payload
+/// (oh-my-zsh termsupport). Not an identity title and not a process name.
+fn looks_like_osc_cwd_path(title: &str) -> bool {
+    let t = title.trim();
+    if t.is_empty() || tty7_core::core::tab_view::identity_from_title(t).is_some() {
+        return false;
+    }
+    if t.starts_with('/') || t.starts_with('~') {
+        return true;
+    }
+    let b = t.as_bytes();
+    b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && (b[2] == b'\\' || b[2] == b'/')
+}
+
 pub struct ShellParts {
     terminal: RemoteTerminal,
     pub(crate) pane_id: u64,
@@ -1666,9 +1680,22 @@ impl TerminalView {
         if agent_active {
             stated_title(&self.title).or(self.terminal_identity.as_deref())
         } else {
-            self.terminal_identity
-                .as_deref()
-                .or_else(|| stated_title(&self.title))
+            // Prefer an OSC title that still carries `user@host:path` so Tab
+            // chips can show the directory basename. A seeded bare identity
+            // used to win unconditionally and hid the path after direct /
+            // Native SSH login. Path-only OSC 0 still must not displace the
+            // seeded identity — cwd (OSC 7 / PTY probe) covers that case.
+            match stated_title(&self.title) {
+                Some(title)
+                    if tty7_core::core::tab_view::identity_from_title(title).is_some() =>
+                {
+                    Some(title)
+                }
+                Some(_) | None => self
+                    .terminal_identity
+                    .as_deref()
+                    .or_else(|| stated_title(&self.title)),
+            }
         }
     }
 
@@ -1864,11 +1891,6 @@ impl TerminalView {
     }
 
     pub fn host_id(&self) -> crate::ui::host_ops::HostId {
-        if self.native_ssh_connected() {
-            return crate::ui::host_ops::HostId::from_connection_key(
-                &self.sftp_route_for_host().connection_key(),
-            );
-        }
         // Nested process-table ssh/jumper: key git status by the hop target so
         // it does not collide with this machine's repos under LOCAL.
         if let Some(ctx) = self.remote_context()
@@ -1878,6 +1900,22 @@ impl TerminalView {
                 "shell-ssh:{}",
                 ctx.target
             ));
+        }
+        // Interactive hop inside Native SSH: process table still reports
+        // NativeSsh, but Tab/git describe the inner box — key off the chip
+        // identity the OSC hop planted.
+        if self.last_ssh_command.is_some()
+            && self.ssh_spec.is_some()
+            && let Some(identity) = self.terminal_identity.as_deref()
+        {
+            return crate::ui::host_ops::HostId::from_connection_key(&format!(
+                "shell-ssh:{identity}"
+            ));
+        }
+        if self.native_ssh_connected() {
+            return crate::ui::host_ops::HostId::from_connection_key(
+                &self.sftp_route_for_host().connection_key(),
+            );
         }
         self.host_id
     }
@@ -1976,10 +2014,21 @@ impl TerminalView {
         cwd_is_on_host(!self.paths_are_local(), self.host_id().is_local())
     }
 
-    /// Process-table nested `ssh` / jumper (no SFTP / `Host::git` to the hop).
+    /// Process-table nested `ssh` / jumper (no SFTP / `Host::git` to the hop),
+    /// or an interactive hop inside Native SSH tracked via OSC 133;C
+    /// (`last_ssh_command`) — process table cannot see past the tunnel.
     fn is_nested_shell_ssh(&self) -> bool {
-        self.remote_context()
+        if self
+            .remote_context()
             .is_some_and(|c| c.kind == crate::daemon::protocol::RemoteKind::Ssh)
+        {
+            return true;
+        }
+        self.last_ssh_command.is_some()
+            && self.ssh_spec.is_some()
+            && self
+                .remote_context()
+                .is_some_and(|c| c.kind == crate::daemon::protocol::RemoteKind::NativeSsh)
     }
 
     pub fn agent(&self) -> Option<crate::core::cli_agent::CLIAgent> {
@@ -2155,6 +2204,20 @@ impl TerminalView {
         self.ssh_spec.clone()
     }
 
+    /// Interactive `ssh …` line still running (OSC 133;C), used to clone a
+    /// nested hop when the process table only sees Native SSH.
+    pub fn nested_ssh_command(&self) -> Option<String> {
+        self.last_ssh_command.clone()
+    }
+
+    /// Far-side argv for a process-table nested `ssh` / jumper hop.
+    pub fn nested_ssh_argv(&self) -> Option<Vec<String>> {
+        self.remote_context().and_then(|ctx| {
+            (ctx.kind == crate::daemon::protocol::RemoteKind::Ssh && !ctx.argv.is_empty())
+                .then_some(ctx.argv)
+        })
+    }
+
     pub fn ssh_phase(&self) -> Option<crate::daemon::protocol::SshPhase> {
         self.terminal.ssh_phase()
     }
@@ -2300,11 +2363,21 @@ impl TerminalView {
                 self.poll_history_probe(cx);
                 self.poll_git_probe(cx);
                 self.sync_identity_with_remote(cx);
-                // Nested hop cwd arrives as DaemonMsg::Cwd → Wakeup; do not wait
-                // for the 300 ms poll_foreground tick to track it for tab/git.
-                if self.is_nested_shell_ssh() {
+                // Nested hop: cwd may arrive as DaemonMsg::Cwd (OSC 7) — or not,
+                // when the far shell has no integration. Either way, Edge-refresh
+                // so the PTY `pwd`+git dump plants Tab chip data without waiting
+                // for the 300 ms poll_foreground tick.
+                //
+                // Direct Native SSH with a seeded identity but no OSC 7 yet gets
+                // the same dump: otherwise the chip stays bare `user@host` and
+                // never shows the working directory.
+                if self.is_nested_shell_ssh()
+                    || (self.native_ssh_connected() && self.cwd().is_none())
+                {
                     let cwd = self.cwd();
-                    if cwd.as_ref() != self.git_status_cwd.as_ref() {
+                    let needs_probe = cwd.as_ref() != self.git_status_cwd.as_ref()
+                        || (cwd.is_none() && !self.terminal.git_probe_pipe().is_active());
+                    if needs_probe {
                         self.refresh_git_status(cwd, GitRefresh::Edge, cx);
                     }
                 }
@@ -2321,6 +2394,15 @@ impl TerminalView {
             AlacEvent::Title(title) => {
                 if let Some(identity) = tty7_core::core::tab_view::identity_from_title(&title) {
                     self.set_terminal_identity(identity, cx);
+                } else if self.terminal_identity.is_some()
+                    && self.cwd().is_none()
+                    && looks_like_osc_cwd_path(title.trim())
+                {
+                    // oh-my-zsh termsupport often emits path-only OSC 0 while
+                    // identity is already seeded. Plant it as cwd so Tab chips
+                    // show the basename without waiting for a separate OSC 7.
+                    self.terminal
+                        .set_foreground_cwd(Some(std::path::PathBuf::from(title.trim())));
                 }
                 self.set_title_when_settled(title, cx);
             }
@@ -2645,9 +2727,9 @@ impl TerminalView {
     fn finish_zmodem(&mut self, action: super::zmodem::ZmodemUiAction, cx: &mut Context<Self>) {
         use super::zmodem::{ZmodemUiAction, cancel_sequence};
 
-        // Picker may have cleared NSApp appearance; put theme chrome back even
-        // when the dialog was abandoned via timeout / Ctrl-C.
-        crate::ui::theme::end_system_file_dialog_appearance(cx);
+        // Do NOT restore NSApp appearance here while a picker may still be
+        // open — that re-forces DarkAqua onto the live NSOpenPanel (flash →
+        // black). Only the picker begin/end pair owns appearance.
         self.zmodem = None;
         self.zmodem_picker_open = false;
         let pipe = self.terminal.zmodem_pipe();
@@ -4495,35 +4577,51 @@ impl TerminalView {
 
         let changed = self.git_status_cwd != cwd;
         self.git_status_cwd = cwd.clone();
-        let Some(cwd) = cwd else {
-            if changed {
-                cx.notify();
-            }
-            return;
-        };
         let id = self.host_id();
 
         // Nested ssh/jumper: no Host to the hop — probe via PTY divert.
-        if self.is_nested_shell_ssh() {
+        // Even with no OSC 7 cwd yet, still arm the dump: the script prints
+        // `pwd` first so Tab chips get a path without far-side shell integration.
+        //
+        // Direct Native SSH with no cwd yet uses the same dump so a seeded
+        // `user@host` chip is not stuck without a directory forever.
+        if self.is_nested_shell_ssh()
+            || (self.native_ssh_connected() && cwd.is_none())
+        {
             if !self.can_start_pty_git_probe() {
                 if changed {
                     cx.notify();
                 }
                 return;
             }
+            let probe_cwd = cwd
+                .clone()
+                .unwrap_or_else(|| std::path::PathBuf::from("."));
             cx.default_global::<GitStatusCache>();
             let claimed = cx.update_global::<GitStatusCache, _>(|cache, _| match trigger {
-                GitRefresh::Edge => cache.begin_probe(id, &cwd),
+                GitRefresh::Edge => cache.begin_probe(id, &probe_cwd),
                 GitRefresh::Opportunistic => {
-                    cache.begin_probe_throttled(id, &cwd, OPPORTUNISTIC_GIT_GAP)
+                    if cwd.is_none() {
+                        // No cwd yet — only Edge (hop / prompt) may discover it.
+                        false
+                    } else {
+                        cache.begin_probe_throttled(id, &probe_cwd, OPPORTUNISTIC_GIT_GAP)
+                    }
                 }
             });
             if !claimed {
                 return;
             }
-            self.start_pty_git_probe(cwd, id, cx);
+            self.start_pty_git_probe(probe_cwd, id, cx);
             return;
         }
+
+        let Some(cwd) = cwd else {
+            if changed {
+                cx.notify();
+            }
+            return;
+        };
 
         let Some(host) = self.host(cx) else {
             if changed {
@@ -4630,13 +4728,28 @@ impl TerminalView {
         let Some(dump) = pipe.take_if_complete() else {
             return;
         };
-        let Some(cwd) = self.git_status_cwd.clone() else {
+        let id = self.host_id();
+        let Some(env) = super::git_probe::parse_env_probe_dump(&dump) else {
+            // Framed junk / incomplete — release the placeholder probe slot.
+            if let Some(cwd) = self.git_status_cwd.clone() {
+                cx.update_global::<GitStatusCache, _>(|cache, _| {
+                    let _ = cache.finish_probe(id, &cwd, None);
+                });
+            }
+            cx.notify();
             return;
         };
-        let id = self.host_id();
-        let snapshot = super::git_probe::parse_git_probe_dump(&dump);
+        if let Some(pwd) = env.cwd.clone() {
+            // Plant Tab/Info cwd without waiting for far-side OSC 7.
+            self.terminal.set_foreground_cwd(Some(pwd.clone()));
+            self.git_status_cwd = Some(pwd);
+        }
+        let Some(cwd) = self.git_status_cwd.clone() else {
+            cx.notify();
+            return;
+        };
         let rerun = cx.update_global::<GitStatusCache, _>(|cache, _| {
-            cache.finish_probe(id, &cwd, snapshot)
+            cache.finish_probe(id, &cwd, env.snapshot)
         });
         if rerun && self.git_status_cwd.as_deref() == Some(cwd.as_path()) {
             self.refresh_git_status(Some(cwd), GitRefresh::Edge, cx);
@@ -12981,6 +13094,8 @@ mod gpui_tests {
 
         let mut dump = Vec::new();
         dump.extend_from_slice(super::super::git_probe::BEGIN_MARK);
+        dump.extend_from_slice(b"\n/home/carol/src/app\n");
+        dump.extend_from_slice(super::super::git_probe::SEP_MARK);
         dump.extend_from_slice(b"\n/home/carol/src/app\n/home/carol/src/app/.git\n/home/carol/src/app/.git\n");
         dump.extend_from_slice(super::super::git_probe::SEP_MARK);
         dump.extend_from_slice(b"\nfeat/x\n");

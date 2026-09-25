@@ -12,10 +12,10 @@ use gpui_component::{ActiveTheme as _, Icon, IconName, Selectable as _, Sizable 
 use unicode_segmentation::UnicodeSegmentation as _;
 
 use crate::core::actions::{
-    CloseActiveTab, CloseOtherTabs, CloseTabsToTheRight, CopyAgentSessionId, CopyWorkingDirectory,
-    ForkAgentSession, MarkTabUnread, NewWorktreeTab, OpenSettings, RenameTab, SelectWorkspace1,
-    SelectWorkspace2, SelectWorkspace3, SelectWorkspace4, SelectWorkspace5, SelectWorkspace6,
-    SelectWorkspace7, SelectWorkspace8, SelectWorkspace9, SplitDown, SplitRight, TogglePalette,
+    CloseActiveTab, CloseOtherTabs, CloseTabsToTheRight, CopyAgentSessionId, CopyTab,
+    CopyWorkingDirectory, ForkAgentSession, MarkTabUnread, NewWorktreeTab, OpenSettings, RenameTab,
+    SelectWorkspace1, SelectWorkspace2, SelectWorkspace3, SelectWorkspace4, SelectWorkspace5,
+    SelectWorkspace6, SelectWorkspace7, SelectWorkspace8, SelectWorkspace9, TogglePalette,
 };
 use crate::core::config::{Config, RightPanelTab, SidebarGrouping};
 use crate::core::group_key::GroupKey;
@@ -166,12 +166,23 @@ pub(crate) fn label_of(
     };
     match view.label() {
         TabLabel::Named(name) => name.to_string(),
-        // Prefer the stable `user@host` identity when the OSC title still
-        // carries a path suffix (`user@host:~/dir`). Stripping to the path was
-        // the pre-identity behaviour; tab chips and the switcher now keep the
-        // same identity the shell integration reports.
+        // Direct / Native SSH seed `user@host` as Osc before OSC 7 lands.
+        // That must NOT hide the working directory once we know it: chip is
+        // the path basename; hover keeps the abbreviated absolute path (and
+        // identity when the raw title still carried one). Bare identity with
+        // no cwd yet still names the chip so a dialling tab is not blank.
         TabLabel::Osc(title) => match tty7_core::core::tab_view::identity_from_title(title) {
-            Some(identity) => identity,
+            Some(identity) => {
+                let path = strip_host_prefix(title.trim());
+                let path = path.trim();
+                if !path.is_empty() && path != title.trim() {
+                    return shortened(path);
+                }
+                if let Some(cwd) = view.cwd.as_deref().map(str::trim).filter(|c| !c.is_empty()) {
+                    return shortened(cwd);
+                }
+                identity
+            }
             None => shortened(title),
         },
         TabLabel::Agent(agent) => agent.display_name().to_string(),
@@ -197,31 +208,41 @@ fn tooltip_of(
 ) -> Option<SharedString> {
     use crate::ui::machine_mirror::TabLabel;
 
-    // The other rungs are never shortened: a given name and a process name are
-    // printed whole, and an agent's is a word. An identity Osc title is also
-    // shown whole on the chip — hover then offers the path suffix when the
-    // raw title still carried one.
-    let raw = match view.label() {
-        TabLabel::Osc(title) => title,
-        TabLabel::Cwd(cwd) => cwd,
-        _ => return None,
-    };
+    // Named / agent / process chips are never shortened. Osc and Cwd are: the
+    // chip is a basename (or bare identity while cwd is still unknown).
     let label = label_of(view, index, home);
-    if tty7_core::core::tab_view::identity_from_title(raw).as_deref() == Some(label.as_str()) {
-        let path = strip_host_prefix(raw.trim());
-        let path = path.trim();
-        if path.is_empty() || path == raw.trim() {
-            return None;
+    let path_for_tooltip: Option<&str> = match view.label() {
+        TabLabel::Osc(title) => {
+            let after = strip_host_prefix(title.trim());
+            let after = after.trim();
+            if !after.is_empty() && after != title.trim() {
+                // `user@host:path` — path suffix for hover.
+                Some(after)
+            } else if tty7_core::core::tab_view::identity_from_title(title).is_some() {
+                // Bare `user@host` Osc with a real cwd — chip used cwd basename.
+                view.cwd.as_deref().map(str::trim).filter(|c| !c.is_empty())
+            } else {
+                // Path-only Osc title (no identity) — the chip shortened it.
+                Some(title.trim()).filter(|c| !c.is_empty())
+            }
         }
-        let full = abbreviate_home(path, home);
-        if full.trim().is_empty() || full.as_ref() == label.as_str() {
-            return None;
-        }
-        return Some(SharedString::from(full.into_owned()));
-    }
-    let full = abbreviate_home(raw.trim(), home);
+        TabLabel::Cwd(cwd) => Some(cwd),
+        _ => None,
+    };
+    let Some(path) = path_for_tooltip else {
+        return None;
+    };
+    let full = abbreviate_home(path, home);
     if full.trim().is_empty() || full.as_ref() == label.as_str() {
         return None;
+    }
+    // When the chip dropped a `user@host` identity to show the folder name,
+    // put the identity back on hover so the hop is still discoverable.
+    if let TabLabel::Osc(title) = view.label()
+        && let Some(identity) = tty7_core::core::tab_view::identity_from_title(title)
+        && identity != label
+    {
+        return Some(SharedString::from(format!("{identity}:{full}")));
     }
     Some(SharedString::from(full.into_owned()))
 }
@@ -1740,34 +1761,16 @@ impl Tty7App {
             }));
         }
 
-        menu = menu
-            .separator()
-            .item(
-                PopupMenuItem::new(t(L10nKey::AppMenuSplitRight))
-                    .action(Box::new(SplitRight))
-                    .on_click({
-                        let app = app.clone();
-                        move |_, window, cx| {
-                            let _ = app.update(cx, |this, cx| {
-                                this.activate(index, window, cx);
-                                this.split(Axis::Horizontal, window, cx);
-                            });
-                        }
-                    }),
-            )
-            .item(
-                PopupMenuItem::new(t(L10nKey::AppMenuSplitDown))
-                    .action(Box::new(SplitDown))
-                    .on_click({
-                        let app = app.clone();
-                        move |_, window, cx| {
-                            let _ = app.update(cx, |this, cx| {
-                                this.activate(index, window, cx);
-                                this.split(Axis::Vertical, window, cx);
-                            });
-                        }
-                    }),
-            );
+        menu = menu.separator().item(
+            PopupMenuItem::new(t(L10nKey::AppMenuCopyTab))
+                .action(Box::new(CopyTab))
+                .on_click({
+                    let app = app.clone();
+                    move |_, window, cx| {
+                        let _ = app.update(cx, |this, cx| this.copy_tab(index, window, cx));
+                    }
+                }),
+        );
 
         menu = menu.separator().item(
             PopupMenuItem::new(t(L10nKey::AppMenuCopyWorkingDirectory))
@@ -3136,13 +3139,24 @@ mod tests {
             Some("~/repo")
         );
 
-        // A shell integration title that still carries `user@host:path` keeps
-        // the identity on the chip; hover spells the path.
+        // A shell integration title that still carries `user@host:path` shows
+        // the path basename on the chip; hover restores identity + path.
         titled.osc_title = Some("me@box:/Users/x/repo".into());
-        assert_eq!(label_of(&titled, 0, Some(home())), "me@box");
+        assert_eq!(label_of(&titled, 0, Some(home())), "repo");
         assert_eq!(
             tooltip_of(&titled, 0, Some(home())).as_deref(),
-            Some("~/repo")
+            Some("me@box:~/repo")
+        );
+
+        // Bare identity Osc with a separate cwd — direct/Native SSH after
+        // OSC 7 — must name the chip after the folder, not hide the directory.
+        let mut seeded = strip_tab();
+        seeded.osc_title = Some("deploy@box".into());
+        seeded.cwd = Some("/Users/x/repo/app".into());
+        assert_eq!(label_of(&seeded, 0, Some(home())), "app");
+        assert_eq!(
+            tooltip_of(&seeded, 0, Some(home())).as_deref(),
+            Some("deploy@box:~/repo/app")
         );
     }
 

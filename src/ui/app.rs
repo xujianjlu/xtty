@@ -41,6 +41,7 @@ use crate::ui::settings::{Recording, SettingsSection, SettingsState, ThemeEditor
 use crate::ui::theme::{apply_theme, set_menus};
 
 /// What to start in a pane that is about to be opened.
+#[derive(Clone)]
 pub(crate) enum SpawnAs {
     /// A local shell; `None` is whatever the default one is.
     Shell(Option<ShellSpec>),
@@ -3905,9 +3906,8 @@ impl Tty7App {
     }
 
     /// `spawn` of `None` is what ⌘D has always done: copy the pane being split
-    /// — same shell, or the same host dialled again. A `Some` names the new
-    /// pane outright, which is how a row taken out of the new-tab menu with ⌥
-    /// held lands beside the current pane instead of in a tab of its own.
+    /// — same shell / Native host / shell-ssh hop, landing in the same cwd when
+    /// known. A `Some` names the new pane outright (new-tab menu ⌥ → split).
     pub(crate) fn split_into(
         &mut self,
         axis: Axis,
@@ -3925,18 +3925,22 @@ impl Tty7App {
         if !self.guard_local_spawn(window, cx) {
             return;
         }
-        let cwd = target.read(cx).spawnable_cwd();
-        let spawn = match spawn {
-            Some(spawn) => spawn,
-            // A stored spec is resolved against the saved host before it is
-            // dialled; one handed in by a caller was just built from that host
-            // and needs no second pass.
-            None => match target.read(cx).ssh_spec() {
-                Some(spec) => {
-                    SpawnAs::Ssh(crate::ui::ssh_connect::resolve_persisted_ssh_spec(spec, cx))
-                }
-                None => SpawnAs::Shell(target.read(cx).shell_spec()),
-            },
+        let (spawn, cwd, follow_up) = match spawn {
+            Some(spawn) => {
+                // Explicit menu spawn: keep prior cwd inheritance for local shells.
+                let cwd = target.read(cx).spawnable_cwd();
+                (spawn, cwd, Vec::new())
+            }
+            None => {
+                let plan = crate::ui::pane_clone::plan_for(target.read(cx));
+                let spawn = match plan.spawn {
+                    SpawnAs::Ssh(spec) => {
+                        SpawnAs::Ssh(crate::ui::ssh_connect::resolve_persisted_ssh_spec(spec, cx))
+                    }
+                    other => other,
+                };
+                (spawn, plan.cwd, plan.follow_up)
+            }
         };
         let new = match spawn {
             SpawnAs::Ssh(spec) => {
@@ -3978,6 +3982,7 @@ impl Tty7App {
                 }
             }
         };
+        self.apply_clone_follow_up(&new, &follow_up, window, cx);
         if let Some(tab) = self.tabs.get_mut(self.active) {
             if tab
                 .pane
@@ -3989,6 +3994,108 @@ impl Tty7App {
                 cx.notify();
             }
         }
+    }
+
+    /// New tab that reconnects like `index`'s focused pane (Copy Tab).
+    pub(crate) fn copy_tab(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(source) = self
+            .tabs
+            .get(index)
+            .and_then(|t| t.pane.focused_or_first(window, cx))
+        else {
+            return;
+        };
+        if !self.guard_local_spawn(window, cx) {
+            return;
+        }
+        let plan = crate::ui::pane_clone::plan_for(source.read(cx));
+        let spawn = match plan.spawn {
+            SpawnAs::Ssh(spec) => {
+                SpawnAs::Ssh(crate::ui::ssh_connect::resolve_persisted_ssh_spec(spec, cx))
+            }
+            other => other,
+        };
+        let group = self.spawn_group(plan.cwd.as_deref(), cx);
+        let tab_slot = match spawn {
+            SpawnAs::Ssh(spec) => {
+                match new_terminal_native(self.font_size, plan.cwd.clone(), spec, window, cx) {
+                    Ok(view) => PaneSlot::Ready(view),
+                    Err(e) => {
+                        log::error!("copy tab native SSH spawn failed: {e}");
+                        window.push_notification(
+                            t_fmt(
+                                L10nKey::AppSshConnectionFailed,
+                                &[("error", &e.to_string())],
+                            ),
+                            cx,
+                        );
+                        return;
+                    }
+                }
+            }
+            SpawnAs::Shell(shell) => {
+                match new_terminal(
+                    self.window_workspace(cx),
+                    Some(self.workspace),
+                    self.font_size,
+                    plan.cwd.clone(),
+                    None,
+                    shell,
+                    window,
+                    cx,
+                ) {
+                    Ok(view) => view,
+                    Err(e) => {
+                        log::error!("copy tab spawn failed: {e}");
+                        window.push_notification(
+                            t_fmt(L10nKey::AppOpenTerminalFailed, &[("error", &e.to_string())]),
+                            cx,
+                        );
+                        return;
+                    }
+                }
+            }
+        };
+        self.apply_clone_follow_up(&tab_slot, &plan.follow_up, window, cx);
+        self.remember_active_pane(window, cx);
+        self.maximized = None;
+        let insert_at = self.new_tab_insert_at(cx);
+        let new_tab = Tab::new(Pane::leaf(tab_slot));
+        if let Some(group) = group {
+            *new_tab.sidebar_group.borrow_mut() = group;
+        }
+        self.tabs.insert(insert_at, new_tab);
+        self.active = insert_at;
+        self.focus_active(window, cx);
+        self.save_session(cx);
+        cx.notify();
+    }
+
+    fn apply_clone_follow_up(
+        &self,
+        slot: &PaneSlot,
+        follow_up: &[String],
+        window: &Window,
+        cx: &App,
+    ) {
+        if follow_up.is_empty() {
+            return;
+        }
+        let Some(view) = slot.terminal() else {
+            return;
+        };
+        for line in follow_up {
+            if line.is_empty() {
+                continue;
+            }
+            view.read(cx).run_command_line(line);
+        }
+        let _ = window;
     }
 
     fn close_pane(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -5524,6 +5631,7 @@ impl Tty7App {
             CloseOtherTabs => self.close_other_tabs(self.active, window, cx),
             CloseTabsToTheRight => self.close_tabs_right_of(self.active, window, cx),
             CopyWorkingDirectory => self.copy_active_cwd(window, cx),
+            CopyTab => self.copy_tab(self.active, window, cx),
             MarkTabUnread => self.mark_tab_unread(self.active, cx),
             ForkAgentSession => self.fork_active_pane_session(ForkPlacement::NewTab, window, cx),
             CopyAgentSessionId => self.copy_agent_session_id(self.active, window, cx),
@@ -8244,6 +8352,9 @@ impl Render for Tty7App {
                 }))
                 .on_action(cx.listener(|this, _: &CopyWorkingDirectory, window, cx| {
                     this.copy_active_cwd(window, cx)
+                }))
+                .on_action(cx.listener(|this, _: &CopyTab, window, cx| {
+                    this.copy_tab(this.active, window, cx)
                 }))
                 .on_action(cx.listener(|this, _: &MarkTabUnread, _window, cx| {
                     this.mark_tab_unread(this.active, cx)

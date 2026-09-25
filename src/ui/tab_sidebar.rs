@@ -508,26 +508,67 @@ impl Tty7App {
                         // `label_of` would have cut down rather than the cut.
                         use crate::ui::machine_mirror::TabLabel;
                         let (view, home) = tab.label_view(Some(window), cx);
-                        let raw = match view.label() {
+                        // Strip chip policy: path-shaped names are basename-only.
+                        // The sidebar still keeps the home-abbreviated absolute
+                        // path as `full_title` so the expand card / hover can
+                        // spell the whole location — only the row text is cut.
+                        let (raw, full_path) = match view.label() {
                             TabLabel::Osc(title) => {
                                 match tty7_core::core::tab_view::identity_from_title(title) {
-                                    Some(identity) => identity,
-                                    None => abbreviate_home(
-                                        strip_host_prefix(title.trim()),
-                                        home.as_deref(),
-                                    )
-                                    .into_owned(),
+                                    Some(identity) => {
+                                        let path = strip_host_prefix(title.trim());
+                                        let path = path.trim();
+                                        let cwd_path = if !path.is_empty() && path != title.trim()
+                                        {
+                                            Some(path.to_string())
+                                        } else {
+                                            view.cwd.clone().filter(|c| !c.trim().is_empty())
+                                        };
+                                        match cwd_path {
+                                            Some(p) => {
+                                                let full = abbreviate_home(
+                                                    &p,
+                                                    home.as_deref(),
+                                                )
+                                                .into_owned();
+                                                let leaf = crate::ui::tab_strip::short_title(
+                                                    &p,
+                                                    home.as_deref(),
+                                                );
+                                                (leaf, Some(full))
+                                            }
+                                            None => (identity, None),
+                                        }
+                                    }
+                                    None => {
+                                        let full = abbreviate_home(
+                                            strip_host_prefix(title.trim()),
+                                            home.as_deref(),
+                                        )
+                                        .into_owned();
+                                        let leaf = crate::ui::tab_strip::short_title(
+                                            title,
+                                            home.as_deref(),
+                                        );
+                                        (leaf, Some(full))
+                                    }
                                 }
                             }
                             TabLabel::Cwd(title) => {
-                                abbreviate_home(strip_host_prefix(title.trim()), home.as_deref())
-                                    .into_owned()
+                                let full = abbreviate_home(
+                                    strip_host_prefix(title.trim()),
+                                    home.as_deref(),
+                                )
+                                .into_owned();
+                                let leaf =
+                                    crate::ui::tab_strip::short_title(title, home.as_deref());
+                                (leaf, Some(full))
                             }
-                            TabLabel::Agent(agent) => agent.display_name().to_string(),
+                            TabLabel::Agent(agent) => (agent.display_name().to_string(), None),
                             // A tab holding a name got one above.
-                            TabLabel::Named(name) => name.to_string(),
-                            TabLabel::Process(title) => title.to_string(),
-                            TabLabel::Unknown => String::new(),
+                            TabLabel::Named(name) => (name.to_string(), None),
+                            TabLabel::Process(title) => (title.to_string(), None),
+                            TabLabel::Unknown => (String::new(), None),
                         };
                         if raw.trim().is_empty() {
                             // Nothing to expand: the row is naming an unnamed
@@ -538,8 +579,12 @@ impl Tty7App {
                             ));
                             (placeholder, None)
                         } else {
-                            let full = SharedString::from(raw);
-                            (full.clone(), Some(full))
+                            let shown = SharedString::from(raw);
+                            let full = full_path
+                                .filter(|p| p.trim() != shown.as_ref())
+                                .map(SharedString::from)
+                                .or_else(|| Some(shown.clone()));
+                            (shown, full)
                         }
                     };
                 let mut branch_shown: Option<(SharedString, SharedString, u32, u32)> = None;

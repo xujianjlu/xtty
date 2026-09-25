@@ -4,6 +4,7 @@ use gpui::{
 };
 use gpui_component::scroll::ScrollbarShow;
 use gpui_component::{ActiveTheme, Theme, ThemeMode};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::core::actions::*;
 use crate::core::config::Config;
@@ -379,9 +380,12 @@ impl gpui::Global for StockUiFont {}
 
 pub(crate) fn apply_theme(mut window: Option<&mut Window>, cx: &mut App) {
     let follow = cx.global::<Config>().theme_follow_system;
-    if follow {
+    let hold_system = system_file_dialog_holds_appearance();
+    if follow || hold_system {
         sync_native_appearance(None);
-        refresh_system_appearance(cx);
+        if follow {
+            refresh_system_appearance(cx);
+        }
     }
     let theme = presets::by_id(cx, &effective_preset_id(cx));
     // Cache the mode beside the machine tree: the daemon is a separate process
@@ -406,7 +410,7 @@ pub(crate) fn apply_theme(mut window: Option<&mut Window>, cx: &mut App) {
         .or(theme.opacity)
         .unwrap_or(default_opacity);
     let opacity = (opacity < 1.0).then_some(opacity);
-    if !follow {
+    if !follow && !hold_system {
         sync_native_appearance(Some(theme.dark));
     }
     let m = theme.neutrals();
@@ -746,13 +750,30 @@ pub(crate) fn apply_cursor_hide_mode(cx: &mut App) {
 /// Clear any forced app appearance so macOS `NSOpenPanel` / `NSSavePanel`
 /// render with the system Finder chrome (not our theme's DarkAqua sheet).
 ///
-/// Pair with [`end_system_file_dialog_appearance`] after the dialog closes.
+/// Nested with a depth counter so `apply_theme` / `finish_zmodem` cannot
+/// re-force DarkAqua while the panel is still up (the "flash native, then
+/// black sheet" regression). Pair every [`begin_system_file_dialog_appearance`]
+/// with [`end_system_file_dialog_appearance`].
+static SYSTEM_FILE_DIALOG_DEPTH: AtomicUsize = AtomicUsize::new(0);
+
 pub(crate) fn begin_system_file_dialog_appearance() {
+    SYSTEM_FILE_DIALOG_DEPTH.fetch_add(1, Ordering::SeqCst);
     sync_native_appearance(None);
 }
 
 /// Restore the theme-driven native appearance after a system file dialog.
 pub(crate) fn end_system_file_dialog_appearance(cx: &App) {
+    let prev = SYSTEM_FILE_DIALOG_DEPTH.fetch_sub(1, Ordering::SeqCst);
+    if prev == 0 {
+        // Unbalanced end — do not underflow; keep depth at 0.
+        SYSTEM_FILE_DIALOG_DEPTH.store(0, Ordering::SeqCst);
+        return;
+    }
+    if prev > 1 {
+        // Another dialog still open — stay on system appearance.
+        sync_native_appearance(None);
+        return;
+    }
     let follow = cx.global::<Config>().theme_follow_system;
     if follow {
         sync_native_appearance(None);
@@ -760,6 +781,10 @@ pub(crate) fn end_system_file_dialog_appearance(cx: &App) {
     }
     let theme = presets::by_id(cx, &effective_preset_id(cx));
     sync_native_appearance(Some(theme.dark));
+}
+
+fn system_file_dialog_holds_appearance() -> bool {
+    SYSTEM_FILE_DIALOG_DEPTH.load(Ordering::SeqCst) > 0
 }
 
 fn sync_native_appearance(dark: Option<bool>) {

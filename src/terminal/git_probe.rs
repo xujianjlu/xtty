@@ -1,9 +1,10 @@
-//! PTY `git` status dump for nested `ssh` / jumper hops.
+//! PTY env dump for nested `ssh` / jumper hops: far-side `pwd` + git status.
 //!
-//! Process-table nested SSH has no `Host` / SFTP to the inner box. Native SSH
-//! probes via `Host::git`; here we inject a quiet framed dump into the PTY
-//! (same divert pattern as [`super::history_probe`]), parse it into a
-//! [`RepoSnapshot`], and never scrape branch / dirty state from PS1.
+//! Process-table nested SSH has no `Host` / SFTP to the inner box, and the far
+//! shell may lack OSC 7 / shell integration. Native SSH probes via `Host::git`
+//! and OSC; here we inject a quiet framed dump into the PTY (same divert
+//! pattern as [`super::history_probe`]), plant Tab cwd from `pwd`, parse git
+//! into a [`RepoSnapshot`], and never scrape branch / dirty state from PS1.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -100,15 +101,26 @@ impl GitProbePipe {
     }
 }
 
-/// Bytes written to the PTY to dump remote `git` identity + diff counts.
+/// Result of one nested-hop PTY env dump: far `pwd` (always when framed) plus
+/// optional git snapshot when the hop sits inside a work tree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct EnvProbeResult {
+    pub cwd: Option<PathBuf>,
+    pub snapshot: Option<RepoSnapshot>,
+}
+
+/// Bytes written to the PTY to dump far-side `pwd` + optional `git` identity.
 ///
-/// Same shape as the Native / `Host::git` probe (`rev-parse` paths, branch,
-/// `diff --numstat HEAD`), framed so the divert pipe can hide the echo.
-/// `GIT_OPTIONAL_LOCKS=0` keeps the read path write-free (no index refresh).
+/// Layout (SEP-framed): `pwd`, then — when inside a work tree — the same
+/// `rev-parse` / branch / `diff --numstat HEAD` shape Native / `Host::git`
+/// uses. `pwd` lands even without shell integration or a repo, so Tab chips
+/// still get a cwd. `GIT_OPTIONAL_LOCKS=0` keeps the read path write-free.
 pub(crate) fn probe_command_bytes() -> Vec<u8> {
     let body = concat!(
         "set +o history 2>/dev/null || setopt HIST_NO_STORE 2>/dev/null; ",
         "printf '\\036TTY7_GIT_BEGIN\\036\\n'; ",
+        "{ pwd -P 2>/dev/null || pwd; }; ",
+        "printf '\\036TTY7_GIT_SEP\\036\\n'; ",
         "GIT_OPTIONAL_LOCKS=0; export GIT_OPTIONAL_LOCKS; ",
         "if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then ",
         "git rev-parse --path-format=absolute --show-toplevel --git-dir --git-common-dir 2>/dev/null; ",
@@ -125,41 +137,78 @@ pub(crate) fn probe_command_bytes() -> Vec<u8> {
     out
 }
 
-/// Parse a diverted dump into a [`RepoSnapshot`], or `None` when not in a repo
-/// / the frame is incomplete / junk-only (probe echo without markers).
-pub(crate) fn parse_git_probe_dump(dump: &[u8]) -> Option<RepoSnapshot> {
+/// Parse a diverted dump into cwd + optional [`RepoSnapshot`].
+///
+/// Returns `None` only when the frame markers are missing / junk-only. A
+/// framed dump with just `pwd` and no git sections is `Some` with
+/// `snapshot: None` — that is how Tab learns cwd on a host without a repo
+/// and without OSC 7.
+pub(crate) fn parse_env_probe_dump(dump: &[u8]) -> Option<EnvProbeResult> {
     let begin = find_subslice(dump, BEGIN_MARK)?;
     let end = find_subslice(dump, END_MARK)?;
     if end < begin + BEGIN_MARK.len() {
         return None;
     }
     let body = &dump[begin + BEGIN_MARK.len()..end];
-    // Outside a work tree the script prints only BEGIN…END — treat as "no repo".
     let parts: Vec<&[u8]> = split_on(body, SEP_MARK);
     if parts.is_empty() || parts.iter().all(|p| trim_ws(p).is_empty()) {
         return None;
     }
-    // Need paths + branch sections; numstat may be empty.
-    if parts.len() < 2 {
+    let cwd = lines_of(parts[0])
+        .into_iter()
+        .find(|s| !s.is_empty() && looks_like_path(s))
+        .map(PathBuf::from);
+    // parts[0] = pwd; parts[1]=git paths; parts[2]=branch; parts[3]=numstat
+    let snapshot = if parts.len() >= 3 {
+        parse_git_sections(&parts[1], &parts[2], parts.get(3).copied())
+    } else {
+        None
+    };
+    if cwd.is_none() && snapshot.is_none() {
         return None;
     }
-    let path_lines: Vec<&str> = lines_of(parts[0]);
-    let root = path_lines.first().filter(|s| !s.is_empty()).map(PathBuf::from)?;
+    Some(EnvProbeResult { cwd, snapshot })
+}
+
+/// Back-compat for callers that only want the git half.
+pub(crate) fn parse_git_probe_dump(dump: &[u8]) -> Option<RepoSnapshot> {
+    parse_env_probe_dump(dump)?.snapshot
+}
+
+fn parse_git_sections(
+    paths: &[u8],
+    branch_sec: &[u8],
+    numstat: Option<&[u8]>,
+) -> Option<RepoSnapshot> {
+    let path_lines: Vec<&str> = lines_of(paths);
+    let root = path_lines
+        .first()
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)?;
     let git_dir = path_lines.get(1).copied();
     let common = path_lines.get(2).copied();
     let home = repo_home_paths(&root, git_dir, common);
-    let branch = lines_of(parts[1])
+    let branch = lines_of(branch_sec)
         .into_iter()
         .find(|s| !s.is_empty())
         .filter(|s| !is_probe_junk(s))?
         .to_string();
-    let counts = parts.get(2).map(|p| sum_numstat(p));
+    let counts = numstat.map(sum_numstat);
     Some(RepoSnapshot {
         root,
         home,
         branch,
         counts,
     })
+}
+
+fn looks_like_path(s: &str) -> bool {
+    s.starts_with('/')
+        || s.starts_with('~')
+        || (s.len() >= 3
+            && s.as_bytes()[0].is_ascii_alphabetic()
+            && s.as_bytes()[1] == b':'
+            && (s.as_bytes()[2] == b'\\' || s.as_bytes()[2] == b'/'))
 }
 
 fn repo_home_paths(root: &Path, git_dir: Option<&str>, common: Option<&str>) -> PathBuf {
@@ -210,6 +259,7 @@ fn is_probe_junk(line: &str) -> bool {
         || line.starts_with("git symbolic-ref")
         || line.starts_with("git diff")
         || line.starts_with("printf ")
+        || line.starts_with("pwd")
 }
 
 fn trim_ws(bytes: &[u8]) -> &[u8] {
@@ -262,13 +312,17 @@ mod tests {
     fn parse_work_tree_snapshot() {
         let mut body = Vec::new();
         body.extend_from_slice(b"/home/carol/src/app\n");
+        body.extend_from_slice(SEP_MARK);
+        body.extend_from_slice(b"\n/home/carol/src/app\n");
         body.extend_from_slice(b"/home/carol/src/app/.git\n");
         body.extend_from_slice(b"/home/carol/src/app/.git\n");
         body.extend_from_slice(SEP_MARK);
         body.extend_from_slice(b"\nfeat/x\n");
         body.extend_from_slice(SEP_MARK);
         body.extend_from_slice(b"\n3\t1\tsrc/main.rs\n0\t2\tREADME.md\n");
-        let snap = parse_git_probe_dump(&framed(&body)).expect("snapshot");
+        let env = parse_env_probe_dump(&framed(&body)).expect("env");
+        assert_eq!(env.cwd, Some(PathBuf::from("/home/carol/src/app")));
+        let snap = env.snapshot.expect("snapshot");
         assert_eq!(snap.root, PathBuf::from("/home/carol/src/app"));
         assert_eq!(snap.home, PathBuf::from("/home/carol/src/app"));
         assert_eq!(snap.branch, "feat/x");
@@ -279,13 +333,20 @@ mod tests {
     fn parse_linked_worktree_home() {
         let mut body = Vec::new();
         body.extend_from_slice(b"/home/carol/src/app/.wt/feat\n");
+        body.extend_from_slice(SEP_MARK);
+        body.extend_from_slice(b"\n/home/carol/src/app/.wt/feat\n");
         body.extend_from_slice(b"/home/carol/src/app/.git/worktrees/feat\n");
         body.extend_from_slice(b"/home/carol/src/app/.git\n");
         body.extend_from_slice(SEP_MARK);
         body.extend_from_slice(b"\nfeat/x\n");
         body.extend_from_slice(SEP_MARK);
         body.extend_from_slice(b"\n");
-        let snap = parse_git_probe_dump(&framed(&body)).expect("snapshot");
+        let env = parse_env_probe_dump(&framed(&body)).expect("env");
+        assert_eq!(
+            env.cwd,
+            Some(PathBuf::from("/home/carol/src/app/.wt/feat"))
+        );
+        let snap = env.snapshot.expect("snapshot");
         assert_eq!(snap.root, PathBuf::from("/home/carol/src/app/.wt/feat"));
         assert_eq!(snap.home, PathBuf::from("/home/carol/src/app"));
         assert_eq!(snap.branch, "feat/x");
@@ -293,13 +354,24 @@ mod tests {
     }
 
     #[test]
+    fn parse_pwd_only_without_repo() {
+        let mut body = Vec::new();
+        body.extend_from_slice(b"/home/carol\n");
+        body.extend_from_slice(SEP_MARK);
+        body.extend_from_slice(b"\n");
+        let env = parse_env_probe_dump(&framed(&body)).expect("pwd without git");
+        assert_eq!(env.cwd, Some(PathBuf::from("/home/carol")));
+        assert!(env.snapshot.is_none());
+    }
+
+    #[test]
     fn parse_empty_frame_is_not_a_repo() {
-        assert!(parse_git_probe_dump(&framed(b"\n")).is_none());
+        assert!(parse_env_probe_dump(&framed(b"\n")).is_none());
     }
 
     #[test]
     fn parse_rejects_unframed_junk() {
-        assert!(parse_git_probe_dump(b"git status\nOn branch main\n").is_none());
+        assert!(parse_env_probe_dump(b"git status\nOn branch main\n").is_none());
     }
 
     #[test]
