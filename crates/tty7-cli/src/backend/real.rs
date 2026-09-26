@@ -382,7 +382,7 @@ fn host_of(key: &str) -> Option<&str> {
 
 fn target_for(route: &RouteInfo) -> Result<RouteTarget> {
     let _ = route;
-    bail!("Native SSH machine links were removed — use OpenSSH hosts from the GUI")
+    bail!("SSH machine links are not a daemon route — open the host from the GUI")
 }
 
 #[cfg(test)]
@@ -456,7 +456,7 @@ mod tests {
         for name in ["me@build-box:22", "build-box", "web-box"] {
             let err = resolve_route(name, &routes).unwrap_err().to_string();
             assert!(
-                err.contains("Native SSH"),
+                err.contains("not a daemon route"),
                 "ssh machine links no longer resolve to a RouteTarget: {err}"
             );
         }

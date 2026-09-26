@@ -7,8 +7,11 @@ use gpui_component::button::{Button, ButtonCustomVariant, ButtonVariants as _};
 use gpui_component::input::Input;
 use gpui_component::kbd::Kbd;
 use gpui_component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenu, PopupMenuItem};
+use gpui_component::popover::{Popover, PopoverState};
 use gpui_component::tooltip::Tooltip;
-use gpui_component::{ActiveTheme as _, Icon, IconName, Selectable as _, Sizable as _, h_flex};
+use gpui_component::{
+    ActiveTheme as _, Icon, IconName, Selectable as _, Sizable as _, h_flex, v_flex,
+};
 use unicode_segmentation::UnicodeSegmentation as _;
 
 use crate::core::actions::{
@@ -46,6 +49,26 @@ fn shell_spec(shell: &DetectedShell) -> ShellSpec {
         args: shell.args.clone(),
         args_are_tty7_defaults: shell.args_are_tty7_defaults,
     }
+}
+
+/// The + menu names the shell Settings already picked, plus any
+/// `custom_shells` the user added. The rest of the inventory stays in the
+/// Settings picker — listing every `/bin/sh` cousin here just repeats that.
+fn menu_local_shells(
+    shells: &[DetectedShell],
+    default_name: &str,
+) -> Vec<(SharedString, ShellSpec)> {
+    let mut rows: Vec<_> = shells
+        .iter()
+        .filter(|shell| shell.user_authored || shell.label == default_name)
+        .map(|shell| (SharedString::from(shell.label.clone()), shell_spec(shell)))
+        .collect();
+    if rows.is_empty() {
+        if let Some(shell) = shells.first() {
+            rows.push((SharedString::from(shell.label.clone()), shell_spec(shell)));
+        }
+    }
+    rows
 }
 
 /// Shared with the switcher's tab column and the CLI, which name tabs of
@@ -739,44 +762,17 @@ pub(crate) fn chrome_tile_sized(
         .h(px(tile))
 }
 
-/// How many saved hosts the New Tab menu names.
-///
-/// Sorted by frecency, so the ones actually used are the ones that fit. A menu
-/// is not a search field — past a handful the list stops being scannable, and
-/// the command palette already lists every host and can filter. The row that
-/// closes the section is where the rest are.
-const MENU_HOSTS: usize = 6;
-
 /// How wide the New Tab menu is allowed to get.
 const MENU_W: Pixels = px(360.);
 
-/// How tall, before it starts scrolling.
-///
-/// Enough for the menu's own full hand — the nine shells a stock macOS box
-/// reports, both headings, [`MENU_HOSTS`] hosts and the two rows that close the
-/// list, at the 26px a row occupies — so the shape everyone actually sees
-/// arrives whole. Past that (a pile of custom shells) it scrolls, and it is
-/// capped again against the window in [`NewTabMenu::build`], since a menu taller
-/// than what it hangs off is worse than one that scrolls.
+/// How tall the whole + menu may grow. Hosts scroll inside
+/// [`HOST_LIST_H`] so the local shell and the footer stay put.
 const MENU_H: Pixels = px(560.);
 
-/// What the row closing the SSH section types into the palette for you.
-///
-/// Every saved host is a palette command titled `SSH: {name}`
-/// ([`L10nKey::AppCmdSshProfileTitle`], and the same in every language we
-/// ship), so this one word is the whole list, frecency-ordered, with the
-/// cursor left where the next keystroke narrows it further.
-///
-/// This is where filtering lives, and the reason the menu does not do any.
-/// A search field inside a [`PopupMenu`] is not possible — the menu holds the
-/// keyboard for its own navigation — and the branch that tried it had to
-/// become a popover carrying the palette's own list, which read as far too
-/// heavy hanging off a button in the chrome. The menu names the few worth
-/// naming; the palette, which already filters better than a menu could, holds
-/// the rest. This row is the seam between the two, and it only works if it
-/// lands in the palette *already filtered*: a row that says "all SSH hosts"
-/// and opens the unfiltered command list has made the reader ask twice.
-const PALETTE_SSH_QUERY: &str = "ssh";
+/// How many host rows fit before the card scrolls — about eight 30px
+/// rows plus a group label. The rest of the menu (local shell, heading,
+/// open button) stays outside this scroller.
+const HOST_LIST_H: Pixels = px(268.);
 
 /// How this platform spells the key that turns a New Tab row into a split.
 fn split_modifier() -> &'static str {
@@ -798,131 +794,361 @@ struct NewTabMenu {
     app: gpui::WeakEntity<Tty7App>,
     shells: Vec<(SharedString, ShellSpec)>,
     default_shell: SharedString,
-    /// Saved host, its display name, and the `user@host:port` beside it —
-    /// empty when the name already says it.
-    hosts: Vec<(uuid::Uuid, SharedString, SharedString)>,
+    /// Saved hosts grouped for the list, each row: id, name, endpoint note.
+    groups: Vec<(SharedString, Vec<(uuid::Uuid, SharedString, SharedString)>)>,
+    selected: std::collections::HashSet<uuid::Uuid>,
 }
 
 impl NewTabMenu {
-    fn build(&self, menu: PopupMenu, window: &Window) -> PopupMenu {
-        // Whatever [`MENU_H`] asks for, a menu still has to fit the window it
-        // hangs off — on a short one the list gives way, not the window.
-        //
-        // Measured off the viewport, not `window_bounds()`: that one answers
-        // "how should this window be reopened after it is closed", so on macOS
-        // a fullscreen window reports the small bounds it would restore to,
-        // not the screen it currently fills. A terminal spends much of its
-        // life fullscreen, and reading that would cap the menu at 80% of a
-        // window nobody is looking at — putting back the scrollbar and the
-        // cut-off `Local` this whole change is here to remove.
+    fn render(
+        &self,
+        state: &mut PopoverState,
+        window: &mut Window,
+        cx: &mut gpui::Context<PopoverState>,
+    ) -> impl IntoElement + use<> {
         let ceiling = MENU_H.min(window.viewport_size().height * 0.8);
-        let mut menu = menu
-            .min_w(px(240.))
-            // A menu is a list of names, not a place to read a full address.
-            // Left to itself the panel widens to its longest row — one saved
-            // host with a descriptive name and a long `user@host` drags every
-            // other row out with it and the menu stops looking like chrome.
+        let muted = cx.theme().muted_foreground;
+        let popover = cx.entity().downgrade();
+        let host_list_h = HOST_LIST_H.min((ceiling - px(160.)).max(px(120.)));
+        let mut col = v_flex()
+            .id("new-tab-menu-list")
+            .w(px(300.))
             .max_w(MENU_W)
-            // Shells are whatever this machine has plus whatever the user
-            // added by hand, so the row count has no ceiling. Past the height
-            // of the window an un-scrollable menu simply loses its last rows —
-            // and the last rows here are the SSH section.
-            .scrollable(true)
-            // Only the overflow case should scroll, and the default ceiling is
-            // too low to tell the two apart: a stock macOS box has nine shells,
-            // which with both headings, the hosts and the two closing rows
-            // already runs past `PopupMenu`'s built-in 450px. The menu would
-            // arrive scrolled on every machine, with `Local` cut off above.
-            .max_h(ceiling)
-            .item(PopupMenuItem::label(t(L10nKey::TabMenuLocalShells)));
-        for (label, spec) in &self.shells {
-            let spec = spec.clone();
-            let app = self.app.clone();
-            let row = if *label == self.default_shell {
-                let label = label.clone();
-                PopupMenuItem::element(move |_window, cx| {
-                    menu_row(label.clone(), t(L10nKey::ShellDefault).into(), cx)
-                })
-            } else {
-                PopupMenuItem::new(label.clone())
-            };
-            menu = menu.item(row.on_click(move |_, window, cx| {
-                let at = SpawnWhere::from_modifiers(window.modifiers());
-                if let Some(app) = app.upgrade() {
-                    app.update(cx, |this, cx| {
-                        this.open_shell(Some(spec.clone()), at, window, cx)
-                    });
-                }
-            }));
-        }
-        // No inventory yet — the machine has not answered, or this is a host
-        // that reports none. The default shell is still openable.
+            .max_h(ceiling);
+
+        col = col.child(menu_heading(t(L10nKey::TabMenuLocalShells), muted));
         if self.shells.is_empty() {
             let app = self.app.clone();
-            menu = menu.item(PopupMenuItem::new(t(L10nKey::AppMenuNewTab)).on_click(
-                move |_, window, cx| {
+            let popover = popover.clone();
+            col = col.child(menu_action_row(
+                t(L10nKey::AppMenuNewTab),
+                move |window, cx| {
                     let at = SpawnWhere::from_modifiers(window.modifiers());
                     if let Some(app) = app.upgrade() {
                         app.update(cx, |this, cx| this.open_shell(None, at, window, cx));
                     }
+                    dismiss_popover(&popover, window, cx);
                 },
             ));
-        }
-
-        menu = menu
-            .item(PopupMenuItem::separator())
-            .item(PopupMenuItem::label(t(L10nKey::CmdGroupSsh)));
-        for (id, name, endpoint) in &self.hosts {
-            let (id, name, endpoint) = (*id, name.clone(), endpoint.clone());
-            let app = self.app.clone();
-            // Every host row is a custom element, note or not: a plain item
-            // renders its label as bare text with nothing to elide against,
-            // and a host saved on its address alone is *named* `user@host:port`
-            // — the longest string in the menu, on the row least able to cut
-            // it. [`menu_row`] drops the right half when there is no note.
-            let row = PopupMenuItem::element(move |_window, cx| {
-                menu_row(name.clone(), endpoint.clone(), cx)
-            });
-            menu = menu.item(row.on_click(move |_, window, cx| {
-                let at = SpawnWhere::from_modifiers(window.modifiers());
-                if let Some(app) = app.upgrade() {
-                    app.update(cx, |this, cx| {
-                        this.connect_ssh_profile_at(id, at, window, cx)
-                    });
-                }
-            }));
-        }
-        // With no hosts saved, the row that closes the section is the one that
-        // gets you your first — the list of hosts is not somewhere to send
-        // someone who has none.
-        let app = self.app.clone();
-        let empty = self.hosts.is_empty();
-        let last = if empty {
-            L10nKey::TabMenuAddHost
         } else {
-            L10nKey::TabMenuAllHosts
-        };
-        menu = menu.item(PopupMenuItem::new(t(last)).on_click(move |_, window, cx| {
-            if let Some(app) = app.upgrade() {
-                app.update(cx, |this, cx| {
-                    if empty {
-                        this.open_new_ssh_host(window, cx);
-                    } else {
-                        this.open_palette(PALETTE_SSH_QUERY, window, cx);
+            for (label, spec) in &self.shells {
+                let spec = spec.clone();
+                let app = self.app.clone();
+                let popover = popover.clone();
+                let mark = if *label == self.default_shell && self.shells.len() > 1 {
+                    SharedString::from(t(L10nKey::ShellDefault))
+                } else {
+                    SharedString::from("")
+                };
+                col = col.child(menu_pick_row(label.clone(), mark, move |window, cx| {
+                    let at = SpawnWhere::from_modifiers(window.modifiers());
+                    if let Some(app) = app.upgrade() {
+                        app.update(cx, |this, cx| {
+                            this.open_shell(Some(spec.clone()), at, window, cx)
+                        });
                     }
-                });
+                    dismiss_popover(&popover, window, cx);
+                }));
             }
-        }));
+        }
 
-        // The one place ⌥ is spelled out. Nothing else in the app teaches it,
-        // and a modifier nobody is told about is a feature nobody has. No rule
-        // above it: a separator divides two lists of things to pick, and this
-        // is a footnote about the list it follows, not a section of its own.
-        menu.item(PopupMenuItem::label(t_fmt(
-            L10nKey::TabMenuSplitHint,
-            &[("key", split_modifier())],
-        )))
+        let host_n = self.groups.iter().map(|(_, hosts)| hosts.len()).sum::<usize>();
+        col = col.child(menu_sep()).child(
+            h_flex()
+                .w_full()
+                .items_center()
+                .px_2()
+                .pt_1()
+                .child(
+                    div()
+                        .flex_1()
+                        .text_xs()
+                        .text_color(muted)
+                        .child(t(L10nKey::CmdGroupSsh)),
+                )
+                .when(host_n > 0, |row| {
+                    row.child(
+                        div()
+                            .text_xs()
+                            .text_color(muted)
+                            .child(t_fmt(
+                                L10nKey::TabMenuHostCount,
+                                &[("count", &host_n.to_string())],
+                            )),
+                    )
+                }),
+        );
+        if self.groups.is_empty() {
+            let app = self.app.clone();
+            let popover = popover.clone();
+            col = col.child(menu_action_row(
+                t(L10nKey::TabMenuAddHost),
+                move |window, cx| {
+                    if let Some(app) = app.upgrade() {
+                        app.update(cx, |this, cx| this.open_new_ssh_host(window, cx));
+                    }
+                    dismiss_popover(&popover, window, cx);
+                },
+            ));
+        } else {
+            let mut card = v_flex()
+                .id("new-tab-host-list")
+                .w_full()
+                .max_h(host_list_h)
+                .overflow_y_scroll()
+                .rounded_md()
+                .bg(cx.theme().secondary)
+                .py_0p5();
+            for (group, hosts) in &self.groups {
+                if !group.is_empty() {
+                    card = card.child(
+                        div()
+                            .px_2()
+                            .pt_1()
+                            .pb_0p5()
+                            .text_xs()
+                            .text_color(muted)
+                            .child(group.clone()),
+                    );
+                }
+                for (id, name, endpoint) in hosts {
+                    let checked = self.selected.contains(id);
+                    card = card.child(self.host_row(
+                        *id,
+                        name.clone(),
+                        endpoint.clone(),
+                        checked,
+                        &popover,
+                        cx.theme().list_hover,
+                        cx,
+                    ));
+                }
+            }
+            col = col.child(div().px_2().pt_1().child(card));
+            let hint = t_fmt(L10nKey::TabMenuSplitHint, &[("key", split_modifier())]);
+            if self.selected.is_empty() {
+                col = col.child(
+                    div()
+                        .px_2()
+                        .pt_1()
+                        .text_xs()
+                        .text_color(muted)
+                        .child(hint),
+                );
+            } else {
+                let n = self.selected.len();
+                let selected = self.selected.clone();
+                let ids: Vec<uuid::Uuid> = self
+                    .groups
+                    .iter()
+                    .flat_map(|(_, hosts)| hosts.iter().map(|(id, _, _)| *id))
+                    .filter(|id| selected.contains(id))
+                    .collect();
+                let app = self.app.clone();
+                let popover = popover.clone();
+                col = col.child(
+                    h_flex()
+                        .w_full()
+                        .items_center()
+                        .gap_2()
+                        .px_2()
+                        .pt_2()
+                        .child(menu_primary_row(
+                            t_fmt(L10nKey::TabMenuOpenSelected, &[("count", &n.to_string())]),
+                            cx.theme().accent,
+                            cx.theme().accent_foreground,
+                            move |window, cx| {
+                                if let Some(app) = app.upgrade() {
+                                    app.update(cx, |this, cx| {
+                                        this.connect_ssh_profiles(ids.clone(), window, cx);
+                                        this.new_tab_host_selection.clear();
+                                    });
+                                }
+                                dismiss_popover(&popover, window, cx);
+                            },
+                        ))
+                        .child(
+                            div()
+                                .flex_shrink_0()
+                                .text_xs()
+                                .text_color(muted)
+                                .child(hint),
+                        ),
+                );
+            }
+        }
+        let _ = state;
+        col
     }
+
+    fn host_row(
+        &self,
+        id: uuid::Uuid,
+        name: SharedString,
+        endpoint: SharedString,
+        checked: bool,
+        popover: &gpui::WeakEntity<PopoverState>,
+        hover: gpui::Hsla,
+        cx: &App,
+    ) -> impl IntoElement + use<> {
+        let app = self.app.clone();
+        let popover_open = popover.clone();
+        let app_toggle = self.app.clone();
+        h_flex()
+            .id(SharedString::from(format!("new-tab-host-{id}")))
+            .w_full()
+            .items_center()
+            .h(px(30.))
+            .rounded_md()
+            .hover(move |s| s.bg(hover))
+            .child(
+                div()
+                    .id(SharedString::from(format!("new-tab-host-check-{id}")))
+                    .h_full()
+                    .w(px(36.))
+                    .flex_shrink_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .cursor_pointer()
+                    .child(
+                        div()
+                            .size(px(14.))
+                            .rounded(px(3.))
+                            .border_1()
+                            .border_color(cx.theme().border)
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .when(checked, |d| {
+                                d.bg(cx.theme().accent).child(
+                                    Icon::new(IconName::Check)
+                                        .size(px(10.))
+                                        .text_color(cx.theme().accent_foreground),
+                                )
+                            }),
+                    )
+                    .on_mouse_down(MouseButton::Left, move |_, _window, cx| {
+                        cx.stop_propagation();
+                        if let Some(app) = app_toggle.upgrade() {
+                            app.update(cx, |this, cx| {
+                                if !this.new_tab_host_selection.remove(&id) {
+                                    this.new_tab_host_selection.insert(id);
+                                }
+                                cx.notify();
+                            });
+                        }
+                    }),
+            )
+            .child(
+                div()
+                    .id(SharedString::from(format!("new-tab-host-open-{id}")))
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .pl_3()
+                    .pr_2()
+                    .flex()
+                    .items_center()
+                    .cursor_pointer()
+                    .child(menu_row(name, endpoint, cx))
+                    .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                        let at = SpawnWhere::from_modifiers(window.modifiers());
+                        if let Some(app) = app.upgrade() {
+                            app.update(cx, |this, cx| {
+                                this.connect_ssh_profile_at(id, at, window, cx);
+                                this.new_tab_host_selection.clear();
+                            });
+                        }
+                        dismiss_popover(&popover_open, window, cx);
+                    }),
+            )
+    }
+}
+
+fn dismiss_popover(popover: &gpui::WeakEntity<PopoverState>, window: &mut Window, cx: &mut App) {
+    if let Some(popover) = popover.upgrade() {
+        popover.update(cx, |state, cx| state.dismiss(window, cx));
+    }
+}
+
+fn menu_heading(label: impl Into<SharedString>, muted: gpui::Hsla) -> impl IntoElement {
+    div()
+        .px_2()
+        .pt_1()
+        .text_xs()
+        .text_color(muted)
+        .child(label.into())
+}
+
+fn menu_sep() -> impl IntoElement {
+    div().h(px(1.)).mx_2().my_1().bg(gpui::rgb(0x3f3f46))
+}
+
+fn menu_primary_row(
+    label: impl Into<SharedString>,
+    accent: gpui::Hsla,
+    accent_fg: gpui::Hsla,
+    on_click: impl Fn(&mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    let label = label.into();
+    h_flex()
+        .id("new-tab-open-selected")
+        .flex_1()
+        .h(px(30.))
+        .px_2()
+        .rounded_md()
+        .items_center()
+        .justify_center()
+        .bg(accent)
+        .text_color(accent_fg)
+        .cursor_pointer()
+        .child(label)
+        .on_mouse_down(MouseButton::Left, move |_, window, cx| on_click(window, cx))
+}
+
+fn menu_action_row(
+    label: impl Into<SharedString>,
+    on_click: impl Fn(&mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    let label = label.into();
+    div()
+        .id(label.clone())
+        .w_full()
+        .px_2()
+        .h(px(26.))
+        .rounded_md()
+        .cursor_pointer()
+        .hover(|s| s.bg(gpui::rgb(0x3f3f46)))
+        .child(div().truncate().child(label))
+        .on_mouse_down(MouseButton::Left, move |_, window, cx| on_click(window, cx))
+}
+
+fn menu_pick_row(
+    label: SharedString,
+    note: SharedString,
+    on_click: impl Fn(&mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    h_flex()
+        .id(label.clone())
+        .w_full()
+        .items_center()
+        .px_2()
+        .h(px(26.))
+        .rounded_md()
+        .cursor_pointer()
+        .hover(|s| s.bg(gpui::rgb(0x3f3f46)))
+        .child(div().flex_1().min_w_0().truncate().child(label))
+        .when(!note.is_empty(), |row| {
+            row.child(
+                div()
+                    .flex_shrink_0()
+                    .text_xs()
+                    .text_color(gpui::rgb(0x9ca3af))
+                    .child(note),
+            )
+        })
+        .on_mouse_down(MouseButton::Left, move |_, window, cx| on_click(window, cx))
 }
 
 /// The hosts the menu names, in the order they were handed over — frecency,
@@ -935,24 +1161,127 @@ impl NewTabMenu {
 fn menu_hosts(
     profiles: Vec<crate::core::ssh_profile::SshProfile>,
 ) -> Vec<(uuid::Uuid, SharedString, SharedString)> {
+    let catalog = profiles.clone();
     profiles
+        .iter()
+        .map(|p| menu_host_row(p, &catalog))
+        .collect()
+}
+
+/// Settings-saved hosts only. `~/.ssh/config` imports stay in the palette.
+fn menu_visible_hosts(
+    profiles: Vec<crate::core::ssh_profile::SshProfile>,
+) -> Vec<crate::core::ssh_profile::SshProfile> {
+    let mut profiles: Vec<_> = profiles
         .into_iter()
-        .take(MENU_HOSTS)
-        .map(|p| {
-            let endpoint = crate::core::ssh_profile::to_connect_string(&p);
-            let name = if p.name.trim().is_empty() {
-                endpoint.clone()
-            } else {
-                p.name.clone()
-            };
-            let note = if name == endpoint {
-                String::new()
-            } else {
-                endpoint
-            };
-            (p.id, SharedString::from(name), SharedString::from(note))
+        .filter(|p| p.group.as_deref() != Some(crate::core::ssh_config::IMPORTED_GROUP))
+        .collect();
+    profiles.sort_by(|a, b| menu_host_sort_key(a).cmp(&menu_host_sort_key(b)));
+    profiles
+}
+
+/// `{num}.{site}`: site, then gray before regular in that site, then number.
+fn menu_host_sort_key(
+    p: &crate::core::ssh_profile::SshProfile,
+) -> (u8, String, bool, u32, String) {
+    let label = if p.name.trim().is_empty() {
+        p.host.as_str()
+    } else {
+        p.name.as_str()
+    };
+    match parse_site_host_name(label) {
+        Some((site, gray, num)) => (0, site, !gray, num, label.to_ascii_lowercase()),
+        None => (1, String::new(), true, 0, label.to_ascii_lowercase()),
+    }
+}
+
+fn parse_site_host_name(name: &str) -> Option<(String, bool, u32)> {
+    let (head, site) = name.rsplit_once('.')?;
+    let mut chars = site.chars();
+    if !chars.next().is_some_and(|c| c.is_ascii_alphabetic()) {
+        return None;
+    }
+    if !site.chars().all(|c| c.is_ascii_alphanumeric()) {
+        return None;
+    }
+    let (gray, digits) = match head.strip_prefix("gray-") {
+        Some(rest) => (true, rest),
+        None => (false, head),
+    };
+    let num: u32 = digits.parse().ok()?;
+    Some((site.to_ascii_lowercase(), gray, num))
+}
+
+fn menu_host_groups(
+    profiles: Vec<crate::core::ssh_profile::SshProfile>,
+    catalog: &[crate::core::ssh_profile::SshProfile],
+) -> Vec<(SharedString, Vec<(uuid::Uuid, SharedString, SharedString)>)> {
+    let mut groups: Vec<(String, Vec<(uuid::Uuid, SharedString, SharedString)>)> = Vec::new();
+    for p in profiles {
+        let key = p.group.clone().unwrap_or_default();
+        let row = menu_host_row(&p, catalog);
+        match groups.iter_mut().find(|(k, _)| *k == key) {
+            Some((_, bucket)) => bucket.push(row),
+            None => groups.push((key, vec![row])),
+        }
+    }
+    groups.sort_by(|a, b| {
+        menu_group_rank(&a.0)
+            .cmp(&menu_group_rank(&b.0))
+            .then_with(|| a.0.cmp(&b.0))
+    });
+    groups
+        .into_iter()
+        .map(|(k, rows)| {
+            let label = if k.is_empty() { String::new() } else { k };
+            (SharedString::from(label), rows)
         })
         .collect()
+}
+
+fn menu_group_rank(key: &str) -> u8 {
+    match key {
+        crate::core::ssh_config::IMPORTED_GROUP => 0,
+        "" => 2,
+        _ => 1,
+    }
+}
+
+fn menu_host_row(
+    p: &crate::core::ssh_profile::SshProfile,
+    catalog: &[crate::core::ssh_profile::SshProfile],
+) -> (uuid::Uuid, SharedString, SharedString) {
+    let endpoint = crate::core::ssh_profile::to_connect_string(p);
+    let name = if p.name.trim().is_empty() {
+        endpoint.clone()
+    } else {
+        p.name.clone()
+    };
+    let note = if let Some(via) = jump_via_label(p, catalog) {
+        via
+    } else if name == endpoint {
+        String::new()
+    } else {
+        endpoint
+    };
+    (p.id, SharedString::from(name), SharedString::from(note))
+}
+
+fn jump_via_label(
+    p: &crate::core::ssh_profile::SshProfile,
+    catalog: &[crate::core::ssh_profile::SshProfile],
+) -> Option<String> {
+    let jump_id = p.jump_host?;
+    let jumper = catalog.iter().find(|j| j.id == jump_id)?;
+    let jump_name = if jumper.name.trim().is_empty() {
+        jumper.host.as_str()
+    } else {
+        jumper.name.as_str()
+    };
+    Some(t_fmt(
+        L10nKey::SettingsJumpHostVia,
+        &[("jump_name", jump_name)],
+    ))
 }
 
 /// A menu row that names a thing on the left and says what it is on the right.
@@ -1282,7 +1611,6 @@ impl Tty7App {
                 Icon::empty().path("icons/git-branch.svg"),
                 L10nKey::PanelChangesTitle,
             ),
-            // Files / SFTP tab abolished with Native SSH.
         ]
         .into_iter()
         .map(|(tab, icon, label_key)| {
@@ -1624,7 +1952,7 @@ impl Tty7App {
         cx: &Context<Self>,
     ) -> impl IntoElement + use<> {
         let app = cx.entity().downgrade();
-        chrome_tile_sized(
+        let trigger = chrome_tile_sized(
             Button::new(id).icon(Icon::new(IconName::Plus)),
             TILE_SIZE,
             glyph,
@@ -1637,17 +1965,32 @@ impl Tty7App {
         // come through here were the ones left silent. The chord is worth
         // more here than anywhere else in the row: it is the way back to
         // opening a tab without reading a menu first.
-        .tooltip_element(chord_tooltip(t(L10nKey::AppMenuNewTab), "NewTab", cx))
-        // Built when the menu opens, not when the strip draws: this
-        // closure runs once per press, and again after each dismissal.
-        .dropdown_menu(move |menu, window, cx| {
-            let Some(this) = app.upgrade() else {
-                return menu;
-            };
-            this.read(cx)
-                .new_tab_menu_rows(app.clone(), cx)
-                .build(menu, window)
-        })
+        .tooltip_element(chord_tooltip(t(L10nKey::AppMenuNewTab), "NewTab", cx));
+        Popover::new(SharedString::from(format!("new-tab-menu-{id}")))
+            .appearance(true)
+            .trigger(trigger)
+            .on_open_change({
+                let app = app.clone();
+                move |open, _window, cx| {
+                    if !*open {
+                        if let Some(app) = app.upgrade() {
+                            app.update(cx, |this, cx| {
+                                this.new_tab_host_selection.clear();
+                                cx.notify();
+                            });
+                        }
+                    }
+                }
+            })
+            .content(move |state, window, cx| {
+                let Some(this) = app.upgrade() else {
+                    return div().into_any_element();
+                };
+                this.read(cx)
+                    .new_tab_menu_rows(app.clone(), cx)
+                    .render(state, window, cx)
+                    .into_any_element()
+            })
     }
 
     /// What the menu offers, read off the app as the menu opens — the builder
@@ -1655,14 +1998,16 @@ impl Tty7App {
     fn new_tab_menu_rows(&self, app: gpui::WeakEntity<Self>, cx: &App) -> NewTabMenu {
         NewTabMenu {
             app,
-            shells: self
-                .shells
-                .shells
-                .iter()
-                .map(|s| (SharedString::from(s.label.clone()), shell_spec(s)))
-                .collect(),
+            shells: menu_local_shells(&self.shells.shells, &self.shells.default_name),
             default_shell: SharedString::from(self.default_shell_label(cx)),
-            hosts: menu_hosts(crate::ui::ssh_connect::ssh_profiles_by_frecency(cx)),
+            groups: {
+                let catalog = cx.global::<Config>().ssh_profiles.clone();
+                menu_host_groups(
+                    menu_visible_hosts(crate::ui::ssh_connect::ssh_profiles_by_frecency(cx)),
+                    &catalog,
+                )
+            },
+            selected: self.new_tab_host_selection.clone(),
         }
     }
 
@@ -2520,17 +2865,121 @@ mod tests {
         p
     }
 
+    fn detected(label: &str, authored: bool) -> crate::core::shells::DetectedShell {
+        crate::core::shells::DetectedShell {
+            label: label.into(),
+            program: format!("/bin/{label}"),
+            args: Vec::new(),
+            args_are_tty7_defaults: !authored,
+            user_authored: authored,
+        }
+    }
+
     #[test]
-    fn the_new_tab_menu_stops_naming_hosts_before_it_becomes_a_list() {
-        // Frecency has already put the useful ones first by the time this
-        // runs, so the cut can only ever drop the tail.
-        let many: Vec<_> = (0..MENU_HOSTS + 4)
+    fn the_new_tab_menu_names_only_the_configured_shell() {
+        let rows = menu_local_shells(
+            &[
+                detected("bash", false),
+                detected("zsh", false),
+                detected("sh", false),
+                detected("ksh", false),
+            ],
+            "bash",
+        );
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].0, "bash");
+        assert_eq!(rows[0].1.program, "/bin/bash");
+    }
+
+    #[test]
+    fn the_new_tab_menu_keeps_custom_shells_beside_the_default() {
+        let rows = menu_local_shells(
+            &[
+                detected("bash", false),
+                detected("zsh", false),
+                detected("Ubuntu", true),
+            ],
+            "bash",
+        );
+        assert_eq!(
+            rows.iter().map(|(n, _)| n.as_ref()).collect::<Vec<_>>(),
+            ["bash", "Ubuntu"]
+        );
+    }
+
+    #[test]
+    fn the_new_tab_menu_names_every_host() {
+        let many: Vec<_> = (0..10)
             .map(|i| host(&format!("box-{i}"), "dev", &format!("10.0.0.{i}")))
             .collect();
         let rows = menu_hosts(many);
-        assert_eq!(rows.len(), MENU_HOSTS);
+        assert_eq!(rows.len(), 10);
         assert_eq!(rows[0].1, "box-0", "the order handed in is the order shown");
         assert_eq!(rows[0].2, "dev@10.0.0.0");
+    }
+
+    #[test]
+    fn the_new_tab_menu_groups_hosts() {
+        let mut work = host("a", "dev", "10.0.0.1");
+        work.group = Some("prod".into());
+        let mut other = host("b", "dev", "10.0.0.2");
+        other.group = Some("prod".into());
+        let local = host("c", "dev", "10.0.0.3");
+        let hosts = vec![work, local, other];
+        let groups = menu_host_groups(hosts.clone(), &hosts);
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0].0, "prod");
+        assert_eq!(groups[0].1.len(), 2);
+        assert_eq!(groups[1].0, "");
+        assert_eq!(groups[1].1.len(), 1);
+    }
+
+    #[test]
+    fn the_new_tab_menu_orders_hosts_by_site_then_number() {
+        let visible = menu_visible_hosts(vec![
+            host("10.zzzc2", "", "krsvr10.adsys.zzzc2.qihoo.net"),
+            host("gray-01.shyc2", "", "krsvr-gray-01.adsys.shyc2.qihoo.net"),
+            host("02.shrdt", "", "krsvr02.adsys.shrdt.qihoo.net"),
+            host("01.shyc2", "", "krsvr01.adsys.shyc2.qihoo.net"),
+            host("01.shrdt", "", "krsvr01.adsys.shrdt.qihoo.net"),
+            host("Debian12", "root", "Debian12.orb.local"),
+        ]);
+        let names: Vec<_> = visible.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "01.shrdt",
+                "02.shrdt",
+                "gray-01.shyc2",
+                "01.shyc2",
+                "10.zzzc2",
+                "Debian12",
+            ]
+        );
+    }
+
+    #[test]
+    fn the_new_tab_menu_omits_imported_ssh_config_hosts() {
+        let mut imported = host("from-config", "me", "box");
+        imported.group = Some(crate::core::ssh_config::IMPORTED_GROUP.into());
+        let saved = host("lab", "me", "lab.example");
+        let visible = menu_visible_hosts(vec![imported, saved]);
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].name, "lab");
+    }
+
+    #[test]
+    fn a_jump_host_is_named_in_the_row_note() {
+        crate::ui::i18n::set_locale("en");
+        let jumper = host("jumper", "me", "jumper.example");
+        let mut dest = host("prod", "app", "prod.example");
+        dest.jump_host = Some(jumper.id);
+        let rows = menu_hosts(vec![jumper, dest]);
+        let prod = rows
+            .iter()
+            .find(|row| row.1 == "prod")
+            .expect("the dest host is in the menu");
+        assert_eq!(prod.2, "via jumper");
     }
 
     #[test]
@@ -3194,8 +3643,8 @@ mod tests {
             Some("me@box:~/repo")
         );
 
-        // Bare identity Osc with a separate cwd — direct/Native SSH after
-        // OSC 7 — must name the chip after the folder, not hide the directory.
+        // Bare identity Osc with a separate cwd after OSC 7 — must name
+        // the chip after the folder, not hide the directory.
         let mut seeded = strip_tab();
         seeded.osc_title = Some("deploy@box".into());
         seeded.cwd = Some("/Users/x/repo/app".into());

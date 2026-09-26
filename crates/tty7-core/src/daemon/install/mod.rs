@@ -14,7 +14,6 @@ pub mod proxy;
 pub use asset::{RemotePaths, UnsupportedTarget};
 pub use checksums::ChecksumError;
 
-
 pub fn client_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
@@ -1335,7 +1334,6 @@ pub(crate) fn shell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))
 }
 
-
 /// What one SSH connection's server probe proved, kept so that the panes after
 /// the first one do not pay for proving it again.
 ///
@@ -1404,10 +1402,6 @@ fn proved_or_prove(
     *slot = Some(proved);
     Ok(binary)
 }
-
-
-
-
 
 #[cfg(feature = "remote-install")]
 fn default_fetcher() -> Arc<dyn AssetFetcher> {

@@ -7,12 +7,70 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [26.9.33] - 2026-09-27
+
+### Fixed
+
+- **Hop chips and jumper login match a normal `ssh` session.** `+` / typed
+  `ssh` / multi-select panes read `user@host` and cwd from the dest PS1 only
+  (prompt prefix, re-parsed on each redraw). Jumper optionals fill from
+  `~/.ssh/config`; the spawned line is `ssh [-p] [-i] [user@]jumper`.
+
+## [26.9.32] - 2026-09-26
+
+### Fixed
+
+- **Jumper spawn matches a typed `ssh` line.** Empty User / Port / IdentityFile
+  / keepalive fill from `~/.ssh/config` (`Host` or `HostName`). Argv is
+  `ssh [-p] [-i] [user@]jumper` so `Host jumper` extras still apply. Same path
+  for single connect and multi-select split panes.
+
+## [26.9.31] - 2026-09-26
+
+### Fixed
+
+- **Jumper hop uses `~/.ssh/config` optionals, then a typed `ssh` line.** Empty
+  User / Port / IdentityFile / keepalive on the jumper (and the dial profile)
+  are filled from the matching `Host` block — including a FQDN stub that only
+  matches via `HostName`. The spawned argv is `ssh [-p] [-i] [user@]jumper`,
+  so OpenSSH still applies `Host jumper` extras (`+ssh-rsa`, ControlMaster).
+  Multi-select split panes use the same spawn path.
+
+## [26.9.30] - 2026-09-26
+
+### Fixed
+
+- **Hop chip no longer eats the typed command.** The last screen line is still
+  the source, but only the prompt prefix (through `$`/`#`/`%`/`]`) is parsed.
+  `[user@host ~]$ cd CODE` stays `user@host` + `~`, not `~]$cd CODE`. Each PS1
+  redraw is re-read, including RHEL `\W` basenames after `cd`.
+- **Split no longer aborts on a zero-column grid.** A new pane can wake before
+  layout; reading the last line now returns empty instead of indexing past the
+  grid. Dirty PS1 cwd is not baked into clone `ssh -t 'cd …'`.
+
+## [26.9.29] - 2026-09-26
+
 ### Changed
 
-- **Native SSH (russh) abolished.** Host-picker tabs and typed hops both spawn
-  local `ssh`. Tab chips still show `user@host`, cwd, git, and the agent icon
-  from in-shell session facts. Managed SFTP / russh forwards / Native Test
-  Connection are gone; profile `-L/-R/-D` rules still go to OpenSSH.
+- **SSH hop chips read the dest PS1 only.** Host-picker (`+`) and typed `ssh`
+  share one read-only parse of the last drawn prompt. Jumper argv, stale local
+  OSC titles, dest SI, and PTY `pwd`/git injection no longer set `user@host`.
+  Directory comes from the prompt when it carries a path; hop git stays empty
+  unless the prompt shows it. Local panes keep process cwd and Host git.
+
+### Added
+
+- **Multi-host open from the New Tab menu.** Check several saved hosts and
+  open them in one tab; panes tile by count (2 side-by-side, 4 as 2×2). Jump
+  hosts can turn off ProxyJump so each pane logs into the jumper and types the
+  destination host name.
+
+### Changed
+
+- **SSH is ordinary OpenSSH.** Host-picker tabs, typed `ssh`, jumper hops,
+  and copy/split all spawn local `ssh`. Tab chips show `user@host`, cwd, git,
+  and the agent from in-shell session facts. Profile `-L/-R/-D` rules go to
+  OpenSSH.
 
 - **Prompt editor removed.** The shell always owns the prompt line (plain PTY
   echo). The Settings → Input → Prompt editor / Tab completion switches are

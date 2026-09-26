@@ -21,8 +21,8 @@ use crate::ui::i18n::{L10nKey, t, t_fmt};
 use crate::ui::reorder::{self, Reorder, Surface};
 use crate::ui::right_panel::RESIZE_HANDLE_WIDTH;
 use crate::ui::tab_strip::{
-    DragTab, REORDER_SLIDE_MS, abbreviate_home, elide_keep_edges, elide_label,
-    measure_text, short_title,
+    DragTab, REORDER_SLIDE_MS, abbreviate_home, elide_keep_edges, elide_label, measure_text,
+    short_title,
 };
 
 pub(crate) const MIN_SIDEBAR_WIDTH: f32 = 180.;
@@ -76,6 +76,10 @@ mod row_metrics {
     pub(super) const META_GAP: f32 = 6.;
     /// The branch icon.
     pub(super) const BRANCH_ICON: f32 = 11.;
+    /// Second-line slot: `text_xs` line box, not the 11px icon. An empty
+    /// reserve that only sized the icon left those rows shorter than a
+    /// branch + +/− line.
+    pub(super) const GIT_ROW: f32 = 16.;
     /// `pl_2` + `pr_1p5` on a group header.
     pub(super) const HEADER_PAD: f32 = 8. + 6.;
     /// The chevron a header opens with, and the asterisk that marks a custom
@@ -532,15 +536,10 @@ impl Tty7App {
                     // Same title as the top tab bar and the switcher, including
                     // Settings → Appearance → Tabs (user@host + folder name).
                     let (view, home) = tab.label_view(Some(window), cx);
-                    let options = crate::ui::tab_strip::TabChipOptions::from_config(
-                        cx.global::<Config>(),
-                    );
-                    let raw = crate::ui::tab_strip::label_of_with(
-                        &view,
-                        i,
-                        home.as_deref(),
-                        options,
-                    );
+                    let options =
+                        crate::ui::tab_strip::TabChipOptions::from_config(cx.global::<Config>());
+                    let raw =
+                        crate::ui::tab_strip::label_of_with(&view, i, home.as_deref(), options);
                     if raw.trim().is_empty() {
                         let placeholder = SharedString::from(t_fmt(
                             L10nKey::TabUnnamedShell,
@@ -561,96 +560,122 @@ impl Tty7App {
                 };
                 let mut branch_shown: Option<(SharedString, SharedString, u32, u32)> = None;
                 let mut cwd_shown: Option<(SharedString, SharedString)> = None;
-                let git_line = match shared_git.is_some()
-                    || !cx.global::<Config>().tab_show_git_branch
-                {
-                    true => None,
-                    false => tab.git_status(Some(window), cx),
-                }
-                .map(|g| {
-                    let mut line = h_flex()
-                        .id(("sidebar-git", i))
-                        .w_full()
-                        .items_center()
-                        .gap_1p5()
-                        .text_xs()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(
-                            gpui::svg()
-                                .path("icons/git-branch.svg")
-                                .flex_shrink_0()
-                                .size(px(row_metrics::BRANCH_ICON))
-                                .text_color(cx.theme().muted_foreground),
-                        );
-                    let counts_w = counts_width(&window.text_system(), &font, meta_size, &g);
-                    // Branch: keep both ends (`window-…backdrop`) so its
-                    // identifying tail survives a narrow sidebar.
-                    let branch_avail =
-                        (label_avail - row_metrics::BRANCH_ICON - row_metrics::META_GAP - counts_w)
-                            .max(0.);
-                    let shown = elide_keep_edges(
-                        &window.text_system(),
-                        &font,
-                        meta_size,
-                        &g.branch,
-                        branch_avail,
-                    );
-                    branch_shown = Some((
-                        shown.clone(),
-                        SharedString::from(g.branch.clone()),
-                        g.added,
-                        g.removed,
-                    ));
-                    line = line.child(div().flex_1().min_w_0().truncate().child(shown));
-                    if g.added > 0 || g.removed > 0 {
-                        let mut counts = h_flex()
-                            .id(("sidebar-diff", i))
+                // Always the screenshot height (title + git slot) when git
+                // chips are on. Shared-header git still reserves the empty
+                // row so those tabs do not shrink.
+                let reserve_git_slot = cx.global::<Config>().tab_show_git_branch;
+                let git_status = (reserve_git_slot && shared_git.is_none())
+                    .then(|| tab.git_status(Some(window), cx))
+                    .flatten();
+                let git_line = match (reserve_git_slot, git_status) {
+                    (false, _) => None,
+                    (true, None) => Some(
+                        h_flex()
+                            .id(("sidebar-git", i))
+                            .w_full()
+                            .h(px(row_metrics::GIT_ROW))
+                            .flex_shrink_0()
+                            .items_center(),
+                    ),
+                    (true, Some(g)) => Some({
+                        let mut line = h_flex()
+                            .id(("sidebar-git", i))
+                            .w_full()
+                            .h(px(row_metrics::GIT_ROW))
                             .flex_shrink_0()
                             .items_center()
                             .gap_1p5()
-                            .when_some(git_cwd, |counts, (host, cwd)| {
-                                // A click target inside a click target: the row
-                                // highlights as a whole, which says nothing
-                                // about the counts being their own button. The
-                                // underline the SFTP breadcrumb uses for
-                                // clickable text says where this one starts.
-                                counts
-                                    .cursor_pointer()
-                                    .hover(|s| s.underline())
-                                    .on_mouse_down(
-                                        MouseButton::Left,
-                                        cx.listener(move |this, _: &MouseDownEvent, window, cx| {
-                                            cx.stop_propagation();
-                                            // Swallowing the press also swallows the
-                                            // row's click, the only thing that
-                                            // activates a tab — so this row has to
-                                            // activate itself, or the overlay lands
-                                            // in whichever tab was already on
-                                            // screen, carrying this row's repo (#706).
-                                            this.activate(i, window, cx);
-                                            this.toggle_diff_overlay(host, cwd.clone(), window, cx);
-                                        }),
-                                    )
-                            });
-                        if g.added > 0 {
-                            counts = counts
-                                .child(div().text_color(added_ink).child(format!("+{}", g.added)));
-                        }
-                        if g.removed > 0 {
-                            counts = counts.child(
-                                div()
-                                    .text_color(removed_ink)
-                                    .child(format!("−{}", g.removed)),
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(
+                                gpui::svg()
+                                    .path("icons/git-branch.svg")
+                                    .flex_shrink_0()
+                                    .size(px(row_metrics::BRANCH_ICON))
+                                    .text_color(cx.theme().muted_foreground),
                             );
+                        let counts_w = counts_width(&window.text_system(), &font, meta_size, &g);
+                        // Branch: keep both ends (`window-…backdrop`) so its
+                        // identifying tail survives a narrow sidebar.
+                        let branch_avail = (label_avail
+                            - row_metrics::BRANCH_ICON
+                            - row_metrics::META_GAP
+                            - counts_w)
+                            .max(0.);
+                        let shown = elide_keep_edges(
+                            &window.text_system(),
+                            &font,
+                            meta_size,
+                            &g.branch,
+                            branch_avail,
+                        );
+                        branch_shown = Some((
+                            shown.clone(),
+                            SharedString::from(g.branch.clone()),
+                            g.added,
+                            g.removed,
+                        ));
+                        line = line.child(div().flex_1().min_w_0().truncate().child(shown));
+                        if g.added > 0 || g.removed > 0 {
+                            let mut counts = h_flex()
+                                .id(("sidebar-diff", i))
+                                .flex_shrink_0()
+                                .items_center()
+                                .gap_1p5()
+                                .when_some(git_cwd, |counts, (host, cwd)| {
+                                    // A click target inside a click target: the row
+                                    // highlights as a whole, which says nothing
+                                    // about the counts being their own button. The
+                                    // underline the SFTP breadcrumb uses for
+                                    // clickable text says where this one starts.
+                                    counts
+                                        .cursor_pointer()
+                                        .hover(|s| s.underline())
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            cx.listener(
+                                                move |this, _: &MouseDownEvent, window, cx| {
+                                                    cx.stop_propagation();
+                                                    // Swallowing the press also swallows the
+                                                    // row's click, the only thing that
+                                                    // activates a tab — so this row has to
+                                                    // activate itself, or the overlay lands
+                                                    // in whichever tab was already on
+                                                    // screen, carrying this row's repo (#706).
+                                                    this.activate(i, window, cx);
+                                                    this.toggle_diff_overlay(
+                                                        host,
+                                                        cwd.clone(),
+                                                        window,
+                                                        cx,
+                                                    );
+                                                },
+                                            ),
+                                        )
+                                });
+                            if g.added > 0 {
+                                counts = counts.child(
+                                    div().text_color(added_ink).child(format!("+{}", g.added)),
+                                );
+                            }
+                            if g.removed > 0 {
+                                counts = counts.child(
+                                    div()
+                                        .text_color(removed_ink)
+                                        .child(format!("−{}", g.removed)),
+                                );
+                            }
+                            line = line.child(counts);
                         }
-                        line = line.child(counts);
-                    }
-                    line
-                });
+                        line
+                    }),
+                };
                 // Folder name on the title row (even inside a git repo). Git
                 // keeps the second line. Prefer the live OSC 7 cwd so a hop
                 // probe snapshot cannot freeze the right-hand label after `cd`.
-                let cwd_full: Option<SharedString> = match cx.global::<Config>().tab_show_cwd_basename
+                let cwd_full: Option<SharedString> = match cx
+                    .global::<Config>()
+                    .tab_show_cwd_basename
                 {
                     false => None,
                     true => tab
@@ -699,13 +724,8 @@ impl Tty7App {
                         - row_metrics::META_GAP)
                         .max(0.);
                     if avail >= ROW_CWD_FLOOR {
-                        let shown = elide_label(
-                            &window.text_system(),
-                            &font,
-                            meta_size,
-                            &full,
-                            avail,
-                        );
+                        let shown =
+                            elide_label(&window.text_system(), &font, meta_size, &full, avail);
                         cwd_shown = Some((shown, full));
                     }
                 }

@@ -143,6 +143,24 @@ pub struct Rect {
     pub h: f32,
 }
 
+fn even_split<L: Clone>(axis: Axis, mut items: Vec<Pane<L>>) -> Pane<L> {
+    match items.len() {
+        0 => Pane::Empty,
+        1 => items.pop().expect("len 1"),
+        n => {
+            let left_n = n / 2;
+            let ratio = left_n as f32 / n as f32;
+            let right = items.split_off(left_n);
+            Pane::split_node(
+                axis,
+                ratio,
+                even_split(axis, items),
+                even_split(axis, right),
+            )
+        }
+    }
+}
+
 fn overlap_1d(a0: f32, alen: f32, b0: f32, blen: f32) -> f32 {
     ((a0 + alen).min(b0 + blen) - a0.max(b0)).max(0.0)
 }
@@ -172,6 +190,26 @@ pub enum CloseOutcome {
 impl<L: Clone> Pane<L> {
     pub fn leaf(view: L) -> Self {
         Pane::Leaf(view)
+    }
+
+    /// Tile `leaves` into a balanced grid: 2 side-by-side, 4 as 2×2, etc.
+    pub fn tile(leaves: Vec<L>) -> Self {
+        match leaves.len() {
+            0 => Pane::Empty,
+            1 => Pane::leaf(leaves.into_iter().next().expect("len 1")),
+            n => {
+                let cols = (n as f64).sqrt().ceil() as usize;
+                let cols = cols.max(1);
+                let mut rows = Vec::new();
+                for chunk in leaves.chunks(cols) {
+                    rows.push(even_split(
+                        Axis::Horizontal,
+                        chunk.iter().cloned().map(Pane::leaf).collect(),
+                    ));
+                }
+                even_split(Axis::Vertical, rows)
+            }
+        }
     }
 
     pub fn split_node(axis: Axis, ratio: f32, a: Pane<L>, b: Pane<L>) -> Self {
@@ -1254,6 +1292,34 @@ mod tests {
             pane.split_leaf_where(&is(target), axis, false, new),
             "split target {target} not found"
         );
+    }
+
+    #[test]
+    fn tile_one_is_a_leaf() {
+        let pane = TestPane::tile(vec![7]);
+        assert!(matches!(pane, Pane::Leaf(7)));
+    }
+
+    #[test]
+    fn tile_two_sits_side_by_side() {
+        let pane = TestPane::tile(vec![1, 2]);
+        assert_well_formed(&pane);
+        assert_eq!(pane.leaves(), vec![1, 2]);
+        match pane {
+            Pane::Split { axis, .. } => assert_eq!(axis, Axis::Horizontal),
+            _ => panic!("expected a row"),
+        }
+    }
+
+    #[test]
+    fn tile_four_is_a_grid() {
+        let pane = TestPane::tile(vec![1, 2, 3, 4]);
+        assert_well_formed(&pane);
+        assert_eq!(pane.leaves(), vec![1, 2, 3, 4]);
+        match pane {
+            Pane::Split { axis, .. } => assert_eq!(axis, Axis::Vertical),
+            _ => panic!("expected stacked rows"),
+        }
     }
 
     #[test]

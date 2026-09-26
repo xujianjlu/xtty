@@ -11,8 +11,8 @@ use crate::core::config::{Config, RightPanelTab};
 use crate::daemon::protocol::{PaneProcs, PortProbe};
 
 use crate::ui::app::{
-    CONTENT_INSET, TILE_GLYPH_XS, TILE_SIZE_XS, Tty7App,
-    tile_trailing_inset, tile_trailing_inset_sm,
+    CONTENT_INSET, TILE_GLYPH_XS, TILE_SIZE_XS, Tty7App, tile_trailing_inset,
+    tile_trailing_inset_sm,
 };
 use crate::ui::i18n::{L10nKey, t, t_fmt};
 use crate::ui::scrollbar::with_vertical_scrollbar;
@@ -800,7 +800,9 @@ impl Tty7App {
                 rows.push(InfoRow::text(t(L10nKey::PanelShell), shell));
                 if let Some(ctx) = view.remote_context() {
                     if ctx.kind == crate::daemon::protocol::RemoteKind::Ssh {
-                        rows.push(InfoRow::text(t(L10nKey::PanelSsh), ctx.target.clone()).copyable());
+                        rows.push(
+                            InfoRow::text(t(L10nKey::PanelSsh), ctx.target.clone()).copyable(),
+                        );
                     }
                 }
                 // Only where there is a network between here and the shell. On
@@ -1174,7 +1176,7 @@ impl Tty7App {
     }
 
     /// Listening ports on the pane in front. Forwards are OpenSSH `-L/-R/-D`
-    /// on the host profile, not a managed Native tunnel.
+    /// on the host profile.
     fn ports_section(
         &self,
         ctx: Option<&PaneForwardCtx>,
@@ -1356,8 +1358,8 @@ impl Tty7App {
     ) -> Option<PaneForwardCtx> {
         let leaf = self.tabs.get(self.active)?.detail_pane(window, cx)?;
         let view = leaf.read(cx);
-        // A pane holds managed forwards once it has somewhere to hold them:
-        // a live native-ssh connection, or the workspace's shared one.
+        // A pane holds forwards once it has somewhere to hold them:
+        // the workspace's shared host, or nothing.
         Some(PaneForwardCtx {
             pane_id: view.pane_id,
             route: view.workspace().is_some().then(|| view.forward_route()),

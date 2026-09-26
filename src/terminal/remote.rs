@@ -17,8 +17,9 @@ use std::collections::VecDeque;
 use crate::core::cli_agent::{AgentSessionState, AgentStatus, CLIAgent};
 use crate::core::config::CursorStyle as ConfigCursorStyle;
 use crate::core::osc::OscTokenizer;
-use crate::daemon::protocol::{ClientMsg, DaemonMsg, PaneProcs, RemoteContext, RemoteKind, RestoreFrom, ShellSpec, WinSize};
-
+use crate::daemon::protocol::{
+    ClientMsg, DaemonMsg, PaneProcs, RemoteContext, RemoteKind, RestoreFrom, ShellSpec, WinSize,
+};
 
 use crate::daemon::transport::{self, Stream};
 use gpui::EntityId;
@@ -97,10 +98,6 @@ struct ReaderSignals {
     trigger_output: Arc<Mutex<Vec<u8>>>,
     /// ZMODEM divert pipe shared with the UI (`terminal::zmodem`).
     zmodem: Arc<crate::terminal::zmodem::ZmodemPipe>,
-    /// Nested-SSH history dump divert (`terminal::history_probe`).
-    history_probe: Arc<crate::terminal::history_probe::HistoryProbePipe>,
-    /// Nested-SSH git status divert (`terminal::git_probe`).
-    git_probe: Arc<crate::terminal::git_probe::GitProbePipe>,
     /// Kitty-graphics images the daemon lifted out of the stream (issue #213),
     /// anchored to the grid for the paint path to blit. Shared with the reader,
     /// which places/deletes them as `DaemonMsg::Image`/`DeleteImage` frames land.
@@ -147,14 +144,11 @@ impl PaneWorkspace {
                 RouteHeader::local_stdio(program.clone(), &argv)
             }
             _ => {
-                // Native SSH workspace dial abolished — only LocalStdio routes remain.
+                // OpenSSH hops are local PTYs. Only LocalStdio workspaces
+                // still get a daemon route.
                 return Err(match self.label.as_deref() {
-                    Some(label) => anyhow::anyhow!(
-                        "{label} uses Native SSH which is no longer supported"
-                    ),
-                    None => anyhow::anyhow!(
-                        "this workspace uses Native SSH which is no longer supported"
-                    ),
+                    Some(label) => anyhow::anyhow!("{label} cannot be routed"),
+                    None => anyhow::anyhow!("this workspace cannot be routed"),
                 });
             }
         };
@@ -201,13 +195,6 @@ impl PaneRoute {
 
     pub fn is_local(&self) -> bool {
         matches!(self, PaneRoute::Local)
-    }
-
-    fn allow_remote_clipboard_write(&self) -> bool {
-        match self {
-            // Native SSH routes abolished — never allow remote clipboard writes via Native.
-            PaneRoute::Remote { .. } | PaneRoute::Local | PaneRoute::Unroutable(_) => false,
-        }
     }
 }
 
@@ -523,14 +510,6 @@ pub struct RemoteTerminal {
     running_command: Arc<Mutex<String>>,
     trigger_output: Arc<Mutex<Vec<u8>>>,
     zmodem: Arc<crate::terminal::zmodem::ZmodemPipe>,
-    history_probe: Arc<crate::terminal::history_probe::HistoryProbePipe>,
-    git_probe: Arc<crate::terminal::git_probe::GitProbePipe>,
-    ssh_endpoint: Option<(String, u16)>,
-    /// The account the SSH connection authenticates as. `ssh_endpoint` is what
-    /// the disconnect strip and the forward sheet need; the keychain files a
-    /// password under the user as well, so the auth sheet needs this too.
-    ssh_user: Option<String>,
-    auto_supplied_password: bool,
     agent: Arc<Mutex<Option<CLIAgent>>>,
     agent_session: Arc<Mutex<AgentSlot>>,
     /// Kitty-graphics images placed on this pane's grid (issue #213).
@@ -576,18 +555,6 @@ impl RemoteTerminal {
     /// Shared ZMODEM divert pipe for this pane.
     pub(crate) fn zmodem_pipe(&self) -> Arc<crate::terminal::zmodem::ZmodemPipe> {
         self.zmodem.clone()
-    }
-
-    /// Nested-SSH history dump divert for this pane.
-    pub(crate) fn history_probe_pipe(
-        &self,
-    ) -> Arc<crate::terminal::history_probe::HistoryProbePipe> {
-        self.history_probe.clone()
-    }
-
-    /// Nested-SSH git status divert for this pane.
-    pub(crate) fn git_probe_pipe(&self) -> Arc<crate::terminal::git_probe::GitProbePipe> {
-        self.git_probe.clone()
     }
 
     pub fn spawn(
@@ -713,7 +680,7 @@ impl RemoteTerminal {
             owner,
             workspace,
             restore,
-            allow_remote_clipboard_write: route.allow_remote_clipboard_write(),
+            allow_remote_clipboard_write: false,
         }
         .encode(&mut stream)?;
         let pane_id = match spawn_reply(&mut stream, attach_reply_wait(route), "Spawn")? {
@@ -765,7 +732,7 @@ impl RemoteTerminal {
         ClientMsg::Attach {
             pane_id,
             size: win,
-            allow_remote_clipboard_write: route.allow_remote_clipboard_write(),
+            allow_remote_clipboard_write: false,
         }
         .encode(&mut stream)?;
         let buffered = match attach_reply_prefix(&mut stream, pane_id, attach_reply_wait(route)) {
@@ -820,7 +787,7 @@ impl RemoteTerminal {
         ClientMsg::Attach {
             pane_id,
             size: win_size(size, cell_w, cell_h),
-            allow_remote_clipboard_write: route.allow_remote_clipboard_write(),
+            allow_remote_clipboard_write: false,
         }
         .encode(&mut stream)?;
         let buffered = attach_reply_prefix(&mut stream, pane_id, attach_reply_wait(route))?;
@@ -892,8 +859,6 @@ impl RemoteTerminal {
                 running_command: self.running_command.clone(),
                 trigger_output: self.trigger_output.clone(),
                 zmodem: self.zmodem.clone(),
-                history_probe: self.history_probe.clone(),
-                git_probe: self.git_probe.clone(),
                 images: self.images.clone(),
                 clipboard_writes: self.clipboard_writes.clone(),
                 clipboard_write_busy: self.clipboard_write_busy.clone(),
@@ -971,8 +936,6 @@ impl RemoteTerminal {
         let running_command: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
         let trigger_output: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
         let zmodem = crate::terminal::zmodem::ZmodemPipe::new();
-        let history_probe = crate::terminal::history_probe::HistoryProbePipe::new();
-        let git_probe = crate::terminal::git_probe::GitProbePipe::new();
         let images = crate::terminal::images::ImageStore::new();
         let clipboard_writes = Arc::new(Mutex::new(VecDeque::new()));
         let clipboard_write_busy = Arc::new(AtomicBool::new(false));
@@ -998,8 +961,6 @@ impl RemoteTerminal {
                 running_command: running_command.clone(),
                 trigger_output: trigger_output.clone(),
                 zmodem: zmodem.clone(),
-                history_probe: history_probe.clone(),
-                git_probe: git_probe.clone(),
                 images: images.clone(),
                 clipboard_writes: clipboard_writes.clone(),
                 clipboard_write_busy: clipboard_write_busy.clone(),
@@ -1030,11 +991,6 @@ impl RemoteTerminal {
             running_command,
             trigger_output,
             zmodem,
-            history_probe,
-            git_probe,
-            ssh_endpoint: None,
-            ssh_user: None,
-            auto_supplied_password: false,
             agent,
             agent_session,
             images,
@@ -1111,8 +1067,6 @@ impl RemoteTerminal {
                     running_command,
                     trigger_output,
                     zmodem,
-                    history_probe,
-                    git_probe,
                     images,
                     clipboard_writes,
                     clipboard_write_busy,
@@ -1332,18 +1286,9 @@ impl RemoteTerminal {
                                 // so `rz`/`sz` binary frames do not paint as
                                 // garbage — and so the UI can drive the transfer.
                                 let bytes = zmodem.filter_output(&bytes);
-                                // Nested-SSH history probe: divert the dump so
-                                // it never paints, then wake the UI to parse it.
-                                let bytes = history_probe.filter_output(&bytes);
-                                // Nested-SSH git status probe: same divert
-                                // pattern as history (no Host/SFTP on the hop).
-                                let bytes = git_probe.filter_output(&bytes);
                                 if bytes.is_empty() {
                                     // Still wake the UI so it can poll the pipe.
-                                    if zmodem.is_diverting()
-                                        || history_probe.is_active()
-                                        || git_probe.is_active()
-                                    {
+                                    if zmodem.is_diverting() {
                                         flush_batch!();
                                         proxy.send_event(AlacEvent::Wakeup);
                                     }
@@ -1839,23 +1784,6 @@ impl RemoteTerminal {
             let _ = ClientMsg::Kill { pane_id }.encode(&mut stream);
             let _ = stream.shutdown(std::net::Shutdown::Write);
         }
-    }
-
-    pub fn ssh_endpoint(&self) -> Option<(String, u16)> {
-        self.ssh_endpoint.clone()
-    }
-
-    pub fn ssh_user(&self) -> Option<String> {
-        self.ssh_user.clone()
-    }
-
-    pub fn auto_supplied_password(&self) -> bool {
-        self.auto_supplied_password
-    }
-
-    /// Run a command on the far side of a native-SSH pane (extra session channel).
-    pub fn ssh_exec(_pane_id: u64, _command: &str) -> Result<tty7_core::host::Output, String> {
-        Err("Native SSH exec abolished".into())
     }
 
     const WORKSPACE_OP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
@@ -2457,28 +2385,32 @@ mod tests {
         assert!(matches!(PaneRoute::default(), PaneRoute::Local));
     }
 
+    fn ssh_workspace() -> PaneWorkspace {
+        PaneWorkspace {
+            workspace: crate::core::session::WorkspaceId::new(),
+            target: crate::core::session::RemoteTarget::direct("me", "build-box", 22),
+            label: Some("build-box".into()),
+            resize_echo: false,
+        }
+    }
+
     #[test]
-    fn a_remote_pane_routes_to_its_machine_on_the_pane_channel() {
+    fn a_direct_ssh_workspace_is_not_a_daemon_route() {
         let route = PaneRoute::for_workspace(Some(&ssh_workspace()));
-        let header = route.header().expect("a remote pane is routed");
-        assert_eq!(
-            header.channel,
-            crate::daemon::router::RouteChannel::Pane,
-            "a pane must not be sent to the control socket"
+        assert!(
+            matches!(route, PaneRoute::Unroutable(_)),
+            "OpenSSH hops are local PTYs, not a daemon workspace route"
         );
-        assert_eq!(header.describe(), "ssh me@build-box:22");
+        assert!(route.header().is_none(), "nothing to route to");
 
         let mut ws = ssh_workspace();
         ws.resize_echo = true;
         assert!(
             matches!(
                 PaneRoute::for_workspace(Some(&ws)),
-                PaneRoute::Remote {
-                    resize_echo: true,
-                    ..
-                }
+                PaneRoute::Unroutable(_)
             ),
-            "what the host's hello said about the resize echo rides the route"
+            "resize_echo cannot invent a daemon route"
         );
     }
 

@@ -26,9 +26,7 @@ pub(crate) fn pick_paths(options: Options) -> Option<Vec<PathBuf>> {
 #[cfg(target_os = "macos")]
 fn pick_paths_macos(options: Options) -> Option<Vec<PathBuf>> {
     use objc2::MainThreadMarker;
-    use objc2_app_kit::{
-        NSAppearanceCustomization, NSApplication, NSModalResponseOK, NSOpenPanel,
-    };
+    use objc2_app_kit::{NSAppearanceCustomization, NSApplication, NSModalResponseOK, NSOpenPanel};
 
     let mtm = MainThreadMarker::new()?;
     let app = NSApplication::sharedApplication(mtm);
@@ -53,11 +51,7 @@ fn pick_paths_macos(options: Options) -> Option<Vec<PathBuf>> {
             paths.push(PathBuf::from(path.to_string()));
         }
     }
-    if paths.is_empty() {
-        None
-    } else {
-        Some(paths)
-    }
+    if paths.is_empty() { None } else { Some(paths) }
 }
 
 #[cfg(not(target_os = "macos"))]

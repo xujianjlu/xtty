@@ -3,7 +3,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::mpsc::{self, Sender};
-use std::sync::{Arc, Condvar, Mutex, Weak};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -17,8 +17,7 @@ use crate::core::kitty_graphics::{GraphicsSniffer, Segment, Sniffed};
 use crate::core::osc::OscTokenizer;
 use crate::core::term_modes::TerminalModes;
 use crate::daemon::protocol::{
-    DaemonMsg, MAX_FRAME, PaneInfo, RemoteContext, RemoteKind,
-    ShellSpec, WinSize,
+    DaemonMsg, MAX_FRAME, PaneInfo, RemoteContext, RemoteKind, ShellSpec, WinSize,
 };
 use crate::daemon::shell_integration;
 
@@ -631,13 +630,12 @@ struct PaneState {
     subscriber: Option<Sender<DaemonMsg>>,
     subscriber_epoch: u64,
     allow_remote_clipboard_write: bool,
-    /// A native ssh pane's answer belongs to the profile that dialled the
-    /// host, and the client attaching to it never sees that spec: a window
-    /// reopening onto a pane it outlived attaches by id and sends `false`
-    /// because it has nothing better to send. Pinning the spec's answer keeps
-    /// the permission in one place. `None` means "no spec of our own", which
-    /// is every pane on a remote `tty7-server` — there the controlling client
-    /// is the only one holding the profile's answer, so its word is taken.
+    /// A window reopening onto a pane it outlived attaches by id and sends
+    /// `false` because it has nothing better to send. Pinning the spec's
+    /// answer keeps the permission in one place. `None` means "no spec of
+    /// our own", which is every pane on a remote `tty7-server` — there the
+    /// controlling client is the only one holding the profile's answer, so
+    /// its word is taken.
     clipboard_write_from_spec: Option<bool>,
     observers: Vec<Observer>,
     observer_seq: u64,
@@ -649,8 +647,8 @@ struct PaneState {
     /// The last title the pane reported over OSC 0/2, for the machine tree to
     /// record. See [`crate::core::machine::PaneRecord::osc_title`].
     osc_title: Option<String>,
-    /// Identity of the pane's "home" machine — the local shell, or the native
-    /// SSH endpoint that was dialled. Nested `ssh` hops overwrite `osc_title`;
+    /// Identity of the pane's "home" machine — the local shell, or the
+    /// OpenSSH hop that was dialled. Nested `ssh` hops overwrite `osc_title`;
     /// exiting them restores this so the tab does not keep the inner host.
     home_identity: Option<String>,
     shell: ShellState,
@@ -797,8 +795,19 @@ enum PaneBackend {
     Pty(PtyBackend),
 }
 
+/// What the local process table can honestly say about the PTY foreground.
+///
+/// It only sees this machine's `ssh` binary, never a hop typed *inside* that
+/// session. `Unknown` is a missed read; it must not look like "the hop ended".
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ForegroundHop {
+    Unknown,
+    Local,
+    Ssh(Option<RemoteContext>),
+}
+
 struct ForegroundProbes {
-    remote: Box<dyn Fn() -> Option<RemoteContext> + Send>,
+    remote: Box<dyn Fn() -> ForegroundHop + Send>,
     agent: Box<dyn Fn() -> Option<Option<(crate::core::cli_agent::CLIAgent, Vec<String>)>> + Send>,
     cwd: Box<dyn Fn() -> Option<PathBuf> + Send>,
 }
@@ -827,7 +836,6 @@ struct PtyParts {
     reader_handle: Box<dyn Read + Send>,
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
 }
-
 
 pub struct DaemonPane {
     pub id: u64,
@@ -1405,7 +1413,9 @@ impl DaemonPane {
                 observer_seq: 0,
                 cwd: spawn.initial_cwd,
                 cwd_from_osc: false,
-                osc_title: restored_title.clone().or_else(crate::core::tab_view::local_connection_identity),
+                osc_title: restored_title
+                    .clone()
+                    .or_else(crate::core::tab_view::local_connection_identity),
                 home_identity: restored_title
                     .as_deref()
                     .and_then(crate::core::tab_view::identity_from_title)
@@ -1509,7 +1519,7 @@ impl DaemonPane {
             writer.clone(),
             move || foreground_command_running(&fg_master, shell_pid),
             ForegroundProbes {
-                remote: Box::new(move || foreground_remote_context(&remote_master)),
+                remote: Box::new(move || inspect_foreground_hop(&remote_master)),
                 agent: Box::new(move || foreground_agent(&agent_master)),
                 cwd: Box::new(move || foreground_cwd(&cwd_master, shell_pid)),
             },
@@ -1834,10 +1844,17 @@ impl DaemonPane {
                                 suppress_relayed_prompt_marks(&mut signals.shell);
                             }
 
-                            // Process table (hop / local cwd / local agent) only
-                            // on a surviving prompt mark — the PS1 refresh.
-                            // OSC 7 is the pane cwd; the probe must not race it.
-                            let poll_now = signals.shell.iter().any(|s| s.at_prompt);
+                            // Process table (hop / local cwd / local agent) on a
+                            // prompt mark, and also while a local program owns
+                            // the PTY and we have not yet learned a hop —
+                            // typed `ssh` has no dest SI, so `at_prompt` never
+                            // fires and the hop would otherwise stay undiscovered.
+                            let need_hop = {
+                                let st = state.lock().unwrap();
+                                st.remote.is_none()
+                            };
+                            let poll_now = signals.shell.iter().any(|s| s.at_prompt)
+                                || (need_hop && foreground_running());
                             let remote = if poll_now {
                                 let managed = {
                                     let st = state.lock().unwrap();
@@ -1870,8 +1887,8 @@ impl DaemonPane {
                             record_output(&mut st, bytes);
                             fan_out_output(&mut st, bytes, frames, &gate);
                             apply_signals(&mut st, signals);
-                            if let Some(remote) = remote {
-                                apply_remote_context(&mut st, remote);
+                            if let Some(hop) = remote {
+                                adopt_probed_remote(&mut st, hop);
                             }
                             latch_remote_prompt(&mut st, saw_prompt_mark);
                             // Keep kitty file/shm transfer gated on the pane's
@@ -1882,8 +1899,8 @@ impl DaemonPane {
                             // The process-table probe only sees this machine's
                             // foreground. Over shell-ssh that is `ssh` itself,
                             // which would wipe an agent the OSC 133 path just
-                            // learned from the far shell. Native SSH already
-                            // returns no probe; skip here for every remote.
+                            // learned from the far shell. Skip here for every
+                            // remote hop.
                             if let Some(agent) = agent
                                 && st.remote.is_none()
                             {
@@ -1956,9 +1973,9 @@ impl DaemonPane {
     ///
     /// Answered by the kernel (`tcgetpgrp`), not by the pane's stored shell
     /// state, which is why it can contradict `st.shell.at_prompt` — see
-    /// [`replayed_at_prompt`]. A pane with no pty to ask (native ssh, and
-    /// every pane on Windows, where the pty has no foreground process group)
-    /// answers "no", which is what the live suppression already assumes.
+    /// [`replayed_at_prompt`]. A pane with no pty to ask (every pane on
+    /// Windows, where the pty has no foreground process group) answers
+    /// "no", which is what the live suppression already assumes.
     fn has_foreground_command(&self) -> bool {
         match &self.backend {
             PaneBackend::Pty(pty) => foreground_command_running(&pty.master, pty.shell_pid),
@@ -2614,8 +2631,8 @@ fn apply_signals(st: &mut PaneState, signals: SniffSignals) {
         if !st.cwd_from_osc
             && let Some(path) = crate::core::tab_view::cwd_from_title(&title)
         {
-            let identity = crate::core::tab_view::identity_from_title(&title)
-                .or_else(|| st.osc_title.clone());
+            let identity =
+                crate::core::tab_view::identity_from_title(&title).or_else(|| st.osc_title.clone());
             let cwd = title_cwd_path(&path, identity.as_deref());
             if st.cwd.as_ref() != Some(&cwd) {
                 notify(st, DaemonMsg::Cwd(cwd.clone()));
@@ -2645,8 +2662,8 @@ fn apply_signals(st: &mut PaneState, signals: SniffSignals) {
             try_ssh_command_hop(st, cmd);
             try_user_switch(st, cmd);
         }
-        // Local panes learn the agent from the process table. A remote pane
-        // (Native SSH or a shell-in-ssh hop) has no local child to inspect —
+        // Local panes learn the agent from the process table. An OpenSSH hop
+        // has no local child to inspect —
         // the far `claude` is invisible here — so the OSC 133;C command
         // capture is the only process-shaped signal. Apply it only when the
         // capture actually changes: A/B prompt marks keep the previous
@@ -2863,6 +2880,24 @@ fn same_hop(a: Option<&RemoteContext>, b: Option<&RemoteContext>) -> bool {
     }
 }
 
+/// Process table is only the outermost local `ssh`. Once we already have a
+/// hop, a miss or a *different* dest must not wipe dest / cwd / agent — that
+/// is what made git and Agent rot after a few hours, and what pinned jumper
+/// tabs on `~`.
+fn adopt_probed_remote(st: &mut PaneState, hop: ForegroundHop) {
+    let current_ssh = st
+        .remote
+        .as_ref()
+        .is_some_and(|r| r.kind == RemoteKind::Ssh);
+    match hop {
+        ForegroundHop::Unknown if current_ssh => {}
+        ForegroundHop::Ssh(_) if current_ssh => {}
+        ForegroundHop::Local if current_ssh => apply_remote_context(st, None),
+        ForegroundHop::Ssh(ctx) => apply_remote_context(st, ctx),
+        ForegroundHop::Local | ForegroundHop::Unknown => {}
+    }
+}
+
 fn apply_remote_context(st: &mut PaneState, remote: Option<RemoteContext>) {
     if same_hop(st.remote.as_ref(), remote.as_ref()) {
         return;
@@ -3039,15 +3074,41 @@ fn foreground_cwd(
 }
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
+fn inspect_foreground_hop(master: &Mutex<Option<Box<dyn MasterPty + Send>>>) -> ForegroundHop {
+    let Some(pid) = master
+        .lock()
+        .ok()
+        .and_then(|m| m.as_ref().and_then(|m| m.process_group_leader()))
+    else {
+        return ForegroundHop::Unknown;
+    };
+    let Some(argv) = crate::daemon::remote::foreground_argv(pid) else {
+        return ForegroundHop::Unknown;
+    };
+    let is_ssh = argv
+        .first()
+        .and_then(|p| Path::new(p).file_name())
+        .and_then(|n| n.to_str())
+        == Some("ssh");
+    if !is_ssh {
+        return ForegroundHop::Local;
+    }
+    ForegroundHop::Ssh(crate::daemon::remote::parse_ssh_invocation(&argv).map(|inv| inv.context))
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn foreground_remote_context(
     master: &Mutex<Option<Box<dyn MasterPty + Send>>>,
 ) -> Option<RemoteContext> {
-    let pid = master
-        .lock()
-        .ok()
-        .and_then(|m| m.as_ref().and_then(|m| m.process_group_leader()))?;
-    let argv = crate::daemon::remote::foreground_argv(pid)?;
-    crate::daemon::remote::parse_ssh_invocation(&argv).map(|inv| inv.context)
+    match inspect_foreground_hop(master) {
+        ForegroundHop::Ssh(ctx) => ctx,
+        _ => None,
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn inspect_foreground_hop(_master: &Mutex<Option<Box<dyn MasterPty + Send>>>) -> ForegroundHop {
+    ForegroundHop::Unknown
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
@@ -3217,28 +3278,27 @@ pub(crate) fn parse_osc7(payload: &[u8]) -> Option<PathBuf> {
 /// OSC 7 `file://host/path` or Kitty `kitty-shell-cwd://host/path`.
 fn parse_osc7_parts(payload: &[u8]) -> Option<(Option<String>, PathBuf)> {
     let rest = payload.strip_prefix(b"7;")?;
-    let (host, path_bytes): (Option<String>, &[u8]) =
-        if let Some(after) = rest
-            .strip_prefix(b"file://")
-            .or_else(|| rest.strip_prefix(b"kitty-shell-cwd://"))
-        {
-            let idx = after.iter().position(|&c| c == b'/')?;
-            let raw_host = String::from_utf8_lossy(&after[..idx]);
-            let host = {
-                let h = raw_host
-                    .rsplit('@')
-                    .next()
-                    .unwrap_or(raw_host.as_ref())
-                    .trim()
-                    .trim_matches(|c| c == '[' || c == ']');
-                osc7_identity_host(h)
-            };
-            (host, &after[idx..])
-        } else if rest.first() == Some(&b'/') {
-            (None, rest)
-        } else {
-            return None;
+    let (host, path_bytes): (Option<String>, &[u8]) = if let Some(after) = rest
+        .strip_prefix(b"file://")
+        .or_else(|| rest.strip_prefix(b"kitty-shell-cwd://"))
+    {
+        let idx = after.iter().position(|&c| c == b'/')?;
+        let raw_host = String::from_utf8_lossy(&after[..idx]);
+        let host = {
+            let h = raw_host
+                .rsplit('@')
+                .next()
+                .unwrap_or(raw_host.as_ref())
+                .trim()
+                .trim_matches(|c| c == '[' || c == ']');
+            osc7_identity_host(h)
         };
+        (host, &after[idx..])
+    } else if rest.first() == Some(&b'/') {
+        (None, rest)
+    } else {
+        return None;
+    };
     let decoded = percent_decode(path_bytes);
     if decoded.is_empty() {
         return None;
@@ -4304,7 +4364,7 @@ mod tests {
 
         let mut st = test_state(true);
         st.remote = Some(RemoteContext {
-            kind: RemoteKind::Ssh /* was NativeSsh; removed */,
+            kind: RemoteKind::Ssh,
             argv: Vec::new(),
             target: "dev@box".into(),
         });
@@ -4769,10 +4829,7 @@ mod tests {
 
         let mut s = OscSniffer::new();
         let iterm = s.feed(b"\x1b]1337;CurrentDir=/opt/src\x07");
-        assert_eq!(
-            iterm.cwd.as_deref(),
-            Some(std::path::Path::new("/opt/src"))
-        );
+        assert_eq!(iterm.cwd.as_deref(), Some(std::path::Path::new("/opt/src")));
     }
 
     #[test]
@@ -4950,7 +5007,7 @@ mod tests {
                 null_writer(),
                 || false,
                 ForegroundProbes {
-                    remote: Box::new(|| None),
+                    remote: Box::new(|| ForegroundHop::Unknown),
                     agent: Box::new(|| Some(None)),
                     cwd: Box::new(|| None),
                 },
@@ -5011,7 +5068,7 @@ mod tests {
                 null_writer(),
                 || false,
                 ForegroundProbes {
-                    remote: Box::new(|| None),
+                    remote: Box::new(|| ForegroundHop::Unknown),
                     agent: Box::new(|| Some(None)),
                     cwd: Box::new(|| None),
                 },
@@ -5781,12 +5838,16 @@ mod tests {
         let probes_taken = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let taken = probes_taken.clone();
         let remote = Box::new(move || {
-            // First probe: `ssh` holds the pty. Every one after: it is gone.
-            (taken.fetch_add(1, Ordering::SeqCst) == 0).then(|| RemoteContext {
-                kind: RemoteKind::Ssh,
-                argv: vec!["ssh".into(), "box".into()],
-                target: "box".into(),
-            })
+            // First probe: `ssh` holds the pty. Every one after: local shell.
+            if taken.fetch_add(1, Ordering::SeqCst) == 0 {
+                ForegroundHop::Ssh(Some(RemoteContext {
+                    kind: RemoteKind::Ssh,
+                    argv: vec!["ssh".into(), "box".into()],
+                    target: "box".into(),
+                }))
+            } else {
+                ForegroundHop::Local
+            }
         });
 
         let handle = DaemonPane::spawn_reader(
@@ -5851,7 +5912,7 @@ mod tests {
             null_writer(),
             || false,
             ForegroundProbes {
-                remote: Box::new(|| None),
+                remote: Box::new(|| ForegroundHop::Unknown),
                 agent: Box::new(|| None),
                 cwd: Box::new(|| None),
             },
@@ -5920,7 +5981,7 @@ mod tests {
             writer,
             || false,
             ForegroundProbes {
-                remote: Box::new(|| None),
+                remote: Box::new(|| ForegroundHop::Unknown),
                 agent: Box::new(|| None),
                 cwd: Box::new(|| None),
             },
@@ -5950,8 +6011,8 @@ mod tests {
         assert!(matches!(sub_rx.try_recv(), Ok(DaemonMsg::Output(b)) if b == b"after"));
     }
 
-    /// A window that reopens onto a native ssh pane it outlived attaches by
-    /// pane id: it never sees the profile that dialled the host, so it sends
+    /// A window that reopens onto a pane it outlived attaches by pane id:
+    /// it never sees the profile that dialled the host, so it sends
     /// `allow_remote_clipboard_write: false` because that is all it has. The
     /// spec's answer has to survive that, or the permission the user granted
     /// is revoked on the first re-attach and every later copy comes back
@@ -6013,7 +6074,7 @@ mod tests {
             null_writer(),
             || false,
             ForegroundProbes {
-                remote: Box::new(|| None),
+                remote: Box::new(|| ForegroundHop::Unknown),
                 agent: Box::new(|| None),
                 cwd: Box::new(|| None),
             },
@@ -6094,7 +6155,7 @@ mod tests {
             writer,
             || false,
             ForegroundProbes {
-                remote: Box::new(|| None),
+                remote: Box::new(|| ForegroundHop::Unknown),
                 agent: Box::new(|| None),
                 cwd: Box::new(|| None),
             },
@@ -6131,7 +6192,7 @@ mod tests {
             null_writer(),
             || false,
             ForegroundProbes {
-                remote: Box::new(|| None),
+                remote: Box::new(|| ForegroundHop::Unknown),
                 agent: Box::new(|| None),
                 cwd: Box::new(|| None),
             },
@@ -6184,7 +6245,7 @@ mod tests {
             null_writer(),
             || false,
             ForegroundProbes {
-                remote: Box::new(|| None),
+                remote: Box::new(|| ForegroundHop::Unknown),
                 agent: Box::new(|| None),
                 cwd: Box::new(|| Some(PathBuf::from("/Users/alice/dev/tty7"))),
             },
@@ -6197,11 +6258,9 @@ mod tests {
             Some(Path::new("/Users/alice/dev/tty7"))
         );
         let msgs: Vec<_> = std::iter::from_fn(|| sub_rx.try_recv().ok()).collect();
-        assert!(
-            msgs.iter().any(
-                |m| matches!(m, DaemonMsg::Cwd(p) if p == &PathBuf::from("/Users/alice/dev/tty7"))
-            )
-        );
+        assert!(msgs.iter().any(
+            |m| matches!(m, DaemonMsg::Cwd(p) if p == &PathBuf::from("/Users/alice/dev/tty7"))
+        ));
     }
 
     #[test]
@@ -6222,7 +6281,7 @@ mod tests {
             null_writer(),
             || false,
             ForegroundProbes {
-                remote: Box::new(|| None),
+                remote: Box::new(|| ForegroundHop::Unknown),
                 agent: Box::new(|| None),
                 cwd: Box::new(|| Some(PathBuf::from("/Users/alice/dev/tty7"))),
             },
@@ -6251,7 +6310,7 @@ mod tests {
             null_writer(),
             || false,
             ForegroundProbes {
-                remote: Box::new(|| None),
+                remote: Box::new(|| ForegroundHop::Unknown),
                 agent: Box::new(|| None),
                 cwd: Box::new(|| None),
             },
@@ -6277,7 +6336,7 @@ mod tests {
             null_writer(),
             || false,
             ForegroundProbes {
-                remote: Box::new(|| None),
+                remote: Box::new(|| ForegroundHop::Unknown),
                 agent: Box::new(|| None),
                 cwd: Box::new(|| None),
             },
@@ -6832,5 +6891,49 @@ mod tests {
 
         apply_remote_context(&mut st, None);
         assert_eq!(st.osc_title.as_deref(), Some("alice@laptop"));
+    }
+
+    #[test]
+    fn process_table_does_not_overwrite_an_inner_hop() {
+        let mut st = test_state(true);
+        apply_remote_context(
+            &mut st,
+            Some(RemoteContext {
+                kind: RemoteKind::Ssh,
+                argv: vec!["ssh".into(), "carol@dev-box".into()],
+                target: "carol@dev-box".into(),
+            }),
+        );
+        st.cwd = Some(PathBuf::from("/home/carol/src"));
+        st.cwd_from_osc = true;
+
+        adopt_probed_remote(
+            &mut st,
+            ForegroundHop::Ssh(Some(RemoteContext {
+                kind: RemoteKind::Ssh,
+                argv: vec!["ssh".into(), "bob@jumper".into()],
+                target: "bob@jumper".into(),
+            })),
+        );
+        assert_eq!(
+            st.remote.as_ref().map(|r| r.target.as_str()),
+            Some("carol@dev-box")
+        );
+        assert_eq!(st.cwd.as_deref(), Some(Path::new("/home/carol/src")));
+
+        adopt_probed_remote(&mut st, ForegroundHop::Unknown);
+        assert_eq!(
+            st.remote.as_ref().map(|r| r.target.as_str()),
+            Some("carol@dev-box")
+        );
+
+        adopt_probed_remote(&mut st, ForegroundHop::Ssh(None));
+        assert!(
+            st.remote.is_some(),
+            "unparsable outer ssh must not look like exit"
+        );
+
+        adopt_probed_remote(&mut st, ForegroundHop::Local);
+        assert!(st.remote.is_none(), "local shell owns the PTY: hop ended");
     }
 }

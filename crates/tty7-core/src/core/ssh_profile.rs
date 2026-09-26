@@ -16,6 +16,15 @@ pub struct SshProfile {
     pub port: u16,
     pub user: String,
     pub jump_host: Option<Uuid>,
+    /// When a jump host is set, tunnel with OpenSSH `ProxyJump` (`-J`).
+    /// Off: log into the jumper first, then type this profile's host name.
+    #[serde(default = "default_true")]
+    pub proxy_jump: bool,
+    /// When this host is the interactive jumper, wait for this suffix on the
+    /// last screen line before typing the destination. Empty = a line ending
+    /// in `$`, `#`, `%`, or `>`.
+    #[serde(default, skip_serializing_if = "skip_empty_opt")]
+    pub hop_ready_prompt: Option<String>,
     pub proxy_command: Option<String>,
     pub socks_proxy: Option<HostPort>,
     pub http_proxy: Option<HostPort>,
@@ -60,6 +69,10 @@ impl Default for SshProfile {
             port: default_port(),
             user: String::new(),
             jump_host: None,
+            // New hosts: interactive jumper (ssh alias, then type dest).
+            // Saved JSON without the field still deserializes as true.
+            proxy_jump: false,
+            hop_ready_prompt: None,
             proxy_command: None,
             socks_proxy: None,
             http_proxy: None,
@@ -223,6 +236,74 @@ pub fn parse_quick_connect(input: &str) -> Option<QuickConnect> {
     Some(QuickConnect { user, host, port })
 }
 
+/// Match a jump-host field to an existing profile by name, host, or
+/// `user@host[:port]`.
+pub fn find_jump_profile<'a>(
+    text: &str,
+    except: Uuid,
+    profiles: &'a [SshProfile],
+) -> Option<&'a SshProfile> {
+    let text = text.trim();
+    if text.is_empty() {
+        return None;
+    }
+    if let Some(p) = profiles.iter().find(|p| p.id != except && p.name == text) {
+        return Some(p);
+    }
+    let q = parse_quick_connect(text)?;
+    profiles.iter().find(|p| {
+        p.id != except
+            && p.host.eq_ignore_ascii_case(&q.host)
+            && q.user.as_deref().is_none_or(|u| p.user == u)
+            && q.port.is_none_or(|port| p.port == port)
+    })
+}
+
+pub fn jump_text_names_self(text: &str, draft_name: &str, draft_host: &str) -> bool {
+    let text = text.trim();
+    if text.is_empty() {
+        return false;
+    }
+    if !draft_name.is_empty() && text == draft_name {
+        return true;
+    }
+    parse_quick_connect(text).is_some_and(|q| {
+        !draft_host.trim().is_empty() && q.host.eq_ignore_ascii_case(draft_host.trim())
+    })
+}
+
+pub fn jumper_stub_from_text(text: &str) -> Option<SshProfile> {
+    let q = parse_quick_connect(text)?;
+    let mut p = SshProfile::new(q.host.clone());
+    p.host = q.host;
+    if let Some(user) = q.user {
+        p.user = user;
+    }
+    if let Some(port) = q.port {
+        p.port = port;
+    }
+    Some(p)
+}
+
+pub fn ensure_jumper_profile(
+    text: &str,
+    except: Uuid,
+    except_name: &str,
+    except_host: &str,
+    profiles: &mut Vec<SshProfile>,
+) -> Option<Uuid> {
+    if jump_text_names_self(text, except_name, except_host) {
+        return None;
+    }
+    if let Some(p) = find_jump_profile(text, except, profiles) {
+        return Some(p.id);
+    }
+    let stub = jumper_stub_from_text(text)?;
+    let id = stub.id;
+    profiles.push(stub);
+    Some(id)
+}
+
 fn split_host_port(hostport: &str) -> Option<(String, Option<u16>)> {
     if hostport.is_empty() {
         return Some((String::new(), None));
@@ -278,7 +359,7 @@ pub fn to_connect_string(profile: &SshProfile) -> String {
 /// OpenSSH argv (no leading `ssh`) for a saved/transient profile.
 ///
 /// Host picker / "+" use this so a selected host opens a normal local pane
-/// that runs system `ssh`, not the russh Native path.
+/// that runs system `ssh`.
 pub fn openssh_argv(profile: &SshProfile, profiles: &[SshProfile]) -> Vec<String> {
     let mut args = Vec::new();
     if profile.port != 22 {
@@ -314,9 +395,11 @@ pub fn openssh_argv(profile: &SshProfile, profiles: &[SshProfile]) -> Vec<String
             args.push(format!("ProxyCommand=nc -X connect -x {host}:{port} %h %p"));
         }
     }
-    if let Some(jump) = proxy_jump_csv(profile, profiles) {
-        args.push("-J".into());
-        args.push(jump);
+    if profile.proxy_jump {
+        if let Some(jump) = proxy_jump_csv(profile, profiles) {
+            args.push("-J".into());
+            args.push(jump);
+        }
     }
     if let Some(secs) = profile.connect_timeout_s {
         args.push("-o".into());
@@ -334,13 +417,65 @@ pub fn openssh_argv(profile: &SshProfile, profiles: &[SshProfile]) -> Vec<String
     args
 }
 
-/// Far-side bootstrap: detect `$SHELL`, install SI, `exec` that login shell.
-/// Host picker / "+" append this as the remote command with `-t`.
+/// Token you would type after `ssh` in a shell (`jumper`, not `user@fqdn`).
 ///
-/// Do not resolve the destination with `ssh -G` first — that can block on
-/// ProxyCommand / jumper `Match exec` and freeze the tab.
-pub fn ssh_remote_si_command() -> String {
-    crate::daemon::hop_bootstrap()
+/// Import stores `Host` as `name` and `HostName` as `host`. Passing the FQDN
+/// (and `-i` / `User`) skips the `Host jumper` block — IdentitiesOnly and
+/// IdentityFile never apply, so the jumper asks for a password.
+pub fn ssh_invoke_token(profile: &SshProfile) -> String {
+    let name = profile.name.trim();
+    let host = profile.host.trim();
+    if is_ssh_invoke_token(name) && host_looks_resolved(host) && name != host {
+        return name.to_string();
+    }
+    if is_ssh_invoke_token(host) {
+        return host.to_string();
+    }
+    if is_ssh_invoke_token(name) {
+        return name.to_string();
+    }
+    if !host.is_empty() {
+        return host.to_string();
+    }
+    name.to_string()
+}
+
+/// First hop to an interactive jumper: `ssh jumper`, same as the shell.
+pub fn openssh_invoke_argv(profile: &SshProfile) -> Vec<String> {
+    vec![ssh_invoke_token(profile)]
+}
+
+/// Destination token as typed in a shell (`user@jumper`, not `user@fqdn`).
+pub fn typed_ssh_destination(profile: &SshProfile) -> String {
+    let token = ssh_invoke_token(profile);
+    if profile.user.is_empty() {
+        token
+    } else {
+        format!("{}@{}", profile.user, token)
+    }
+}
+
+/// Same optional flags as [`openssh_argv`], destination like `ssh jumper`.
+///
+/// Empty fields stay off the line (`-p` / `-i` / `user@` only when set).
+/// The Host token keeps OpenSSH on the `Host jumper` block for options we
+/// do not model (`PubkeyAcceptedAlgorithms +ssh-rsa`, ControlMaster, …).
+pub fn openssh_typed_argv(profile: &SshProfile, profiles: &[SshProfile]) -> Vec<String> {
+    let mut args = openssh_argv(profile, profiles);
+    if let Some(last) = args.last_mut() {
+        *last = typed_ssh_destination(profile);
+    }
+    args
+}
+
+fn is_ssh_invoke_token(s: &str) -> bool {
+    !s.is_empty()
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | '@'))
+}
+
+fn host_looks_resolved(host: &str) -> bool {
+    host.parse::<std::net::IpAddr>().is_ok() || host.contains('.')
 }
 
 /// POSIX-quoted `ssh …` line for typing into a local shell (so the SI `ssh()`
@@ -398,6 +533,48 @@ fn collect_proxy_jumps(
     let mut hops = collect_proxy_jumps(jp, profiles, visited);
     hops.push(jump_endpoint(jp));
     hops
+}
+
+/// Who to `ssh` to, and what to type afterwards.
+///
+/// A jump host with `proxy_jump` still dials the destination (`-J` is in argv).
+/// A jump host without it dials the jumper, then types the destination host
+/// into that session — the bastion that will not accept `ProxyJump`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SshConnectPlan {
+    pub dial: SshProfile,
+    pub follow_up: Vec<String>,
+    pub hop_ready_prompt: Option<String>,
+}
+
+pub fn ssh_connect_plan(profile: &SshProfile, profiles: &[SshProfile]) -> SshConnectPlan {
+    if !profile.proxy_jump {
+        if let Some(id) = profile.jump_host {
+            if let Some(jumper) = profiles.iter().find(|p| p.id == id) {
+                let dest = interactive_hop_line(profile);
+                if !dest.is_empty() {
+                    return SshConnectPlan {
+                        hop_ready_prompt: jumper.hop_ready_prompt.clone(),
+                        dial: jumper.clone(),
+                        follow_up: vec![dest],
+                    };
+                }
+            }
+        }
+    }
+    SshConnectPlan {
+        dial: profile.clone(),
+        follow_up: Vec::new(),
+        hop_ready_prompt: None,
+    }
+}
+
+fn interactive_hop_line(profile: &SshProfile) -> String {
+    let host = profile.host.trim();
+    if !host.is_empty() {
+        return host.to_string();
+    }
+    profile.name.trim().to_string()
 }
 
 fn posix_ssh_arg(s: &str) -> String {
@@ -469,8 +646,8 @@ pub fn expand_tilde(path: &str) -> String {
 ///
 /// The list stays short on purpose: every offered key spends one of the
 /// server's `MaxAuthTries` (default 6), shared with explicit keys and agent
-/// identities. `id_dsa` is long deprecated, `id_xmss`/`id_*_sk` are beyond
-/// what russh can sign with, so the three software keys cover what exists in
+/// identities. `id_dsa` is long deprecated, `id_xmss`/`id_*_sk` are
+/// user-specified, so the three software keys cover what exists in
 /// practice — ed25519 first as the modern default.
 pub fn default_identity_candidates() -> Vec<String> {
     let Some(home) = home_dir() else {
@@ -750,6 +927,7 @@ mod tests {
         app.user = "deploy".into();
         app.port = 22;
         app.jump_host = Some(bastion.id);
+        app.proxy_jump = true;
         app.identity_files = vec!["~/.ssh/id_ed25519".into()];
         app.agent_forward = true;
 
@@ -766,6 +944,123 @@ mod tests {
         assert!(line.contains("deploy@app.internal"));
         assert!(line.contains("-J"));
     }
+
+    #[test]
+    fn missing_proxy_jump_field_defaults_on() {
+        let p: SshProfile =
+            serde_json::from_str(r#"{"name":"app","host":"box","user":"me"}"#).unwrap();
+        assert!(p.proxy_jump, "existing hosts keep ProxyJump");
+    }
+
+    #[test]
+    fn interactive_jump_dials_jumper_and_types_dest() {
+        let mut bastion = SshProfile::new("bastion");
+        bastion.host = "jumper".into();
+        bastion.user = "gate".into();
+
+        let mut app = SshProfile::new("app");
+        app.host = "app.internal".into();
+        app.user = "deploy".into();
+        app.jump_host = Some(bastion.id);
+        app.proxy_jump = false;
+
+        let profiles = vec![bastion.clone(), app.clone()];
+        let argv = openssh_argv(&app, &profiles);
+        assert!(
+            !argv.iter().any(|a| a == "-J"),
+            "interactive jumper must not emit ProxyJump"
+        );
+
+        let plan = ssh_connect_plan(&app, &profiles);
+        assert_eq!(plan.dial.id, bastion.id);
+        assert_eq!(plan.follow_up, vec!["app.internal".to_string()]);
+        assert_eq!(plan.hop_ready_prompt, None);
+        let jumper_argv = openssh_invoke_argv(&plan.dial);
+        assert_eq!(
+            jumper_argv,
+            vec!["jumper".to_string()],
+            "first hop is `ssh jumper`, not gate@jumper / FQDN"
+        );
+    }
+
+    #[test]
+    fn invoke_token_prefers_host_alias_over_imported_hostname() {
+        let mut jumper = SshProfile::new("jumper");
+        jumper.host = "jumper.qihoo.net".into();
+        jumper.user = "gate".into();
+        jumper.identity_files = vec!["~/.ssh/id_jumper".into()];
+        assert_eq!(ssh_invoke_token(&jumper), "jumper");
+        assert_eq!(openssh_invoke_argv(&jumper), vec!["jumper".to_string()]);
+        assert_eq!(
+            openssh_argv(&jumper, &[]).last().map(String::as_str),
+            Some("gate@jumper.qihoo.net"),
+            "full argv still bakes User@HostName — must not be used for jumper hop"
+        );
+        assert_eq!(
+            openssh_typed_argv(&jumper, &[]),
+            vec![
+                "-i".into(),
+                expand_tilde("~/.ssh/id_jumper"),
+                "gate@jumper".into(),
+            ],
+            "optional -i / user@, destination is the typed Host token"
+        );
+    }
+
+    #[test]
+    fn jump_field_matches_name_or_host_and_creates_a_stub() {
+        let mut bastion = SshProfile::new("jumper");
+        bastion.host = "jumper.qihoo.net".into();
+        let profiles = vec![bastion.clone()];
+        assert_eq!(
+            find_jump_profile("jumper.qihoo.net", Uuid::nil(), &profiles).map(|p| p.id),
+            Some(bastion.id)
+        );
+        assert!(jump_text_names_self(
+            "krsvr-gray-01.example",
+            "gray1",
+            "krsvr-gray-01.example"
+        ));
+        let mut list = Vec::new();
+        let id = ensure_jumper_profile(
+            "jumper.qihoo.net",
+            Uuid::nil(),
+            "gray1",
+            "app.internal",
+            &mut list,
+        )
+        .expect("stub");
+        assert_eq!(list[0].id, id);
+        assert_eq!(list[0].host, "jumper.qihoo.net");
+    }
+
+    #[test]
+    fn proxy_jump_plan_dials_the_destination() {
+        let mut bastion = SshProfile::new("bastion");
+        bastion.host = "jumper".into();
+        let mut app = SshProfile::new("app");
+        app.host = "app.internal".into();
+        app.jump_host = Some(bastion.id);
+        app.proxy_jump = true;
+        let profiles = vec![bastion, app.clone()];
+        let plan = ssh_connect_plan(&app, &profiles);
+        assert_eq!(plan.dial.id, app.id);
+        assert!(plan.follow_up.is_empty());
+        assert_eq!(plan.hop_ready_prompt, None);
+    }
+
+    #[test]
+    fn interactive_jump_copies_jumper_ready_prompt() {
+        let mut bastion = SshProfile::new("bastion");
+        bastion.host = "jumper".into();
+        bastion.hop_ready_prompt = Some("Opt>".into());
+        let mut app = SshProfile::new("app");
+        app.host = "app.internal".into();
+        app.jump_host = Some(bastion.id);
+        app.proxy_jump = false;
+        let plan = ssh_connect_plan(&app, &[bastion, app.clone()]);
+        assert_eq!(plan.hop_ready_prompt.as_deref(), Some("Opt>"));
+    }
 }
 
 fn new_id() -> Uuid {
@@ -778,4 +1073,8 @@ fn default_port() -> u16 {
 
 fn default_true() -> bool {
     true
+}
+
+fn skip_empty_opt(s: &Option<String>) -> bool {
+    s.as_ref().map_or(true, |v| v.trim().is_empty())
 }

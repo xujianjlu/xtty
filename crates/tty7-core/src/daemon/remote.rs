@@ -108,6 +108,72 @@ pub fn ssh_argv_through_dest(argv: &[String]) -> Option<Vec<String>> {
     Some(parse_ssh_invocation(argv)?.context.argv)
 }
 
+/// True when this OpenSSH argv tunnels through a jumper (`-J` / ProxyJump /
+/// JumpHost). Dest-only one-click SI install must not run on those hops.
+pub fn ssh_argv_uses_jumper(argv: &[String]) -> bool {
+    ssh_args_use_jumper(argv)
+}
+
+fn ssh_args_use_jumper(args: &[String]) -> bool {
+    let mut i = 0;
+    if args
+        .first()
+        .and_then(|a| Path::new(a).file_name())
+        .and_then(|n| n.to_str())
+        == Some("ssh")
+    {
+        i = 1;
+    }
+    while i < args.len() {
+        let a = &args[i];
+        if a == "--" {
+            break;
+        }
+        if !a.starts_with('-') || a == "-" {
+            break;
+        }
+        if a == "-J" {
+            return true;
+        }
+        if a.starts_with("-J") && a.len() > 2 && !a.starts_with("--") {
+            return true;
+        }
+        if a == "-o" {
+            if args.get(i + 1).is_some_and(|v| ssh_option_is_jump(v)) {
+                return true;
+            }
+            i += 2;
+            continue;
+        }
+        if let Some(rest) = a.strip_prefix("-o") {
+            let v = rest.trim_start_matches('=');
+            if ssh_option_is_jump(v) {
+                return true;
+            }
+        }
+        if let Some(short) = a.strip_prefix('-')
+            && !short.starts_with('-')
+            && short.contains('J')
+        {
+            return true;
+        }
+        if a.len() == 2 {
+            let flag = a.as_bytes()[1] as char;
+            if option_takes_value(flag) {
+                i += 2;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    false
+}
+
+fn ssh_option_is_jump(v: &str) -> bool {
+    let key = v.split_once('=').map(|(k, _)| k).unwrap_or(v).trim();
+    key.eq_ignore_ascii_case("ProxyJump") || key.eq_ignore_ascii_case("JumpHost")
+}
+
 /// Remote command after dest, if any. The SI bootstrap is one argument.
 pub fn ssh_remote_command(argv: &[String]) -> Option<String> {
     let through = ssh_argv_through_dest(argv)?;
@@ -267,6 +333,35 @@ mod tests {
     }
 
     #[test]
+    fn jumper_flags_are_detected() {
+        assert!(!ssh_argv_uses_jumper(&argv(&["ssh", "me@cd02"])));
+        assert!(ssh_argv_uses_jumper(&argv(&[
+            "ssh",
+            "-J",
+            "gate@jumper",
+            "deploy@app"
+        ])));
+        assert!(ssh_argv_uses_jumper(&argv(&["ssh", "-Jjump", "dev"])));
+        assert!(ssh_argv_uses_jumper(&argv(&[
+            "ssh",
+            "-o",
+            "ProxyJump=jumper",
+            "app"
+        ])));
+        assert!(ssh_argv_uses_jumper(&argv(&[
+            "ssh",
+            "-oJumpHost=jumper",
+            "app"
+        ])));
+        assert!(!ssh_argv_uses_jumper(&argv(&[
+            "ssh",
+            "-o",
+            "ConnectTimeout=15",
+            "app"
+        ])));
+    }
+
+    #[test]
     fn parses_basic_ssh_invocation() {
         let inv = parse_ssh_invocation(&argv(&["ssh", "user@dev"])).unwrap();
         assert_eq!(inv.context.target, "user@dev");
@@ -330,7 +425,12 @@ mod tests {
 
     #[test]
     fn argv_through_dest_drops_the_remote_command() {
-        let full = argv(&["ssh", "-t", "cd02", "unset TTY7_SHELL_INTEGRATION; exec zsh"]);
+        let full = argv(&[
+            "ssh",
+            "-t",
+            "cd02",
+            "unset TTY7_SHELL_INTEGRATION; exec zsh",
+        ]);
         assert_eq!(
             ssh_argv_through_dest(&full),
             Some(argv(&["ssh", "-t", "cd02"]))

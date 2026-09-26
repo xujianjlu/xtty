@@ -5,7 +5,7 @@ use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex};
 
 use crate::daemon::pane::DaemonPane;
-use crate::daemon::protocol::{ClientMsg, DaemonMsg, DaemonVersion, RemoteKind};
+use crate::daemon::protocol::{ClientMsg, DaemonMsg, DaemonVersion};
 use crate::daemon::transport::{self, Stream};
 
 struct Registry {
@@ -274,7 +274,6 @@ fn kill_pane(registry: &Registry, pane_id: u64) {
     }
     crate::daemon::scrollback::forget(pane_id);
 }
-
 
 /// `eprintln!` for a process that may have no standard error.
 ///
@@ -721,7 +720,6 @@ fn handle_conn(stream: Stream, registry: Arc<Registry>) -> anyhow::Result<()> {
             )
         }
 
-
         ClientMsg::Attach {
             pane_id,
             size: _,
@@ -799,7 +797,7 @@ fn handle_conn(stream: Stream, registry: Arc<Registry>) -> anyhow::Result<()> {
             let mut w = write_stream;
             let _ = req;
             DaemonMsg::Error(
-                "loopback port forwarding via Native SSH was removed; use OpenSSH -L/-R/-D"
+                "loopback port forwarding is not a daemon feature; use OpenSSH -L/-R/-D"
                     .to_string(),
             )
             .encode(&mut w)?;
@@ -828,15 +826,12 @@ fn handle_conn(stream: Stream, registry: Arc<Registry>) -> anyhow::Result<()> {
             Ok(())
         }
 
-
-
         other => {
             log::debug!("unexpected opening message: {other:?}");
             Ok(())
         }
     }
 }
-
 
 fn stream_pane_with_attach(
     pane: Arc<DaemonPane>,

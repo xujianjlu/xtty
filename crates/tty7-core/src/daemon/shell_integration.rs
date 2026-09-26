@@ -137,50 +137,6 @@ if [[ -o interactive ]] && [[ -z "$TTY7_SHELL_INTEGRATION" ]]; then
     unfunction __tty7_restore_zdotdir
   }
   add-zsh-hook precmd __tty7_restore_zdotdir
-
-  # Carry SI to the next hop's *login* shell (Kitty ssh kitten). The bootstrap
-  # lives in $TTY7_SSH_BOOT so this payload never embeds itself.
-  if [[ "${TTY7_SSH_INTEGRATION:-1}" == "1" ]]; then
-    __tty7_ssh_blocks_inject() {
-      local tok skip=0
-      for tok in "$@"; do
-        if (( skip )); then skip=0; continue; fi
-        case "$tok" in
-          --) break ;;
-          -N|-W|-O|-G|-T|-s) return 0 ;;
-          -b|-c|-e|-i|-l|-m|-o|-p|-B|-D|-E|-F|-I|-J|-L|-P|-Q|-R|-S|-w) skip=1 ;;
-        esac
-      done
-      return 1
-    }
-    __tty7_ssh_has_remote_cmd() {
-      local tok skip=0 seen_dest=0
-      for tok in "$@"; do
-        if (( skip )); then skip=0; continue; fi
-        if (( seen_dest )); then return 0; fi
-        case "$tok" in
-          --) seen_dest=1 ;;
-          -b|-c|-e|-i|-l|-m|-o|-p|-B|-D|-E|-F|-I|-J|-L|-P|-Q|-R|-S|-w) skip=1 ;;
-          -*) ;;
-          *) seen_dest=1 ;;
-        esac
-      done
-      return 1
-    }
-    ssh() {
-      if [[ ! -t 0 ]] || __tty7_ssh_has_remote_cmd "$@" || __tty7_ssh_blocks_inject "$@"; then
-        command ssh "$@"
-        return $?
-      fi
-      if [[ -n "$TTY7_SSH_BOOT" && -r "$TTY7_SSH_BOOT" ]]; then
-        command ssh -t "$@" "$(command cat "$TTY7_SSH_BOOT")"
-        local _ret=$?
-        __tty7_report_cwd
-        return $_ret
-      fi
-      command ssh "$@"
-    }
-  fi
 fi
 # --- end tty7 shell integration ---
 "#;
@@ -249,47 +205,6 @@ if status is-interactive; and test -z "$TTY7_SHELL_INTEGRATION"
   function fish_prompt
     __tty7_original_fish_prompt
     __tty7_osc "133;B"
-  end
-
-  if test "$TTY7_SSH_INTEGRATION" != "0"
-    function __tty7_ssh_has_remote_cmd
-      set -l skip 0
-      set -l seen_dest 0
-      for tok in $argv
-        if test $skip -eq 1
-          set skip 0
-          continue
-        end
-        if test $seen_dest -eq 1
-          return 0
-        end
-        switch $tok
-          case '--'
-            set seen_dest 1
-          case -b -c -e -i -l -m -o -p -B -D -E -F -I -J -L -P -Q -R -S -w
-            set skip 1
-          case '-*'
-            true
-          case '*'
-            set seen_dest 1
-        end
-      end
-      return 1
-    end
-    function ssh
-      if not isatty stdin
-        or __tty7_ssh_has_remote_cmd $argv
-        command ssh $argv
-        return $status
-      end
-      if test -n "$TTY7_SSH_BOOT" -a -r "$TTY7_SSH_BOOT"
-        command ssh -t $argv (command cat "$TTY7_SSH_BOOT" | string collect)
-        set -l _ret $status
-        __tty7_report_cwd
-        return $_ret
-      end
-      command ssh $argv
-    end
   end
 end
 # --- end tty7 shell integration ---
@@ -596,80 +511,6 @@ if [[ $- == *i* ]] && [[ -z "$TTY7_SHELL_INTEGRATION" ]]; then
   precmd_functions=(__tty7_precmd_d "${precmd_functions[@]}")
   precmd_functions+=(__tty7_precmd)
   preexec_functions+=(__tty7_preexec)
-
-  # ── SSH wrapper (Kitty ssh kitten / Ghostty +ssh): interactive ssh gets a far-side bootstrap
-  # that detects $SHELL and execs that login shell with SI. The script lives
-  # in $TTY7_SSH_BOOT so this payload never embeds itself. `ssh host cmd` /
-  # non-tty stay byte-for-byte `command ssh`.
-  if [[ "${TTY7_SSH_INTEGRATION:-1}" == "1" ]]; then
-    __tty7_ssh_blocks_inject() {
-      local tok body ch skip=0 _nc=0 _rc=1
-      shopt -q nocasematch && _nc=1
-      shopt -u nocasematch
-      for tok in "$@"; do
-        if (( skip )); then skip=0; continue; fi
-        case "$tok" in
-          --) break ;;
-          -?*) ;;
-          *) continue ;;
-        esac
-        body="${tok#-}"
-        while [[ -n "$body" ]]; do
-          ch="${body:0:1}"; body="${body:1}"
-          case "$ch" in
-            N|W|O|G|T|s) _rc=0; break 2 ;;
-            b|c|e|i|l|m|o|p|B|D|E|F|I|J|L|P|Q|R|S|w)
-              [[ -z "$body" ]] && skip=1
-              break ;;
-          esac
-        done
-      done
-      (( _nc )) && shopt -s nocasematch
-      return $_rc
-    }
-    __tty7_ssh_has_remote_cmd() {
-      local tok body ch skip=0 seen_dest=0
-      shopt -q nocasematch && local _nc=1 || local _nc=0
-      shopt -u nocasematch
-      for tok in "$@"; do
-        if (( skip )); then skip=0; continue; fi
-        if (( seen_dest )); then
-          (( _nc )) && shopt -s nocasematch
-          return 0
-        fi
-        case "$tok" in
-          --) seen_dest=1; continue ;;
-          -?*)
-            body="${tok#-}"
-            while [[ -n "$body" ]]; do
-              ch="${body:0:1}"; body="${body:1}"
-              case "$ch" in
-                b|c|e|i|l|m|o|p|B|D|E|F|I|J|L|P|Q|R|S|w)
-                  [[ -z "$body" ]] && skip=1
-                  break ;;
-              esac
-            done
-            ;;
-          *) seen_dest=1 ;;
-        esac
-      done
-      (( _nc )) && shopt -s nocasematch
-      return 1
-    }
-    ssh() {
-      if [[ ! -t 0 ]] || __tty7_ssh_has_remote_cmd "$@" || __tty7_ssh_blocks_inject "$@"; then
-        command ssh "$@"
-        return $?
-      fi
-      if [[ -n "$TTY7_SSH_BOOT" && -r "$TTY7_SSH_BOOT" ]]; then
-        command ssh -t "$@" "$(command cat "$TTY7_SSH_BOOT")"
-        local _ret=$?
-        __tty7_report_cwd
-        return $_ret
-      fi
-      command ssh "$@"
-    }
-  fi
 fi
 # --- end tty7 shell integration ---
 "#;
@@ -1221,39 +1062,14 @@ pub fn setup(program: Option<&str>, args: &[String], has_custom_args: bool) -> O
         .env
         .insert("TTY7_SHELL_INTEGRATION".to_string(), String::new());
 
-    if matches!(
-        shell_kind(program),
-        Some(ShellKind::Zsh | ShellKind::Bash | ShellKind::Fish)
-    ) {
-        attach_ssh_boot(&mut injection);
-    }
-
     Some(injection)
 }
 
-fn attach_ssh_boot(injection: &mut Injection) {
-    let dir = match &injection.dir {
-        Some(d) => d.clone(),
-        None => {
-            let Some(d) = throwaway_dir("tty7-ssh-boot-") else {
-                return;
-            };
-            injection.dir = Some(d.clone());
-            d
-        }
-    };
-    let boot = dir.join("boot.sh");
-    if std::fs::write(&boot, remote::hop_bootstrap()).is_err() {
-        return;
-    }
-    injection.env.insert(
-        "TTY7_SSH_BOOT".to_string(),
-        boot.to_string_lossy().into_owned(),
-    );
-}
-
 pub mod remote {
-    use super::{FISH_INTEGRATION, bash_rcfile, shell_quote, zsh_redirectors};
+    use super::{
+        BASH_INTEGRATION, FISH_INTEGRATION, ZSH_INTEGRATION, bash_rcfile, shell_quote,
+        zsh_redirectors,
+    };
 
     pub const PROBE_COMMAND: &str = "echo __tty7_shell; echo $SHELL";
 
@@ -1358,98 +1174,6 @@ pub mod remote {
             fish_quote(FISH_INTEGRATION)
         )
     }
-
-    /// One POSIX remote command for `ssh -t dest <this>`.
-    ///
-    /// Detects `$SHELL` on the far side, writes zsh/bash/fish SI + the user's
-    /// own rc files, then `exec`s that login shell. Unsets
-    /// `TTY7_SHELL_INTEGRATION` so a jumper hop cannot skip install. Nested
-    /// `ssh` reads `$TTY7_SSH_BOOT` (rebuilt by `emit.sh` from the files
-    /// just written) so each hop is independent.
-    pub fn hop_bootstrap() -> String {
-        let mut out = String::new();
-        out.push_str("unset TTY7_SHELL_INTEGRATION\n");
-        out.push_str("d=${TMPDIR:-/tmp}/tty7-si-$$\n");
-        out.push_str("mkdir -p \"$d\" 2>/dev/null || exec \"${SHELL:-/bin/sh}\" -l\n");
-        out.push_str("export TTY7_SI_DIR=\"$d\" TTY7_SSH_BOOT=\"$d/boot.sh\"\n");
-        out.push_str("__tty7_d=$d\n");
-
-        for (name, contents) in zsh_redirectors() {
-            let body = if name == ".zshrc" {
-                format!("{contents}{ZSH_CLEANUP_HOOK}")
-            } else {
-                contents
-            };
-            write_file(&mut out, name, &body);
-        }
-        write_file(
-            &mut out,
-            "bashrc",
-            &format!("{}{BASH_CLEANUP_HOOK}", bash_rcfile()),
-        );
-        write_file(&mut out, "si.fish", FISH_INTEGRATION);
-        write_file(&mut out, "emit.sh", EMIT_SH);
-        out.push_str("sh \"$d/emit.sh\" > \"$d/boot.sh\"\n");
-        out.push_str(HOP_DISPATCH);
-        out
-    }
-
-    const HOP_DISPATCH: &str = r#"
-base=`basename "${SHELL:-/bin/bash}"`
-case $base in
-  zsh)
-    export TTY7_USER_ZDOTDIR="${ZDOTDIR:-$HOME}"
-    export ZDOTDIR="$d"
-    exec "$SHELL" -il
-    ;;
-  fish)
-    exec "$SHELL" -l -C "source \"$d/si.fish\""
-    ;;
-  *)
-    if command -v bash >/dev/null 2>&1; then
-      exec bash --rcfile "$d/bashrc" -i
-    fi
-    exec "${SHELL:-/bin/sh}" -l
-    ;;
-esac
-"#;
-
-    const EMIT_SH: &str = r#"
-# Recreate this hop bootstrap from the files beside us (Kitty-style).
-src=${TTY7_SI_DIR:-$(dirname "$0")}
-echo 'unset TTY7_SHELL_INTEGRATION'
-echo 'd=${TMPDIR:-/tmp}/tty7-si-$$'
-echo 'mkdir -p "$d" 2>/dev/null || exec "${SHELL:-/bin/sh}" -l'
-echo 'export TTY7_SI_DIR="$d" TTY7_SSH_BOOT="$d/boot.sh"'
-echo '__tty7_d=$d'
-for f in .zshenv .zprofile .zshrc .zlogin bashrc si.fish emit.sh; do
-  if [ -f "$src/$f" ]; then
-    echo "cat > \"\$d/$f\" <<'__TTY7_FILE_EOF_7a3c__'"
-    cat "$src/$f"
-    echo '__TTY7_FILE_EOF_7a3c__'
-  fi
-done
-echo 'sh "$d/emit.sh" > "$d/boot.sh"'
-echo 'base=`basename "${SHELL:-/bin/bash}"`'
-cat <<'__TTY7_DISPATCH__'
-case $base in
-  zsh)
-    export TTY7_USER_ZDOTDIR="${ZDOTDIR:-$HOME}"
-    export ZDOTDIR="$d"
-    exec "$SHELL" -il
-    ;;
-  fish)
-    exec "$SHELL" -l -C "source \"$d/si.fish\""
-    ;;
-  *)
-    if command -v bash >/dev/null 2>&1; then
-      exec bash --rcfile "$d/bashrc" -i
-    fi
-    exec "${SHELL:-/bin/sh}" -l
-    ;;
-esac
-__TTY7_DISPATCH__
-"#;
 
     const ZSH_CLEANUP_HOOK: &str = r#"
 # --- tty7 remote cleanup (zsh) ---
@@ -1571,45 +1295,10 @@ fi
                 assert!(!body.contains(HEREDOC));
                 assert!(
                     !body.contains("__TTY7_FILE_EOF_7a3c__"),
-                    "hop emit.sh delimiter must not appear in SI"
+                    "heredoc delimiter must not appear in SI"
                 );
             }
             assert!(!bash_rcfile().contains(HEREDOC));
-            assert!(!EMIT_SH.contains(HEREDOC));
-        }
-
-        #[test]
-        fn hop_bootstrap_detects_login_shell_and_unsets_the_sentinel() {
-            let script = hop_bootstrap();
-            assert!(script.contains("unset TTY7_SHELL_INTEGRATION"));
-            assert!(script.contains(r#"base=`basename "${SHELL:-/bin/bash}"`"#));
-            assert!(script.contains("exec \"$SHELL\" -il"));
-            assert!(script.contains(r#"source \"$d/si.fish\""#));
-            assert!(script.contains("exec bash --rcfile \"$d/bashrc\" -i"));
-            assert!(
-                !script.contains("exec bash --rcfile")
-                    || script.contains("basename"),
-                "must not force bash as the only far shell"
-            );
-            assert!(script.contains("TTY7_SSH_BOOT"));
-            assert!(script.contains("__tty7_report_cwd"));
-            assert!(
-                script.contains("__tty7_precmd"),
-                "cwd is reported on PS1 (precmd), not on chpwd"
-            );
-            assert!(
-                !script.contains("add-zsh-hook chpwd"),
-                "must not report cwd on chpwd"
-            );
-        }
-
-        #[cfg(unix)]
-        #[test]
-        fn hop_bootstrap_parses_as_posix_sh() {
-            let script = hop_bootstrap();
-            if let Some((ok, stderr)) = parse_check("sh", "-n", &script) {
-                assert!(ok, "sh rejected hop_bootstrap:\n{stderr}");
-            }
         }
 
         #[cfg(unix)]
@@ -2187,19 +1876,19 @@ mod tests {
     }
 
     #[test]
-    fn ssh_wrapper_reads_boot_file_instead_of_forcing_bash() {
+    fn typed_ssh_is_not_wrapped() {
         for (shell, body) in [
             ("zsh", ZSH_INTEGRATION),
             ("bash", BASH_INTEGRATION),
             ("fish", FISH_INTEGRATION),
         ] {
             assert!(
-                body.contains("TTY7_SSH_BOOT"),
-                "{shell} ssh wrapper must cat the hop bootstrap file"
+                !body.contains("TTY7_SSH_BOOT"),
+                "{shell} must not wrap ssh with hop bootstrap"
             );
             assert!(
-                !body.contains("exec bash --rcfile"),
-                "{shell} must not force a far-side bash"
+                !body.contains("function ssh") && !body.contains("ssh() {"),
+                "{shell} must leave `ssh` as the system command"
             );
         }
         assert!(
@@ -2347,7 +2036,10 @@ mod tests {
 
         let inj = setup(Some("fish"), &[], false).expect("fish setup");
         assert!(inj.env.contains_key("TTY7_SHELL_INTEGRATION"));
-        assert!(inj.env.contains_key("TTY7_SSH_BOOT"));
+        assert!(
+            !inj.env.contains_key("TTY7_SSH_BOOT"),
+            "typed ssh is plain ssh; no hop boot file"
+        );
         if let Some(d) = inj.dir {
             let _ = std::fs::remove_dir_all(d);
         }

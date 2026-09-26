@@ -195,9 +195,7 @@ pub fn control_route(target: &RemoteTarget, cx: &App) -> Result<RouteHeader, Str
             &args.iter().map(String::as_str).collect::<Vec<_>>(),
         ),
         _ => {
-            return Err(
-                "Native SSH remote workspaces are no longer supported; use OpenSSH hosts".into(),
-            );
+            return Err("this workspace is an OpenSSH hop, not a tty7-server route".into());
         }
     };
     note_origin(&header.target, target);
@@ -216,7 +214,7 @@ pub fn connect_blocking(
     label: &str,
 ) -> Result<Connected, String> {
     if !matches!(target, RemoteTarget::LocalStdio { .. }) {
-        return Err("remote workspaces require Native SSH which was removed".into());
+        return Err("only LocalStdio workspaces can be opened as remote workspaces".into());
     }
 
     note_origin(&header.target, target);
@@ -511,7 +509,6 @@ pub fn clear_install_progress(host: HostId) {
 pub fn register(cx: &mut App) {
     crate::daemon::install::set_install_confirm(Arc::new(GuiInstallConfirm));
     crate::daemon::install::set_install_progress(Arc::new(GuiInstallProgress));
-    /* Native route auth abolished */;
     let _ = HostLinks::len(cx);
 }
 

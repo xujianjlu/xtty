@@ -31,7 +31,8 @@ use crate::core::keychain::{
     CredentialRef, CredentialStore as _, OsCredentialStore, key_account_from_contents,
 };
 use crate::core::ssh_profile::{
-    Algorithms, AuthMode, ForwardKind, ForwardRule, HostPort, SshProfile, to_connect_string,
+    Algorithms, AuthMode, ForwardKind, ForwardRule, HostPort, SshProfile, ensure_jumper_profile,
+    find_jump_profile, jump_text_names_self, parse_quick_connect, to_connect_string,
 };
 use crate::ui::app::{
     FONT_SIZE_STEP, LINE_HEIGHT_STEP, TILE_GLYPH_LINE, TILE_SIZE, TITLE_BAR_HEIGHT, ThemeEdit,
@@ -571,11 +572,6 @@ fn settings_search_entries() -> &'static [SearchEntry] {
         },
         SearchEntry {
             section: Input,
-            title: SettingsHistorySearch,
-            keywords: SettingsSearchHistorySearchKeywords,
-        },
-        SearchEntry {
-            section: Input,
             title: SettingsOptionAsMeta,
             keywords: SettingsSearchOptionAsMetaKeywords,
         },
@@ -1035,6 +1031,8 @@ pub(crate) struct SshProfileForm {
     loaded_key: Option<String>,
 
     jump: Entity<InputState>,
+    proxy_jump: bool,
+    hop_ready_prompt: Entity<InputState>,
 
     forwards: Vec<ForwardRuleForm>,
 
@@ -1341,6 +1339,8 @@ pub(crate) struct SshFormDraft {
     port: String,
     user: String,
     jump: String,
+    proxy_jump: bool,
+    hop_ready_prompt: String,
     proxy_command: String,
     socks: String,
     http: String,
@@ -1393,29 +1393,24 @@ fn validate_ssh_draft(draft: SshFormDraft, profiles: &[SshProfile]) -> (SshProfi
         }),
     };
 
-    // The field is a name but the profile stores an id, so a jump host already
-    // survives its target being renamed. What it never survived was a name
-    // nobody has: the lookup returned `None`, the profile saved as a direct
-    // connection, and reopening the form showed an empty field.
+    // The field stores a name or hostname; the profile stores an id.
+    // A hostname that matches no profile is not an error — save creates a
+    // stub jumper so batch hop hosts can type `jumper.example.com`.
     let jump_name = draft.jump.trim();
     let jump_host = if jump_name.is_empty() {
         None
+    } else if jump_text_names_self(jump_name, &draft.name, &draft.host)
+        || profiles.iter().any(|p| p.id == draft.id && p.name == jump_name)
+    {
+        errors.jump = Some(SshFieldError::JumpIsSelf);
+        None
+    } else if let Some(p) = find_jump_profile(jump_name, draft.id, profiles) {
+        Some(p.id)
+    } else if parse_quick_connect(jump_name).is_some() {
+        None
     } else {
-        let named = |p: &&SshProfile| p.name == jump_name;
-        // Duplicate names resolve to whichever profile comes first, as they
-        // always have. The one profile that can never be the answer is the one
-        // being edited, and typing its own name is worth saying out loud
-        // rather than quietly connecting direct.
-        match profiles.iter().filter(named).find(|p| p.id != draft.id) {
-            Some(p) => Some(p.id),
-            None => {
-                errors.jump = Some(match profiles.iter().any(|p| p.name == jump_name) {
-                    true => SshFieldError::JumpIsSelf,
-                    false => SshFieldError::JumpUnknown(jump_name.to_string()),
-                });
-                None
-            }
-        }
+        errors.jump = Some(SshFieldError::JumpUnknown(jump_name.to_string()));
+        None
     };
 
     let proxy = |text: &str, default_port: u16, slot: &mut Option<SshFieldError>| {
@@ -1439,6 +1434,11 @@ fn validate_ssh_draft(draft: SshFormDraft, profiles: &[SshProfile]) -> (SshProfi
         port,
         user: draft.user.trim().to_string(),
         jump_host,
+        proxy_jump: draft.proxy_jump,
+        hop_ready_prompt: {
+            let p = draft.hop_ready_prompt.trim();
+            (!p.is_empty()).then(|| p.to_string())
+        },
         proxy_command: (!proxy_command.is_empty()).then(|| proxy_command.to_string()),
         socks_proxy,
         http_proxy,
@@ -3776,7 +3776,14 @@ impl Tty7App {
                     .ssh_profiles
                     .iter()
                     .find(|p| p.id == id)
-                    .map(|p| p.name.clone())
+                    .map(|p| {
+                        let name = p.name.trim();
+                        if name.is_empty() {
+                            p.host.clone()
+                        } else {
+                            name.to_string()
+                        }
+                    })
             })
             .unwrap_or_default();
 
@@ -3785,6 +3792,12 @@ impl Tty7App {
         let port = seed_input(window, cx, &profile.port.to_string(), false);
         let user = seed_hinted(window, cx, &profile.user, t(L10nKey::SettingsUserHint));
         let jump = seed_input(window, cx, &jump_name, false);
+        let hop_ready_prompt = seed_hinted(
+            window,
+            cx,
+            profile.hop_ready_prompt.as_deref().unwrap_or(""),
+            t(L10nKey::SettingsHopReadyPromptHint),
+        );
         let forwards: Vec<ForwardRuleForm> = profile
             .forwards
             .iter()
@@ -3910,6 +3923,7 @@ impl Tty7App {
             &port,
             &user,
             &jump,
+            &hop_ready_prompt,
             &password,
             &passphrase,
             &identity_files,
@@ -3959,6 +3973,8 @@ impl Tty7App {
             loaded_endpoint: (profile.user.clone(), profile.host.clone(), profile.port),
             loaded_key,
             jump,
+            proxy_jump: profile.proxy_jump,
+            hop_ready_prompt,
             forwards,
             identity_files,
             proxy_command,
@@ -4008,6 +4024,8 @@ impl Tty7App {
             port: val(&form.port),
             user: val(&form.user),
             jump: val(&form.jump),
+            proxy_jump: form.proxy_jump,
+            hop_ready_prompt: val(&form.hop_ready_prompt),
             proxy_command: val(&form.proxy_command),
             socks: val(&form.socks),
             http: val(&form.http),
@@ -4116,8 +4134,29 @@ impl Tty7App {
         if !errors.is_empty() {
             return None;
         }
+        let jump_text = self
+            .active_settings()
+            .and_then(|s| s.ssh_form.as_ref())
+            .map(|f| f.jump.read(cx).value().trim().to_string())
+            .unwrap_or_default();
+        let mut profile = profile;
         let id = profile.id;
         self.update_config(cx, |cfg| {
+            if profile.jump_host.is_none() && !jump_text.is_empty() {
+                profile.jump_host = ensure_jumper_profile(
+                    &jump_text,
+                    profile.id,
+                    &profile.name,
+                    &profile.host,
+                    &mut cfg.ssh_profiles,
+                );
+            }
+            if let Some(jid) = profile.jump_host {
+                if let Some(jumper) = cfg.ssh_profiles.iter_mut().find(|p| p.id == jid) {
+                    crate::core::ssh_config::fill_optional_from_ssh_config(jumper);
+                }
+            }
+            crate::core::ssh_config::fill_optional_from_ssh_config(&mut profile);
             if let Some(slot) = cfg.ssh_profiles.iter_mut().find(|p| p.id == id) {
                 *slot = profile.clone();
             } else {
@@ -4804,6 +4843,18 @@ impl Tty7App {
             .child(core)
             .child(self.render_ssh_profile_auth_section(form, cx))
             .child(self.render_ssh_profile_jump_section(form, &errors, cx))
+            .when(jump_name.is_empty(), |form_col| {
+                form_col.child(self.settings_row(
+                    t(L10nKey::SettingsHopReadyPrompt),
+                    t(L10nKey::SettingsHopReadyPromptDesc),
+                    div()
+                        .w(px(FIELD_W))
+                        .max_w_full()
+                        .child(Input::new(&form.hop_ready_prompt).small())
+                        .into_any_element(),
+                    cx,
+                ))
+            })
             .child(self.render_ssh_profile_forwards_section(form, cx))
             .child(self.render_ssh_profile_advanced_section(form, &errors, cx))
             .into_any_element()
@@ -5014,8 +5065,10 @@ impl Tty7App {
             let name = form.jump.read(cx).value().trim().to_string();
             if name.is_empty() {
                 t(L10nKey::SettingsNoneSummary).to_string()
+            } else if form.proxy_jump {
+                format!("{} · {}", name, t(L10nKey::SettingsProxyJump))
             } else {
-                name
+                format!("{} · {}", name, t(L10nKey::SettingsInteractiveJump))
             }
         };
         // A complaint nobody can see is a Save button that is greyed out for
@@ -5047,6 +5100,22 @@ impl Tty7App {
                         .max_w_full()
                         .child(Input::new(&form.jump).small())
                         .when_some(error, |col, line| col.child(line))
+                        .into_any_element(),
+                    cx,
+                ),
+            );
+            section = section.child(
+                self.settings_row(
+                    t(L10nKey::SettingsProxyJump),
+                    t(L10nKey::SettingsProxyJumpDesc),
+                    crate::ui::theme::switch("ssh-form-proxy-jump", cx)
+                        .checked(form.proxy_jump)
+                        .on_click(cx.listener(|this, on: &bool, _w, cx| {
+                            if let Some(f) = this.ssh_form_mut() {
+                                f.proxy_jump = *on;
+                                cx.notify();
+                            }
+                        }))
                         .into_any_element(),
                     cx,
                 ),
@@ -5176,11 +5245,7 @@ impl Tty7App {
             .child(
                 div()
                     .flex_1()
-                    .opacity(if needs_target {
-                        1.0
-                    } else {
-                        0.4
-                    })
+                    .opacity(if needs_target { 1.0 } else { 0.4 })
                     .when(stack_ends, |end| end.w_full())
                     .child(endpoint(&row.target_host, &row.target_port)),
             )
@@ -5457,7 +5522,7 @@ impl Tty7App {
                 &form.hostkey,
                 cx,
             ))
-            // Compression here is the algorithm list russh negotiates, not
+            // Compression here is the algorithm list OpenSSH negotiates, not
             // ssh_config's yes/no switch, so it belongs with the other three
             // lists rather than under Connection with the keepalives.
             .child(text_row(
@@ -6111,18 +6176,11 @@ impl Tty7App {
     fn render_settings_input(&self, cx: &mut Context<Self>) -> AnyElement {
         let cfg = cx.global::<Config>();
         let option_as_alt = cfg.macos_option_as_alt;
-        let history_search = cfg.history_search;
         let per_pane_history = cfg.per_pane_history;
         let smart_select = cfg.smart_select;
         let copy_on_select = cfg.copy_on_select;
         let clip_trim = cfg.clipboard_trim_trailing_spaces;
 
-        // Prompt editor removed: Tab always goes to the shell. History search
-        // stays a first-class switch — ⌃R opens tty7's overlay independently.
-        let history_search_switch = crate::ui::theme::switch("term-history-search", cx)
-            .checked(history_search)
-            .on_click(cx.listener(|this, on: &bool, _w, cx| this.set_history_search(*on, cx)))
-            .into_any_element();
         let per_pane_history_switch = crate::ui::theme::switch("term-per-pane-history", cx)
             .checked(per_pane_history)
             .on_click(cx.listener(|this, on: &bool, _w, cx| this.set_per_pane_history(*on, cx)))
@@ -6158,12 +6216,6 @@ impl Tty7App {
             .child(self.section_intro(
                 t(L10nKey::SettingsPrompt),
                 t(L10nKey::SettingsPromptIntro),
-                cx,
-            ))
-            .child(self.settings_row(
-                t(L10nKey::SettingsHistorySearch),
-                t(L10nKey::SettingsHistorySearchDesc),
-                history_search_switch,
                 cx,
             ))
             .child(self.settings_row(
@@ -8625,8 +8677,41 @@ mod tests {
     fn draft_with_host() -> SshFormDraft {
         SshFormDraft {
             host: "example.com".to_string(),
+            proxy_jump: true,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn a_jump_without_proxy_jump_is_kept() {
+        let bastion = SshProfile::new("bastion");
+        let draft = SshFormDraft {
+            jump: "bastion".to_string(),
+            proxy_jump: false,
+            ..draft_with_host()
+        };
+        let (profile, errors) = validate_ssh_draft(draft, &[bastion.clone()]);
+        assert!(errors.is_empty());
+        assert_eq!(profile.jump_host, Some(bastion.id));
+        assert!(!profile.proxy_jump);
+    }
+
+    #[test]
+    fn hop_ready_prompt_trims_and_blank_is_none() {
+        let draft = SshFormDraft {
+            hop_ready_prompt: "  Opt>  ".into(),
+            ..draft_with_host()
+        };
+        let (profile, errors) = validate_ssh_draft(draft, &[]);
+        assert!(errors.is_empty());
+        assert_eq!(profile.hop_ready_prompt.as_deref(), Some("Opt>"));
+
+        let draft = SshFormDraft {
+            hop_ready_prompt: "   ".into(),
+            ..draft_with_host()
+        };
+        let (profile, _) = validate_ssh_draft(draft, &[]);
+        assert_eq!(profile.hop_ready_prompt, None);
     }
 
     #[test]
@@ -8699,20 +8784,44 @@ mod tests {
     }
 
     #[test]
+    fn a_jump_host_matches_by_hostname() {
+        let mut bastion = SshProfile::new("jumper");
+        bastion.host = "jumper.qihoo.net".into();
+        let draft = SshFormDraft {
+            jump: "jumper.qihoo.net".to_string(),
+            ..draft_with_host()
+        };
+        let (profile, errors) = validate_ssh_draft(draft, &[bastion.clone()]);
+        assert!(errors.is_empty());
+        assert_eq!(profile.jump_host, Some(bastion.id));
+    }
+
+    #[test]
+    fn an_unknown_hostname_jump_is_saveable() {
+        let draft = SshFormDraft {
+            jump: "jumper.qihoo.net".to_string(),
+            ..draft_with_host()
+        };
+        let (profile, errors) = validate_ssh_draft(draft, &[]);
+        assert!(errors.is_empty(), "hostname jump must not disable Save");
+        assert_eq!(
+            profile.jump_host, None,
+            "stub jumper is created at save, not validate"
+        );
+    }
+
+    #[test]
     fn a_mistyped_jump_host_says_which_name_it_could_not_find() {
         let draft = SshFormDraft {
-            jump: "bastian".to_string(),
+            jump: "[".to_string(),
             ..draft_with_host()
         };
         let (profile, errors) = validate_ssh_draft(draft, &[SshProfile::new("bastion")]);
         assert_eq!(
             errors.jump,
-            Some(SshFieldError::JumpUnknown("bastian".to_string()))
+            Some(SshFieldError::JumpUnknown("[".to_string()))
         );
-        assert_eq!(
-            profile.jump_host, None,
-            "a typo never saves as a direct connection"
-        );
+        assert_eq!(profile.jump_host, None);
     }
 
     #[test]

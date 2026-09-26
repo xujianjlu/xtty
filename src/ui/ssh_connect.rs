@@ -1,12 +1,16 @@
 //! OpenSSH host picker — spawn local `ssh` argv panes.
 //!
-//! Native (russh) dial paths were abolished; saved hosts open via system `ssh`.
+//! Same session as a new tab where the user typed `ssh`: a local PTY whose
+//! child is system `ssh`.
 
 use uuid::Uuid;
 
+use super::app::{SpawnWhere, Tab, Tty7App};
 use crate::core::config::Config;
 use crate::core::ssh_profile::SshProfile;
-use super::app::{SpawnWhere, Tty7App};
+use crate::ui::i18n::{t_fmt, L10nKey};
+use crate::ui::pane::Pane;
+use gpui_component::WindowExt as _;
 
 impl Tty7App {
     pub(crate) fn connect_ssh_profile(
@@ -22,7 +26,7 @@ impl Tty7App {
     /// beside the pane in front of the user when the new-tab menu's row was
     /// taken with ⌥ held.
     ///
-    /// Opens a local pane running system `ssh` (not the russh Native path).
+    /// Opens a local pane running system `ssh`.
     /// Typed `ssh` / jumper hops use the same dest facts and clone as this.
     pub(crate) fn connect_ssh_profile_at(
         &mut self,
@@ -79,6 +83,62 @@ impl Tty7App {
         self.open_system_ssh(&profile, &profiles, SpawnWhere::NewTab, window, cx);
     }
 
+    /// Open every selected host in one tab, tiled by count.
+    pub(crate) fn connect_ssh_profiles(
+        &mut self,
+        profile_ids: Vec<uuid::Uuid>,
+        window: &mut gpui::Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if profile_ids.is_empty() {
+            return;
+        }
+        if profile_ids.len() == 1 {
+            self.connect_ssh_profile_at(profile_ids[0], SpawnWhere::NewTab, window, cx);
+            return;
+        }
+        const MAX_PANES: usize = 8;
+        let truncated = profile_ids.len() > MAX_PANES;
+        let profile_ids: Vec<uuid::Uuid> = profile_ids.into_iter().take(MAX_PANES).collect();
+        if !self.guard_local_spawn(window, cx) {
+            return;
+        }
+        let profiles = cx.global::<Config>().ssh_profiles.clone();
+        let mut slots = Vec::new();
+        for id in &profile_ids {
+            let Some(profile) = profiles.iter().find(|p| p.id == *id).cloned() else {
+                continue;
+            };
+            self.bump_ssh_frecency(*id, cx);
+            if let Some(slot) = self.spawn_system_ssh(&profile, &profiles, window, cx) {
+                slots.push(slot);
+            }
+        }
+        if slots.is_empty() {
+            return;
+        }
+        if slots.len() == 1 {
+            self.insert_spawned_tab(slots.remove(0), window, cx);
+            return;
+        }
+        let pane = Pane::tile(slots);
+        self.insert_pane_tab(pane, window, cx);
+        if let Some(tab) = self.tabs.get_mut(self.active) {
+            tab.broadcast_input = true;
+        }
+        self.sync_broadcast_roles(window, cx);
+        if truncated {
+            window.push_notification(
+                t_fmt(
+                    L10nKey::TabMenuFleetCapped,
+                    &[("max", &MAX_PANES.to_string())],
+                ),
+                cx,
+            );
+        }
+        cx.notify();
+    }
+
     /// Spawn local PTY with `ssh` argv; seed the tab title from profile user@host.
     pub(crate) fn open_system_ssh(
         &mut self,
@@ -88,13 +148,8 @@ impl Tty7App {
         window: &mut gpui::Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        let mut args = crate::core::ssh_profile::openssh_argv(profile, profiles);
-        if profile.shell_integration {
-            if !args.iter().any(|a| a == "-t" || a == "-tt") {
-                args.insert(0, "-t".into());
-            }
-            args.push(crate::daemon::hop_bootstrap());
-        }
+        let plan = crate::core::ssh_profile::ssh_connect_plan(profile, profiles);
+        let args = ssh_spawn_argv(&plan, profiles);
         let shell = Some(crate::daemon::protocol::ShellSpec {
             program: "ssh".into(),
             args,
@@ -102,19 +157,110 @@ impl Tty7App {
         });
         let identity = tty7_core::core::tab_view::connection_identity(&profile.user, &profile.host);
         self.open_shell(shell, at, window, cx);
-        if let Some(identity) = identity {
-            if let Some(view) = self.focused_pane_view(window, cx) {
-                view.update(cx, |v, cx| v.seed_connection_identity(identity, cx));
-            }
+        if let Some(view) = self.focused_pane_view(window, cx) {
+            view.update(cx, |v, cx| {
+                if let Some(identity) = identity {
+                    v.seed_connection_identity(identity, cx);
+                }
+                if !plan.follow_up.is_empty() {
+                    v.queue_hop_follow_up(
+                        plan.follow_up.clone(),
+                        plan.hop_ready_prompt.clone(),
+                        cx,
+                    );
+                }
+            });
         }
+    }
+
+    fn spawn_system_ssh(
+        &mut self,
+        profile: &SshProfile,
+        profiles: &[SshProfile],
+        window: &mut gpui::Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> Option<crate::ui::pane::PaneSlot> {
+        if !self.guard_local_spawn(window, cx) {
+            return None;
+        }
+        let plan = crate::core::ssh_profile::ssh_connect_plan(profile, profiles);
+        let args = ssh_spawn_argv(&plan, profiles);
+        let shell = Some(crate::daemon::protocol::ShellSpec {
+            program: "ssh".into(),
+            args,
+            args_are_tty7_defaults: false,
+        });
+        let slot = match crate::ui::app::new_terminal(
+            self.window_workspace(cx),
+            Some(self.workspace),
+            self.font_size,
+            None,
+            None,
+            shell,
+            window,
+            cx,
+        ) {
+            Ok(slot) => slot,
+            Err(e) => {
+                log::error!("ssh spawn failed: {e}");
+                window.push_notification(
+                    t_fmt(L10nKey::AppOpenTerminalFailed, &[("error", &e.to_string())]),
+                    cx,
+                );
+                return None;
+            }
+        };
+        let identity = tty7_core::core::tab_view::connection_identity(&profile.user, &profile.host);
+        if let Some(view) = slot.terminal().cloned() {
+            view.update(cx, |v, cx| {
+                if let Some(identity) = identity {
+                    v.seed_connection_identity(identity, cx);
+                }
+                if !plan.follow_up.is_empty() {
+                    v.queue_hop_follow_up(
+                        plan.follow_up.clone(),
+                        plan.hop_ready_prompt.clone(),
+                        cx,
+                    );
+                }
+            });
+        }
+        Some(slot)
+    }
+
+    fn insert_spawned_tab(
+        &mut self,
+        slot: crate::ui::pane::PaneSlot,
+        window: &mut gpui::Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.insert_pane_tab(Pane::leaf(slot), window, cx);
+    }
+
+    fn insert_pane_tab(
+        &mut self,
+        pane: Pane,
+        window: &mut gpui::Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.startup_error = None;
+        self.remember_active_pane(window, cx);
+        self.maximized = None;
+        let insert_at = self.new_tab_insert_at(cx);
+        let new_tab = Tab::new(pane);
+        self.tabs.insert(insert_at, new_tab);
+        self.active = insert_at;
+        self.focus_active(window, cx);
+        self.save_session(cx);
+        cx.notify();
     }
 
     pub(crate) fn restart_ssh_session(
         &mut self,
-        _window: &mut gpui::Window,
-        _cx: &mut gpui::Context<Self>,
+        window: &mut gpui::Window,
+        cx: &mut gpui::Context<Self>,
     ) {
-        // Native SSH respawn abolished; OpenSSH panes are local PTYs.
+        self.copy_tab(self.active, window, cx);
     }
 
     fn focused_pane_view(
@@ -204,6 +350,24 @@ impl Tty7App {
             entry.last_used = crate::core::config::unix_now();
         });
     }
+}
+
+/// Same flags `ssh` would get from the profile after empty optionals are
+/// filled from `~/.ssh/config` (`-p` / `-i` / `user@` only when set).
+fn ssh_spawn_argv(
+    plan: &crate::core::ssh_profile::SshConnectPlan,
+    profiles: &[SshProfile],
+) -> Vec<String> {
+    let mut profiles = profiles.to_vec();
+    for p in &mut profiles {
+        crate::core::ssh_config::fill_optional_from_ssh_config(p);
+    }
+    let mut dial = plan.dial.clone();
+    crate::core::ssh_config::fill_optional_from_ssh_config(&mut dial);
+    if let Some(slot) = profiles.iter_mut().find(|p| p.id == dial.id) {
+        *slot = dial.clone();
+    }
+    crate::core::ssh_profile::openssh_typed_argv(&dial, &profiles)
 }
 
 /// Saved hosts, most likely first.

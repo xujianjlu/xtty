@@ -166,6 +166,15 @@ impl GitStatusCache {
         true
     }
 
+    /// Release an in-flight slot without writing "not a repo".
+    ///
+    /// A PTY dump that times out is not evidence the far tree vanished — the
+    /// last good branch / +/− must stay, or a long-lived SSH pane goes blank.
+    pub fn abandon_probe(&mut self, host: HostId, cwd: &Path) {
+        let cwd = key(host, cwd);
+        let _ = self.probes.finish(&(host, cwd.into_owned()));
+    }
+
     pub fn finish_probe(
         &mut self,
         host: HostId,

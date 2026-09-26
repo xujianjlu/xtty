@@ -325,8 +325,18 @@ pub fn translate_ja(key: L10nKey) -> Option<&'static str> {
         L10nKey::SettingsCouldntSavePassphrase => "{key} のパスフレーズを保存できません: {error}",
         L10nKey::SettingsJumpHost => "ジャンプホスト",
         L10nKey::SettingsJumpHostDesc => {
-            "トンネリングに使用する別のプロファイル名 (空欄 = 直接接続)"
+            "別ホストの名前またはホスト名（なければ保存時に作成）。空欄 = 直接接続"
         }
+        L10nKey::SettingsProxyJump => "ProxyJump を使う",
+        L10nKey::SettingsProxyJumpDesc => {
+            "オン: OpenSSH の -J でジャンプ。オフ: 先にジャンパーへログインし、このホスト名を入力します。"
+        }
+        L10nKey::SettingsInteractiveJump => "対話ログイン",
+        L10nKey::SettingsHopReadyPrompt => "準備完了プロンプト",
+        L10nKey::SettingsHopReadyPromptDesc => {
+            "他ホストがこのホスト経由で対話ジャンプするとき、このプロンプトを見てから宛先を入力します。空欄なら行末の $ # % > を受け入れます。"
+        }
+        L10nKey::SettingsHopReadyPromptHint => "Opt>",
         L10nKey::SettingsJumpHostUnknown => {
             "{jump_name} という名前のホストプロファイルはありません — 保存されません"
         }
@@ -527,11 +537,7 @@ pub fn translate_ja(key: L10nKey) -> Option<&'static str> {
         L10nKey::SettingsBellModeAudible => "音声（効果音）",
         L10nKey::SettingsBellModeBoth => "点滅 + 音声",
         L10nKey::SettingsPrompt => "プロンプト",
-        L10nKey::SettingsPromptIntro => "プロンプト関連の xtty メニュー（履歴検索など）。",
-        L10nKey::SettingsHistorySearch => "履歴検索",
-        L10nKey::SettingsHistorySearchDesc => {
-            "⌃R / ⌘R で xtty のファジー履歴メニューを開きます。オフなら ⌃R はシェルへ — 逆方向検索や、そこでバインドしたもの（fzf、percol）"
-        }
+        L10nKey::SettingsPromptIntro => "プロンプト関連の設定（ペインごとの履歴など）。",
         L10nKey::SettingsSelectionClipboard => "選択とクリップボード",
         L10nKey::SettingsSmartSelection => "スマート選択",
         L10nKey::SettingsSmartSelectionDesc => {
@@ -859,9 +865,6 @@ pub fn translate_ja(key: L10nKey) -> Option<&'static str> {
         }
         L10nKey::SettingsSearchHideMouseWhileTypingKeywords => {
             "カーソル ポインタ 自動非表示 hide mouse while typing cursor pointer autohide"
-        }
-        L10nKey::SettingsSearchHistorySearchKeywords => {
-            "ctrl-r 逆検索 ファジー検索 履歴 fzf プロンプト history search ctrl-r reverse fuzzy recall prompt"
         }
         L10nKey::SettingsSearchHostsKeywords => {
             "ssh ホスト 接続 保存 プロファイル インポート ssh_config 管理 追加 編集 クイック接続 hosts ssh profile import connect manage"
@@ -1835,10 +1838,10 @@ pub fn translate_ja(key: L10nKey) -> Option<&'static str> {
         L10nKey::Replace => "置き換える",
         L10nKey::SftpErrorInvalidOctalMode => "無効な 8 進数モードです",
         L10nKey::SettingsDaemonStaleDescInPlace => {
-            "xtty はその場で更新されました。アプリは新しく、ペインはまだ前のビルドで動いています。サーバーは停止せずに新しいビルドへ置き換えられるので、シェルはそのまま引き継がれます。xtty 内蔵の SSH クライアントを使うペインだけは例外で、その接続は閉じられ、開き直しが必要です"
+            "xtty はその場で更新されました。アプリは新しく、ペインはまだ前のビルドで動いています。サーバーは停止せずに新しいビルドへ置き換えられるので、シェルはそのまま引き継がれます。"
         }
         L10nKey::AppRestartServerBodyInPlace => {
-            "サーバーは停止せずに自分自身をこのビルドへ置き換えます。シェルは動いたままで、ウィンドウはすぐに再接続します。xtty 内蔵の SSH クライアントを使うペインだけは例外で、その接続は閉じられ、開き直しが必要です"
+            "サーバーは停止せずに自分自身をこのビルドへ置き換えます。シェルは動いたままで、ウィンドウはすぐに再接続します。"
         }
         L10nKey::PaneRestoredScreenBanner => {
             "復元された画面 — 以下は新しいシェルで、これより上のものは動いていません"
@@ -1848,10 +1851,10 @@ pub fn translate_ja(key: L10nKey) -> Option<&'static str> {
             "上キーでたどるのは、全ペインが混ざったものではなくこのペインで実行したコマンドです。新しいペインは既存の履歴から始まり、追加分は閉じるときに書き戻されます。対象は xtty が設定できる bash と zsh のペインで、独自の引数で起動したシェルはそのままです"
         }
         L10nKey::IntegrationNoticeBlocked => {
-            "“{wrapper}”がこのペインのシェルレポートを横取りしているため、インライン補完と Ctrl+R メニューは使えません。シェル独自の履歴検索は引き続き使えます。"
+            "“{wrapper}”がこのペインのシェルレポートを横取りしているため、インライン補完は使えません。"
         }
         L10nKey::IntegrationNoticeNotEngaged => {
-            "このペインでは xtty シェル統合が有効になっておらず、インライン補完と Ctrl+R メニューは使えません。よくある原因は、独自の引数で起動したシェル、PTY ラッパー、未対応のシェルです。"
+            "このペインでは xtty シェル統合が有効になっておらず、インライン補完は使えません。よくある原因は、独自の引数で起動したシェル、PTY ラッパー、未対応のシェルです。"
         }
         L10nKey::PaneTitleDisconnected => "{title} — 切断されました",
         L10nKey::PaneTitleProcessExited => "{title} — プロセスが終了しました",
@@ -1954,8 +1957,16 @@ pub fn translate_ja(key: L10nKey) -> Option<&'static str> {
         L10nKey::TabTooltipZoomed => "ペインを拡大中 — 他のペインは非表示",
         L10nKey::TabMenuLocalShells => "ローカル",
         L10nKey::TabMenuAddHost => "SSH ホストを追加…",
-        L10nKey::TabMenuAllHosts => "すべての SSH ホスト…",
+        L10nKey::TabMenuAllHosts => "すべて…",
+        L10nKey::TabMenuHostCount => "{count} 台",
         L10nKey::TabMenuSplitHint => "{key} を押しながら選ぶと分割",
+        L10nKey::TabMenuOpenSelected => "{count} 台を開く",
+        L10nKey::TabMenuMultiSelectHint => {
+            "チェックしてまとめて開く。名前をクリックすると1台だけ開きます。"
+        }
+        L10nKey::TabMenuFleetCapped => {
+            "先に {max} 台を開きました。全部開くには選択を減らしてください。"
+        }
         L10nKey::TabUnnamedShell => "シェル {n}",
         L10nKey::ShellDefault => "デフォルト",
         L10nKey::SidebarScratchGroup => "スクラッチ",

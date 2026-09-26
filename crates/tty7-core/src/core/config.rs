@@ -345,8 +345,6 @@ pub struct Config {
     pub bell: BellMode,
     #[serde(default = "default_true")]
     pub tab_completion: bool,
-    #[serde(default = "default_true")]
-    pub history_search: bool,
 
     #[serde(default, deserialize_with = "de_lenient")]
     pub cursor_style: CursorStyle,
@@ -686,7 +684,6 @@ impl Default for Config {
             show_tray_icon: true,
             bell: BellMode::Visual,
             tab_completion: true,
-            history_search: true,
             cursor_style: CursorStyle::Block,
             macos_option_as_alt: false,
             mouse_hide_while_typing: true,
@@ -2059,7 +2056,6 @@ mod tests {
         assert!(cfg.mouse_reporting);
         assert!(!cfg.right_panel_visible);
         assert!(cfg.tab_completion);
-        assert!(cfg.history_search);
         assert_eq!(cfg.notify_threshold_secs, 10);
         assert_eq!(cfg.bell, BellMode::Visual);
 
@@ -2068,14 +2064,11 @@ mod tests {
         assert!(cfg.mouse_reporting);
         assert!(!cfg.right_panel_visible);
         assert!(cfg.tab_completion);
-        assert!(cfg.history_search);
         assert_eq!(cfg.notify_threshold_secs, 10);
         assert_eq!(cfg.bell, BellMode::Visual);
 
         let cfg: Config = serde_json::from_str(r#"{"tab_completion": false}"#).unwrap();
         assert!(!cfg.tab_completion);
-        let cfg: Config = serde_json::from_str(r#"{"history_search": false}"#).unwrap();
-        assert!(!cfg.history_search);
         let cfg: Config = serde_json::from_str(
             r#"{"restore_session": false, "mouse_reporting": false, "bell": "audible"}"#,
         )

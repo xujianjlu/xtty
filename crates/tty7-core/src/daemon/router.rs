@@ -186,10 +186,7 @@ pub enum RoutePrompt {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RouteReply {
-    Install {
-        request_id: u64,
-        approve: bool,
-    },
+    Install { request_id: u64, approve: bool },
 }
 
 impl RoutePrompt {
@@ -443,7 +440,7 @@ pub struct RemoteRouter;
 
 impl RemoteRouter {
     pub fn route(local: Stream, header: &RouteHeader) -> io::Result<()> {
-        // Native SSH routing was removed; only local stdio bridges remain.
+        // Only local stdio bridges remain.
         // A dedicated runtime still owns the async copy because ProcessStream is tokio-based.
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -615,8 +612,8 @@ async fn perform(header: &RouteHeader, setup: &RouteSetup) -> anyhow::Result<Per
         action @ (RouteAction::RestartServer | RouteAction::ReplaceServer) => {
             let _ = setup;
             Err(anyhow::anyhow!(
-                "restarting/replacing a remote tty7-server over Native SSH was removed; \
-                 only local stdio bridges remain (action {action:?} on {})",
+                "restarting/replacing a remote tty7-server is only supported on \
+                 local stdio bridges (action {action:?} on {})",
                 header.describe()
             ))
         }

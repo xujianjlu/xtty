@@ -40,8 +40,19 @@ pub(crate) fn plan_for(view: &TerminalView) -> PaneClonePlan {
     })
 }
 
+fn cloneable_far_cwd(path: Option<&Path>) -> Option<&Path> {
+    let path = path?;
+    let s = path.to_string_lossy();
+    let ok = (s.starts_with('/') || s == "~" || s.starts_with("~/"))
+        && !s.contains('$')
+        && !s.contains(']')
+        && !s.contains('[')
+        && !s.chars().any(char::is_whitespace);
+    ok.then_some(path)
+}
+
 pub(crate) fn plan_from_facts(facts: CloneFacts) -> PaneClonePlan {
-    let far_cwd = facts.far_cwd.as_deref();
+    let far_cwd = cloneable_far_cwd(facts.far_cwd.as_deref());
 
     if let Some(argv) = facts.nested_ssh_argv {
         return PaneClonePlan {
@@ -115,16 +126,15 @@ fn ssh_args_landing_in(args: Vec<String>, cwd: Option<&Path>) -> Vec<String> {
         return args;
     };
     let existing = crate::daemon::ssh_remote_command(&full);
+    if cwd.is_none() && existing.is_none() {
+        return args;
+    }
     let mut out: Vec<String> = through.into_iter().skip(1).collect();
     if !argv_has_tty_request(&out) {
         out.insert(0, "-t".into());
     }
     out.push(landing_remote_command(cwd, existing.as_deref()));
     out
-}
-
-fn looks_like_si_bootstrap(cmd: &str) -> bool {
-    cmd.contains("TTY7_SI_DIR") || cmd.contains("tty7-si-") || cmd.contains("TTY7_SSH_BOOT")
 }
 
 fn strip_leading_cd(cmd: &str) -> &str {
@@ -138,19 +148,23 @@ fn strip_leading_cd(cmd: &str) -> &str {
     }
 }
 
-/// Far-side remote command: SI bootstrap, with `cd` when the source pane
-/// already knows the dest path. Replaces a bare `exec $SHELL -l` leftover.
+fn looks_like_si_bootstrap(cmd: &str) -> bool {
+    cmd.contains("TTY7_SI_DIR") || cmd.contains("tty7-si-") || cmd.contains("TTY7_SSH_BOOT")
+}
+
+/// Far-side remote command: `cd` + login shell. Same as typing
+/// `ssh -t dest 'cd … && exec $SHELL -l'` — no SI bootstrap.
 fn landing_remote_command(cwd: Option<&Path>, existing: Option<&str>) -> String {
-    let boot = match existing {
-        Some(cmd) if looks_like_si_bootstrap(cmd) => strip_leading_cd(cmd).to_string(),
-        _ => crate::daemon::hop_bootstrap(),
+    let rest = match existing.filter(|cmd| !looks_like_si_bootstrap(cmd)) {
+        Some(cmd) => strip_leading_cd(cmd).to_string(),
+        None => "exec ${SHELL:-/bin/sh} -l".to_string(),
     };
-    match cwd
-        .map(|p| p.to_string_lossy())
-        .filter(|p| !p.is_empty())
-    {
-        Some(path) => format!("cd {} && {}", posix_single_quote(&path), boot),
-        None => boot,
+    match cwd.map(|p| p.to_string_lossy()).filter(|p| !p.is_empty()) {
+        Some(path) if path == "~" || (path.starts_with("~/") && !path.contains('\'')) => {
+            format!("cd {path} && {rest}")
+        }
+        Some(path) => format!("cd {} && {}", posix_single_quote(&path), rest),
+        None => rest,
     }
 }
 
@@ -178,6 +192,28 @@ mod tests {
         }
     }
 
+    fn leftover_si_remote() -> String {
+        "export TTY7_SI_DIR=/tmp/tty7-si-old TTY7_SSH_BOOT=/tmp/tty7-si-old/boot.sh".into()
+    }
+
+    #[test]
+    fn garbled_ps1_cwd_is_not_baked_into_ssh() {
+        let plan = plan_from_facts(CloneFacts {
+            shell: Some(host_ssh()),
+            far_cwd: Some(PathBuf::from("~]$cd CODE")),
+            spawnable_cwd: None,
+            nested_ssh_argv: Some(vec!["ssh".into(), "carol@box".into()]),
+        });
+        let SpawnAs::Shell(Some(spec)) = plan.spawn else {
+            panic!("ssh");
+        };
+        let remote = spec.args.last().cloned().unwrap_or_default();
+        assert!(
+            !remote.contains("~]$"),
+            "must not ssh with the typed command as cwd: {remote}"
+        );
+    }
+
     #[test]
     fn local_pane_keeps_shell_and_cwd() {
         let plan = plan_from_facts(CloneFacts {
@@ -192,7 +228,10 @@ mod tests {
     }
 
     fn assert_direct_ssh(plan: &PaneClonePlan, dest: &str, cwd: &str) {
-        assert!(plan.follow_up.is_empty(), "direct ssh is spawned, not typed");
+        assert!(
+            plan.follow_up.is_empty(),
+            "direct ssh is spawned, not typed"
+        );
         assert_eq!(plan.cwd, None);
         let SpawnAs::Shell(Some(spec)) = &plan.spawn else {
             panic!("SSH hop must spawn ssh, not a local shell");
@@ -203,9 +242,16 @@ mod tests {
             "dest {dest} missing from {:?}",
             spec.args
         );
-        let remote = spec.args.last().expect("SI remote command");
+        let remote = spec.args.last().expect("cd remote command");
         assert!(remote.contains(cwd), "{remote}");
-        assert!(remote.contains("TTY7_SI_DIR"), "{remote}");
+        assert!(
+            remote.contains("exec ${SHELL:-/bin/sh} -l"),
+            "plain login shell, not SI bootstrap: {remote}"
+        );
+        assert!(
+            !remote.contains("TTY7_SI_DIR"),
+            "clone must not inject a second SI path: {remote}"
+        );
     }
 
     #[test]
@@ -238,10 +284,10 @@ mod tests {
         assert_eq!(spec.program, "ssh");
         assert!(spec.args.contains(&"-t".to_string()));
         assert!(
-            spec.args
-                .last()
-                .is_some_and(|c| c.contains("/home/carol/src") && c.contains("TTY7_SI_DIR")),
-            "far cwd + SI bootstrap must be the remote command"
+            spec.args.last().is_some_and(|c| {
+                c.contains("/home/carol/src") && c.contains("exec ${SHELL:-/bin/sh} -l")
+            }),
+            "far cwd + login shell must be the remote command"
         );
         assert_eq!(plan.cwd, None);
         assert!(
@@ -287,11 +333,7 @@ mod tests {
     #[test]
     fn host_picker_same_dest_does_not_retype_ssh() {
         let mut spec = host_ssh();
-        spec.args = vec![
-            "-t".into(),
-            "carol@box".into(),
-            crate::daemon::hop_bootstrap(),
-        ];
+        spec.args = vec!["-t".into(), "carol@box".into(), leftover_si_remote()];
         let plan = plan_from_facts(CloneFacts {
             shell: Some(spec),
             far_cwd: Some(PathBuf::from("/home/carol/src")),
@@ -307,25 +349,26 @@ mod tests {
         };
         let remote = s.args.last().expect("baked remote command");
         assert!(remote.contains("/home/carol/src"));
-        assert!(remote.contains("TTY7_SI_DIR"));
+        assert!(remote.contains("exec ${SHELL:-/bin/sh} -l"));
+        assert!(!remote.contains("TTY7_SI_DIR"));
     }
 
     #[test]
     fn host_picker_rebakes_cd_over_existing_bootstrap() {
         let spec = ShellSpec {
             program: "ssh".into(),
-            args: vec![
-                "-t".into(),
-                "carol@box".into(),
-                crate::daemon::hop_bootstrap(),
-            ],
+            args: vec!["-t".into(), "carol@box".into(), leftover_si_remote()],
             args_are_tty7_defaults: false,
         };
         let landed = ssh_args_landing_in(spec.args, Some(Path::new("/srv/app")));
         let remote = landed.last().expect("remote command");
         assert!(
             remote.starts_with("cd '/srv/app' && "),
-            "cd must wrap the existing bootstrap, not be skipped because -t is present: {remote}"
+            "cd must wrap the login shell, not be skipped because -t is present: {remote}"
+        );
+        assert!(
+            remote.contains("exec ${SHELL:-/bin/sh} -l"),
+            "leftover SI bootstrap is dropped: {remote}"
         );
         assert_eq!(
             remote.matches("cd ").count(),

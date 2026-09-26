@@ -26,10 +26,6 @@
 //!
 //! Not everything can cross:
 //!
-//! - **Native SSH panes.** Their session is a cipher state and a set of tasks
-//!   in this process's memory. The socket descriptor would survive, but nothing
-//!   that knows how to speak on it would. They are hung up before the exec, so
-//!   the far end sees a clean disconnect rather than a stalled connection.
 //! - **Client connections.** A window is holding a socket to us; that socket
 //!   dies with the image. Clients reconnect and reattach by pane id, which is
 //!   the path they already use after any restart — except that this time the

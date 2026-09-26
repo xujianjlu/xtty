@@ -118,9 +118,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
             "在标签左侧显示 user@host。有 Agent 运行时左侧改为 Agent 名称。"
         }
         L10nKey::SettingsTabShowCwdBasename => "显示目录名",
-        L10nKey::SettingsTabShowCwdBasenameDesc => {
-            "在标签右侧显示当前文件夹名（不是完整路径）。"
-        }
+        L10nKey::SettingsTabShowCwdBasenameDesc => "在标签右侧显示当前文件夹名（不是完整路径）。",
         L10nKey::SettingsTabShowGitBranch => "显示 git 分支",
         L10nKey::SettingsTabShowGitBranchDesc => "在标签上显示当前分支（侧栏另含 +/- 变更数）。",
         L10nKey::SettingsTabShowAgentIcon => "显示 Agent 图标",
@@ -128,9 +126,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::SettingsSearchTabShowUserHostKeywords => {
             "标签 标题 身份 user host ssh 跳板 tab identity"
         }
-        L10nKey::SettingsSearchTabShowCwdBasenameKeywords => {
-            "标签 标题 目录 文件夹 路径 cwd tab"
-        }
+        L10nKey::SettingsSearchTabShowCwdBasenameKeywords => "标签 标题 目录 文件夹 路径 cwd tab",
         L10nKey::SettingsSearchTabShowGitBranchKeywords => {
             "标签 标题 git 分支 状态 变更 tab branch"
         }
@@ -288,7 +284,19 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::SettingsCouldntSavePassword => "无法保存 {endpoint} 的密码：{error}",
         L10nKey::SettingsCouldntSavePassphrase => "无法保存 {key} 的口令：{error}",
         L10nKey::SettingsJumpHost => "跳板主机",
-        L10nKey::SettingsJumpHostDesc => "用于中转的另一个主机配置的名称（留空 = 直连）。",
+        L10nKey::SettingsJumpHostDesc => {
+            "已保存主机的名称或主机名（没有则保存时自动建一条）。留空 = 直连。"
+        }
+        L10nKey::SettingsProxyJump => "使用 ProxyJump",
+        L10nKey::SettingsProxyJumpDesc => {
+            "开：本机 ssh -J 走跳板（两跳都在本机鉴权）。关（推荐交互堡垒）：先 ssh 跳板别名（和壳里一样读 ~/.ssh/config），登录后再自动键入目的地主机名。"
+        }
+        L10nKey::SettingsInteractiveJump => "交互登录",
+        L10nKey::SettingsHopReadyPrompt => "就绪提示符",
+        L10nKey::SettingsHopReadyPromptDesc => {
+            "其他主机经由本机交互跳转时，看到此提示符再输入目标主机。留空则认行末 $ # % >。"
+        }
+        L10nKey::SettingsHopReadyPromptHint => "Opt>",
         L10nKey::SettingsJumpHostUnknown => "没有名为 {jump_name} 的主机配置——不会被保存。",
         L10nKey::SettingsJumpHostSelf => "主机不能把自己当作跳板——不会被保存。",
         L10nKey::SettingsNoneSummary => "（无）",
@@ -452,11 +460,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::SettingsBellModeAudible => "声音",
         L10nKey::SettingsBellModeBoth => "闪烁 + 声音",
         L10nKey::SettingsPrompt => "提示符",
-        L10nKey::SettingsPromptIntro => "提示符相关的 xtty 菜单（历史搜索等）。",
-        L10nKey::SettingsHistorySearch => "历史搜索",
-        L10nKey::SettingsHistorySearchDesc => {
-            "按 ⌃R / ⌘R 打开 xtty 的模糊历史菜单。关闭本项后 ⌃R 交给 shell——它自带的反向搜索，或你绑定的其它功能（fzf、percol）。"
-        }
+        L10nKey::SettingsPromptIntro => "提示符相关选项，例如按面板分开历史。",
         L10nKey::SettingsSelectionClipboard => "选择与剪贴板",
         L10nKey::SettingsSmartSelection => "智能选择",
         L10nKey::SettingsSmartSelectionDesc => {
@@ -758,9 +762,6 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         }
         L10nKey::SettingsSearchHideMouseWhileTypingKeywords => {
             "输入时隐藏鼠标 隐藏鼠标 指针 自动隐藏 hide mouse typing cursor pointer autohide"
-        }
-        L10nKey::SettingsSearchHistorySearchKeywords => {
-            "历史搜索 反向搜索 模糊搜索 ctrl-r fzf history search recall"
         }
         L10nKey::SettingsSearchHostsKeywords => {
             "主机 SSH 连接 保存 主机配置 配置文件 导入 ssh_config 管理 添加 编辑 快速连接 hosts ssh profile import connect"
@@ -1654,10 +1655,10 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::Replace => "覆盖",
         L10nKey::SftpErrorInvalidOctalMode => "无效的八进制模式",
         L10nKey::SettingsDaemonStaleDescInPlace => {
-            "xtty 是原地更新的：应用是新的，面板还跑在旧版上。server 可以不停机就换成新版，shell 直接延续下来。（已不再使用内置 SSH；OpenSSH 会话会正常延续。）"
+            "xtty 是原地更新的：应用是新的，面板还跑在旧版上。server 可以不停机就换成新版，shell 直接延续下来。"
         }
         L10nKey::AppRestartServerBodyInPlace => {
-            "后台 server 会原地把自己换成当前这个版本：shell 继续运行，窗口稍后自动连回去。（已不再使用内置 SSH；OpenSSH 会话会正常延续。）"
+            "后台 server 会原地把自己换成当前这个版本：shell 继续运行，窗口稍后自动连回去。"
         }
         L10nKey::PaneRestoredScreenBanner => {
             "已恢复的画面 —— 下面是新的 shell，上面的内容都已不在运行"
@@ -1667,10 +1668,10 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
             "上方向键翻的是这个面板里跑过的命令，而不是所有面板混在一起。新面板从已有历史开始，关闭时把新增的写回去。只对 xtty 能接管的 bash 和 zsh 面板生效；用你自己参数启动的 shell 不受影响。"
         }
         L10nKey::IntegrationNoticeBlocked => {
-            "“{wrapper}”截获了此窗格的 shell 上报，内联补全和 Ctrl+R 菜单不可用。shell 自带的历史搜索仍可使用。"
+            "“{wrapper}”截获了此窗格的 shell 上报，内联补全不可用。"
         }
         L10nKey::IntegrationNoticeNotEngaged => {
-            "此窗格的 xtty shell 集成没生效，内联补全和 Ctrl+R 菜单不可用。常见原因：用自己参数启动的 shell、PTY 包装器，或不受支持的 shell。"
+            "此窗格的 xtty shell 集成没生效，内联补全不可用。常见原因：用自己参数启动的 shell、PTY 包装器，或不受支持的 shell。"
         }
         L10nKey::PaneTitleDisconnected => "{title} — 已断开",
         L10nKey::PaneTitleProcessExited => "{title} — 进程已退出",
@@ -1771,8 +1772,12 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::TabTooltipZoomed => "窗格已缩放 — 其他窗格已隐藏",
         L10nKey::TabMenuLocalShells => "本地",
         L10nKey::TabMenuAddHost => "添加 SSH 主机…",
-        L10nKey::TabMenuAllHosts => "所有 SSH 主机…",
+        L10nKey::TabMenuAllHosts => "全部…",
+        L10nKey::TabMenuHostCount => "{count} 台",
         L10nKey::TabMenuSplitHint => "按住 {key} 可分屏打开",
+        L10nKey::TabMenuOpenSelected => "打开 {count} 台",
+        L10nKey::TabMenuMultiSelectHint => "勾选多台后一起打开。点名称则只开这一台。",
+        L10nKey::TabMenuFleetCapped => "已打开前 {max} 台——再少选一些才能一次全开。",
         L10nKey::TabUnnamedShell => "终端 {n}",
         L10nKey::ShellDefault => "默认",
         L10nKey::SidebarScratchGroup => "草稿",

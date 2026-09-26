@@ -1,7 +1,9 @@
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use crate::core::ssh_profile::{ForwardKind, ForwardRule, HostPort, SshProfile as ManagedProfile};
+use crate::core::ssh_profile::{
+    jumper_stub_from_text, ForwardKind, ForwardRule, HostPort, SshProfile as ManagedProfile,
+};
 
 const MAX_INCLUDE_DEPTH: usize = 8;
 const MAX_CONFIG_FILES: usize = 256;
@@ -270,6 +272,111 @@ pub fn resolve_alias_to_profile(alias: &str) -> Option<ResolvedAlias> {
     resolve_alias_to_profile_from(home.join(".ssh/config"), &home, alias)
 }
 
+/// Fill empty optional fields from `~/.ssh/config`. The typed host is kept;
+/// a FQDN-only stub also learns the `Host` token (`jumper`).
+pub fn fill_optional_from_ssh_config(profile: &mut ManagedProfile) {
+    let Some(home) = home_dir() else {
+        return;
+    };
+    fill_optional_from_ssh_config_from(&home.join(".ssh/config"), &home, profile);
+}
+
+pub fn fill_optional_from_ssh_config_from(root: &Path, home: &Path, profile: &mut ManagedProfile) {
+    let name = profile.name.trim().to_string();
+    let host = profile.host.trim().to_string();
+    let tokens: Vec<&str> = [&name, &host]
+        .into_iter()
+        .map(String::as_str)
+        .filter(|s| !s.is_empty())
+        .collect();
+    if tokens.is_empty() {
+        return;
+    }
+    let blocks = parse_config(root, home).blocks;
+    let Some(alias) = tokens
+        .iter()
+        .copied()
+        .find(|token| {
+            blocks
+                .iter()
+                .any(|block| block_matches_literal(block, token))
+        })
+        .map(str::to_string)
+        .or_else(|| {
+            tokens
+                .iter()
+                .copied()
+                .find_map(|token| alias_for_hostname(&blocks, token))
+        })
+    else {
+        return;
+    };
+    let resolved = resolve_alias(&alias, &blocks);
+    let mut src = ManagedProfile::new(alias.clone());
+    apply_resolved(&mut src, &alias, resolved);
+    // Stub created from the FQDN (`jumper.qihoo.net`): remember the Host
+    // token they type in a shell so later argv can be `ssh jumper`.
+    if is_literal_host_token(&alias)
+        && (profile.name.trim().is_empty() || profile.name.trim() == profile.host.trim())
+    {
+        profile.name = alias;
+    }
+    if profile.user.is_empty() {
+        profile.user = src.user;
+    }
+    if profile.identity_files.is_empty() {
+        profile.identity_files = src.identity_files;
+    }
+    if profile.port == 22 && src.port != 22 {
+        profile.port = src.port;
+    }
+    if profile
+        .proxy_command
+        .as_ref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .is_none()
+    {
+        profile.proxy_command = src.proxy_command;
+    }
+    if !profile.agent_forward {
+        profile.agent_forward = src.agent_forward;
+    }
+    if profile.connect_timeout_s.is_none() {
+        profile.connect_timeout_s = src.connect_timeout_s;
+    }
+    if profile.keepalive_interval_s.is_none() {
+        profile.keepalive_interval_s = src.keepalive_interval_s;
+    }
+    if profile.keepalive_count_max.is_none() {
+        profile.keepalive_count_max = src.keepalive_count_max;
+    }
+    if !profile.x11 {
+        profile.x11 = src.x11;
+    }
+    if profile.verify_host_keys.is_none() {
+        profile.verify_host_keys = src.verify_host_keys;
+    }
+    if profile.forwards.is_empty() {
+        profile.forwards = src.forwards;
+    }
+    if profile.algorithms.cipher.is_empty() {
+        profile.algorithms.cipher = src.algorithms.cipher;
+    }
+    if profile.algorithms.mac.is_empty() {
+        profile.algorithms.mac = src.algorithms.mac;
+    }
+    if profile.algorithms.kex.is_empty() {
+        profile.algorithms.kex = src.algorithms.kex;
+    }
+    if profile.algorithms.hostkey.is_empty() {
+        profile.algorithms.hostkey = src.algorithms.hostkey;
+    }
+    if profile.algorithms.compression.is_empty() {
+        profile.algorithms.compression = src.algorithms.compression;
+    }
+}
+
 pub fn resolve_alias_to_profile_from(
     root: PathBuf,
     home: &Path,
@@ -467,8 +574,16 @@ pub fn merge_imported(
         };
         let target_id = existing
             .iter()
-            .find(|p| p.name == target_alias)
-            .map(|p| p.id);
+            .find(|p| p.name == target_alias || p.host.eq_ignore_ascii_case(&target_alias))
+            .map(|p| p.id)
+            .or_else(|| {
+                let first = raw.split(',').next()?.trim();
+                let mut stub = jumper_stub_from_text(first)?;
+                stub.group = Some(IMPORTED_GROUP.to_string());
+                let id = stub.id;
+                existing.push(stub);
+                Some(id)
+            });
         if let Some(profile) = existing.iter_mut().find(|p| p.name == name) {
             profile.jump_host = target_id;
         }
@@ -820,6 +935,48 @@ fn resolve_alias(alias: &str, blocks: &[HostBlock]) -> ResolvedHost {
     r
 }
 
+fn is_glob_pattern(pat: &str) -> bool {
+    pat.contains('*') || pat.contains('?')
+}
+
+fn is_literal_host_token(token: &str) -> bool {
+    !token.is_empty() && !is_glob_pattern(token) && !token.starts_with('!')
+}
+
+fn block_matches_literal(block: &HostBlock, alias: &str) -> bool {
+    block
+        .patterns
+        .iter()
+        .any(|pat| is_literal_host_token(pat) && pat.eq_ignore_ascii_case(alias))
+        && block_matches(block, alias)
+}
+
+fn alias_for_hostname(blocks: &[HostBlock], hostname: &str) -> Option<String> {
+    for block in blocks {
+        let Some(raw) = block
+            .options
+            .iter()
+            .find(|opt| opt.key == "hostname")
+            .and_then(|opt| first_word(&opt.value))
+        else {
+            continue;
+        };
+        let Some(alias) = block
+            .patterns
+            .iter()
+            .find(|pat| is_literal_host_token(pat))
+            .cloned()
+        else {
+            continue;
+        };
+        let expanded = expand_hostname_tokens(&raw, &alias);
+        if expanded.eq_ignore_ascii_case(hostname) {
+            return Some(alias);
+        }
+    }
+    None
+}
+
 fn block_matches(block: &HostBlock, alias: &str) -> bool {
     let mut positive = false;
     for pat in &block.patterns {
@@ -1107,6 +1264,31 @@ mod tests {
         let bastion_id = existing.iter().find(|p| p.name == "bastion").unwrap().id;
         let prod = existing.iter().find(|p| p.name == "prod").unwrap();
         assert_eq!(prod.jump_host, Some(bastion_id));
+    }
+
+    #[test]
+    fn merge_creates_a_jumper_when_proxy_jump_is_a_bare_hostname() {
+        let root = temp_root("import-jump-host");
+        let ssh = root.join(".ssh");
+        std::fs::create_dir_all(&ssh).unwrap();
+        std::fs::write(
+            ssh.join("config"),
+            "Host gray1\n  HostName 10.0.0.5\n  ProxyJump jumper.qihoo.net\n",
+        )
+        .unwrap();
+
+        let mut existing = Vec::new();
+        merge_imported(
+            &mut existing,
+            import_profiles_from(ssh.join("config"), &root),
+        );
+
+        let jumper = existing
+            .iter()
+            .find(|p| p.host == "jumper.qihoo.net")
+            .expect("stub jumper");
+        let gray1 = existing.iter().find(|p| p.name == "gray1").unwrap();
+        assert_eq!(gray1.jump_host, Some(jumper.id));
     }
 
     #[test]
@@ -1435,6 +1617,82 @@ mod tests {
         let f = std::fs::File::options().write(true).open(path).unwrap();
         let ahead = std::time::SystemTime::now() + std::time::Duration::from_secs(1);
         f.set_modified(ahead).unwrap();
+    }
+
+    #[test]
+    fn fill_optional_keeps_typed_host_and_takes_user_port_key() {
+        let root = temp_root("fill-optional");
+        let ssh = root.join(".ssh");
+        std::fs::create_dir_all(&ssh).unwrap();
+        std::fs::write(
+            ssh.join("config"),
+            concat!(
+                "Host *\n",
+                "  ServerAliveInterval 60\n",
+                "Host jumper\n",
+                "  HostName jumper.example.com\n",
+                "  Port 2222\n",
+                "  User gate\n",
+                "  IdentityFile ~/.ssh/id_jumper\n",
+                "  ServerAliveInterval 30\n",
+            ),
+        )
+        .unwrap();
+
+        let mut stub = ManagedProfile::new("jumper");
+        stub.host = "jumper".into();
+        fill_optional_from_ssh_config_from(&ssh.join("config"), &root, &mut stub);
+        assert_eq!(stub.host, "jumper", "do not replace with HostName");
+        assert_eq!(stub.user, "gate");
+        assert_eq!(stub.port, 2222);
+        assert_eq!(stub.identity_files, vec!["~/.ssh/id_jumper".to_string()]);
+        assert_eq!(stub.keepalive_interval_s, Some(60));
+    }
+
+    #[test]
+    fn fill_optional_finds_host_block_by_hostname_for_fqdn_stub() {
+        let root = temp_root("fill-by-hostname");
+        let ssh = root.join(".ssh");
+        std::fs::create_dir_all(&ssh).unwrap();
+        std::fs::write(
+            ssh.join("config"),
+            concat!(
+                "Host *\n",
+                "  ServerAliveInterval 60\n",
+                "Host jumper\n",
+                "  HostName jumper.example.com\n",
+                "  Port 2222\n",
+                "  User gate\n",
+            ),
+        )
+        .unwrap();
+
+        let mut stub = ManagedProfile::new("jumper.example.com");
+        stub.host = "jumper.example.com".into();
+        fill_optional_from_ssh_config_from(&ssh.join("config"), &root, &mut stub);
+        assert_eq!(stub.host, "jumper.example.com");
+        assert_eq!(stub.name, "jumper", "remember the Host token they type");
+        assert_eq!(stub.user, "gate");
+        assert_eq!(stub.port, 2222);
+    }
+
+    #[test]
+    fn fill_optional_does_not_treat_host_star_as_the_jumper_block() {
+        let root = temp_root("fill-not-star");
+        let ssh = root.join(".ssh");
+        std::fs::create_dir_all(&ssh).unwrap();
+        std::fs::write(
+            ssh.join("config"),
+            "Host *\n  User fallback\n  ServerAliveInterval 60\n",
+        )
+        .unwrap();
+
+        let mut stub = ManagedProfile::new("jumper.example.com");
+        stub.host = "jumper.example.com".into();
+        fill_optional_from_ssh_config_from(&ssh.join("config"), &root, &mut stub);
+        assert!(stub.user.is_empty(), "Host * is not a jumper profile");
+        assert_eq!(stub.port, 22);
+        assert!(stub.keepalive_interval_s.is_none());
     }
 
     fn temp_root(name: &str) -> PathBuf {

@@ -143,9 +143,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
             "Show the CLI agent avatar on tabs when an agent is running."
         }
         L10nKey::SettingsSearchTabShowUserHostKeywords => "tab title identity user host ssh hop",
-        L10nKey::SettingsSearchTabShowCwdBasenameKeywords => {
-            "tab title cwd directory folder path"
-        }
+        L10nKey::SettingsSearchTabShowCwdBasenameKeywords => "tab title cwd directory folder path",
         L10nKey::SettingsSearchTabShowGitBranchKeywords => "tab title git branch status diff",
         L10nKey::SettingsSearchTabShowAgentIconKeywords => {
             "tab title agent avatar claude codex icon"
@@ -322,8 +320,18 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         }
         L10nKey::SettingsJumpHost => "Jump host",
         L10nKey::SettingsJumpHostDesc => {
-            "Name of another profile to tunnel through (blank = direct)."
+            "Name or hostname of another host (created on save if missing). Blank = direct."
         }
+        L10nKey::SettingsProxyJump => "ProxyJump (-J)",
+        L10nKey::SettingsProxyJumpDesc => {
+            "On: OpenSSH -J through the jump host. Off: log into the jumper first, then type this host's name."
+        }
+        L10nKey::SettingsInteractiveJump => "Interactive",
+        L10nKey::SettingsHopReadyPrompt => "Ready prompt",
+        L10nKey::SettingsHopReadyPromptDesc => {
+            "When other hosts jump through this host interactively, wait for this prompt before typing the destination. Leave blank to accept a line ending in $ # % >."
+        }
+        L10nKey::SettingsHopReadyPromptHint => "Opt>",
         L10nKey::SettingsJumpHostUnknown => "No host profile named {jump_name} — won't be saved.",
         L10nKey::SettingsJumpHostSelf => "A host can't be its own jump host — won't be saved.",
         L10nKey::SettingsNoneSummary => "(none)",
@@ -514,11 +522,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::SettingsBellModeAudible => "Audible",
         L10nKey::SettingsBellModeBoth => "Both",
         L10nKey::SettingsPrompt => "Prompt",
-        L10nKey::SettingsPromptIntro => "Prompt-related xtty menus such as history search.",
-        L10nKey::SettingsHistorySearch => "History search",
-        L10nKey::SettingsHistorySearchDesc => {
-            "⌃R / ⌘R opens xtty's fuzzy history menu. Off sends ⌃R to the shell — its own reverse-i-search, or whatever you bound there (fzf, percol)."
-        }
+        L10nKey::SettingsPromptIntro => "Prompt-related options such as per-pane history.",
         L10nKey::SettingsSelectionClipboard => "Selection & clipboard",
         L10nKey::SettingsSmartSelection => "Smart selection",
         L10nKey::SettingsSmartSelectionDesc => {
@@ -821,9 +825,6 @@ pub fn translate_en(key: L10nKey) -> &'static str {
             "agent integration hooks install xai grok build"
         }
         L10nKey::SettingsSearchHideMouseWhileTypingKeywords => "cursor pointer autohide",
-        L10nKey::SettingsSearchHistorySearchKeywords => {
-            "ctrl-r reverse search fuzzy history recall fzf prompt"
-        }
         L10nKey::SettingsSearchHostsKeywords => {
             "ssh host connection saved profile import ssh_config manage add edit quick connect"
         }
@@ -1760,10 +1761,10 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::Replace => "Replace",
         L10nKey::SftpErrorInvalidOctalMode => "invalid octal mode",
         L10nKey::SettingsDaemonStaleDescInPlace => {
-            "xtty was updated in place: the app is new, your panes still run on the old build. The server can swap itself for the new one without stopping, so your shells carry straight over. Native SSH panes are no longer used — OpenSSH sessions continue normally."
+            "xtty was updated in place: the app is new, your panes still run on the old build. The server can swap itself for the new one without stopping, so your shells carry straight over."
         }
         L10nKey::AppRestartServerBodyInPlace => {
-            "The server swaps itself for this build in place: your shells keep running, and the window reconnects a moment later. Native SSH panes are no longer used — OpenSSH sessions continue normally."
+            "The server swaps itself for this build in place: your shells keep running, and the window reconnects a moment later."
         }
         L10nKey::PaneRestoredScreenBanner => {
             "restored screen — this shell is new, nothing above it is still running"
@@ -1773,10 +1774,10 @@ pub fn translate_en(key: L10nKey) -> &'static str {
             "Up walks through what you ran in this pane, not every pane interleaved. A new pane starts from your existing history and writes back what it adds when it closes. Applies to bash and zsh panes xtty can set up; a shell started with your own arguments is left alone."
         }
         L10nKey::IntegrationNoticeBlocked => {
-            "\u{201c}{wrapper}\u{201d} is intercepting shell reports in this pane, so inline completion and the Ctrl+R menu are unavailable. The shell's own history search still works."
+            "\u{201c}{wrapper}\u{201d} is intercepting shell reports in this pane, so inline completion is unavailable."
         }
         L10nKey::IntegrationNoticeNotEngaged => {
-            "xtty shell integration hasn't engaged in this pane, so inline completion and the Ctrl+R menu are unavailable. Usual causes: a shell you started with your own arguments, a PTY wrapper, or an unsupported shell."
+            "xtty shell integration hasn't engaged in this pane, so inline completion is unavailable. Usual causes: a shell you started with your own arguments, a PTY wrapper, or an unsupported shell."
         }
         L10nKey::PaneTitleDisconnected => "{title} — disconnected",
         L10nKey::PaneTitleProcessExited => "{title} — process exited",
@@ -1879,8 +1880,14 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::TabTooltipZoomed => "Pane zoomed — other panes hidden",
         L10nKey::TabMenuLocalShells => "Local",
         L10nKey::TabMenuAddHost => "Add SSH Host…",
-        L10nKey::TabMenuAllHosts => "All SSH Hosts…",
+        L10nKey::TabMenuAllHosts => "All…",
+        L10nKey::TabMenuHostCount => "{count}",
         L10nKey::TabMenuSplitHint => "Hold {key} to split",
+        L10nKey::TabMenuOpenSelected => "Open {count}",
+        L10nKey::TabMenuMultiSelectHint => {
+            "Check hosts to open together. Click a name to open one."
+        }
+        L10nKey::TabMenuFleetCapped => "Opened the first {max} hosts — select fewer to open all.",
         L10nKey::TabUnnamedShell => "Shell {n}",
         L10nKey::ShellDefault => "default",
         L10nKey::SidebarScratchGroup => "Scratch",

@@ -25,8 +25,7 @@ serde_json.workspace = true
 # `Vec<SshProfile>` and `config.json` has to parse identically on the server.
 #
 # Deliberately *absent*: `keyring`. Nothing in this crate reads or writes a
-# secret — the daemon gets them pre-resolved on the wire (`NativeSshSpec`) — and
-# a headless `tty7-server` has no OS keychain to read from, so the vault's
+# secret — a headless `tty7-server` has no OS keychain to read from, so the vault's
 # storage half lives in the GUI crate instead (`tty7::core::keychain`). Keeping
 # it out here is what stops a static server binary from linking
 # `zbus`/`secret-service` and 30-odd crates behind them for code it can never

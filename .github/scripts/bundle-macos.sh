@@ -364,3 +364,8 @@ if [[ -n "$ZIP" ]]; then
     echo "✅ $ZIP"
 fi
 echo "✅ $DMG"
+# Local builds also land in ~/Downloads. CI keeps artifacts in dist/ only.
+if [[ -z "${CI:-}" && -d "${HOME}/Downloads" ]]; then
+    cp -f "$DMG" "${HOME}/Downloads/"
+    echo "✅ ${HOME}/Downloads/$(basename "$DMG")"
+fi

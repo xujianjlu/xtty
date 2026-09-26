@@ -724,8 +724,8 @@ impl Tab {
             return 0;
         };
         let v = leaf.read(cx);
-        (v.agent_session().map(|s| s.status) == Some(AgentStatus::Done)
-            && v.agent_result_unread()) as usize
+        (v.agent_session().map(|s| s.status) == Some(AgentStatus::Done) && v.agent_result_unread())
+            as usize
     }
 }
 
@@ -815,6 +815,8 @@ pub struct Tty7App {
     _appearance_watch: Subscription,
     palette: Option<Entity<PaletteView>>,
     palette_sub: Option<Subscription>,
+    /// Hosts checked in the New Tab menu. Cleared when the menu closes.
+    pub(crate) new_tab_host_selection: std::collections::HashSet<uuid::Uuid>,
     /// Preset that was live when the palette's theme picker started previewing.
     /// `Some` means the theme on screen is a preview that was never written to
     /// disk, and closing the palette without confirming puts this one back.
@@ -1406,6 +1408,7 @@ impl Tty7App {
             _appearance_watch: appearance_watch,
             palette: None,
             palette_sub: None,
+            new_tab_host_selection: std::collections::HashSet::new(),
             theme_preview_restore: None,
             closed: Vec::new(),
             renaming: None,
@@ -2720,7 +2723,6 @@ impl Tty7App {
         window.push_notification(reason, cx);
     }
 
-
     fn open_typed_ssh_connect(&mut self, input: &str, window: &mut Window, cx: &mut Context<Self>) {
         match parse_ssh_connect_input(input) {
             Ok(parsed) => {
@@ -2835,7 +2837,7 @@ impl Tty7App {
     }
 
     /// Paint each pane's broadcast border for the active tab.
-    fn sync_broadcast_roles(&mut self, window: &Window, cx: &mut Context<Self>) {
+    pub(crate) fn sync_broadcast_roles(&mut self, window: &Window, cx: &mut Context<Self>) {
         let Some(tab) = self.tabs.get(self.active) else {
             return;
         };
@@ -3114,10 +3116,6 @@ impl Tty7App {
         self.update_config(cx, |cfg| cfg.tab_completion = on);
     }
 
-    pub(crate) fn set_history_search(&mut self, on: bool, cx: &mut Context<Self>) {
-        self.update_config(cx, |cfg| cfg.history_search = on);
-    }
-
     pub(crate) fn set_startup_mode(
         &mut self,
         mode: crate::core::config::StartupMode,
@@ -3240,7 +3238,7 @@ impl Tty7App {
         );
     }
 
-    fn focus_leaf(&self, leaf: &PaneSlot, window: &mut Window, cx: &mut App) {
+    pub(crate) fn focus_leaf(&self, leaf: &PaneSlot, window: &mut Window, cx: &mut App) {
         let handle = leaf.focus_handle(cx);
         window.focus(&handle, cx);
     }
@@ -3305,7 +3303,7 @@ impl Tty7App {
         }
     }
 
-    fn new_tab_insert_at(&self, cx: &App) -> usize {
+    pub(crate) fn new_tab_insert_at(&self, cx: &App) -> usize {
         match cx.global::<Config>().new_tab_position {
             NewTabPosition::AfterCurrent => (self.active + 1).min(self.tabs.len()),
             NewTabPosition::End => self.tabs.len(),
@@ -3650,10 +3648,6 @@ impl Tty7App {
         else {
             return;
         };
-        if view.read(cx).ssh_disconnected() {
-            cx.notify();
-            return;
-        }
         match self.tabs[index].pane.close_leaf(view.entity_id()) {
             CloseOutcome::RemoveSelf => self.close_tab(index, window, cx),
             CloseOutcome::NotFound => {}
@@ -8000,7 +7994,6 @@ fn session_to_pane(
                 // still attempted first and still gives way to a fresh spawn.
                 false => (*pane_id).filter(|id| same_daemon && pane_free_for(alive, *id, owner)),
             };
-            // Native SSH session restore abolished.
             let view = match new_terminal(
                 workspace.cloned(),
                 Some(owner),

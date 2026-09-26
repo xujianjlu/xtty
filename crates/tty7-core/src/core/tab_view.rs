@@ -133,8 +133,16 @@ pub fn local_connection_identity() -> Option<String> {
     let host = std::env::var("HOST")
         .ok()
         .filter(|s| !s.trim().is_empty())
-        .or_else(|| std::env::var("HOSTNAME").ok().filter(|s| !s.trim().is_empty()))
-        .or_else(|| std::env::var("COMPUTERNAME").ok().filter(|s| !s.trim().is_empty()))
+        .or_else(|| {
+            std::env::var("HOSTNAME")
+                .ok()
+                .filter(|s| !s.trim().is_empty())
+        })
+        .or_else(|| {
+            std::env::var("COMPUTERNAME")
+                .ok()
+                .filter(|s| !s.trim().is_empty())
+        })
         .or_else(system_hostname)
         .filter(|s| !s.trim().is_empty())?;
     connection_identity(&user, &host)

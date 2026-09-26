@@ -852,10 +852,7 @@ fn run_request(
             ),
             Vec::new(),
         ),
-        ControlRequest::Routes => (
-            ReplyOk::Routes(Vec::new()),
-            Vec::new(),
-        ),
+        ControlRequest::Routes => (ReplyOk::Routes(Vec::new()), Vec::new()),
         ControlRequest::Status => (
             ReplyOk::Status(ServerStatus {
                 pid: std::process::id(),
