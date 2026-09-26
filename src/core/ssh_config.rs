@@ -375,6 +375,9 @@ pub fn fill_optional_from_ssh_config_from(root: &Path, home: &Path, profile: &mu
     if profile.algorithms.compression.is_empty() {
         profile.algorithms.compression = src.algorithms.compression;
     }
+    if profile.ssh_options.is_empty() {
+        profile.ssh_options = src.ssh_options;
+    }
 }
 
 pub fn resolve_alias_to_profile_from(
@@ -505,6 +508,7 @@ fn apply_resolved(profile: &mut ManagedProfile, alias: &str, r: ResolvedHost) ->
         Vec::new()
     };
     profile.forwards = r.forwards;
+    profile.ssh_options = r.extra_options;
     r.proxy_jump
 }
 
@@ -635,6 +639,7 @@ struct ResolvedHost {
     verify_host_keys: Option<bool>,
     strict_seen: bool,
     forwards: Vec<ForwardRule>,
+    extra_options: Vec<String>,
 }
 
 struct ParsedConfig {
@@ -833,6 +838,10 @@ fn option_is_supported(key: &str) -> bool {
             | "localforward"
             | "remoteforward"
             | "dynamicforward"
+            | "controlmaster"
+            | "controlpath"
+            | "controlpersist"
+            | "pubkeyacceptedalgorithms"
     )
 }
 
@@ -896,8 +905,23 @@ fn resolve_alias(alias: &str, blocks: &[HostBlock]) -> ResolvedHost {
                 "kexalgorithms" if r.kex.is_none() => {
                     r.kex = parse_algorithm_list(val);
                 }
-                "hostkeyalgorithms" if r.hostkey_algorithms.is_none() => {
-                    r.hostkey_algorithms = parse_algorithm_list(val);
+                "hostkeyalgorithms" => {
+                    if r.hostkey_algorithms.is_none() {
+                        r.hostkey_algorithms = parse_algorithm_list(val);
+                    }
+                    push_ssh_option(&mut r.extra_options, "hostkeyalgorithms", val);
+                }
+                "controlmaster" => {
+                    push_ssh_option(&mut r.extra_options, "controlmaster", val);
+                }
+                "controlpath" => {
+                    push_ssh_option(&mut r.extra_options, "controlpath", val);
+                }
+                "controlpersist" => {
+                    push_ssh_option(&mut r.extra_options, "controlpersist", val);
+                }
+                "pubkeyacceptedalgorithms" => {
+                    push_ssh_option(&mut r.extra_options, "pubkeyacceptedalgorithms", val);
                 }
                 "compression" if r.compression.is_none() => {
                     r.compression = first_word(val).map(|v| yes_no(&v));
@@ -989,6 +1013,36 @@ fn block_matches(block: &HostBlock, alias: &str) -> bool {
         }
     }
     positive
+}
+
+fn push_ssh_option(opts: &mut Vec<String>, key: &str, value: &str) {
+    let Some(line) = ssh_option_line(key, value) else {
+        return;
+    };
+    let name = line.split('=').next().unwrap_or("");
+    if opts
+        .iter()
+        .any(|existing| existing.split('=').next() == Some(name))
+    {
+        return;
+    }
+    opts.push(line);
+}
+
+fn ssh_option_line(key: &str, value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return None;
+    }
+    let name = match key {
+        "controlmaster" => "ControlMaster",
+        "controlpath" => "ControlPath",
+        "controlpersist" => "ControlPersist",
+        "pubkeyacceptedalgorithms" => "PubkeyAcceptedAlgorithms",
+        "hostkeyalgorithms" => "HostKeyAlgorithms",
+        _ => return None,
+    };
+    Some(format!("{name}={value}"))
 }
 
 fn first_word(value: &str) -> Option<String> {
@@ -1647,6 +1701,46 @@ mod tests {
         assert_eq!(stub.port, 2222);
         assert_eq!(stub.identity_files, vec!["~/.ssh/id_jumper".to_string()]);
         assert_eq!(stub.keepalive_interval_s, Some(60));
+    }
+
+    #[test]
+    fn fill_optional_takes_control_and_algorithm_options() {
+        let root = temp_root("fill-options");
+        let ssh = root.join(".ssh");
+        std::fs::create_dir_all(&ssh).unwrap();
+        std::fs::write(
+            ssh.join("config"),
+            concat!(
+                "Host jumper\n",
+                "  HostName jumper.example.com\n",
+                "  Port 2222\n",
+                "  User gate\n",
+                "  ServerAliveInterval 30\n",
+                "  ControlMaster auto\n",
+                "  ControlPath ~/.ssh/cm-%r@%h:%p\n",
+                "  ControlPersist yes\n",
+                "  PubkeyAcceptedAlgorithms +ssh-rsa\n",
+                "  HostkeyAlgorithms +ssh-rsa\n",
+            ),
+        )
+        .unwrap();
+
+        let mut stub = ManagedProfile::new("jumper");
+        stub.host = "jumper".into();
+        fill_optional_from_ssh_config_from(&ssh.join("config"), &root, &mut stub);
+        assert_eq!(stub.user, "gate");
+        assert_eq!(stub.port, 2222);
+        assert_eq!(stub.keepalive_interval_s, Some(30));
+        assert_eq!(
+            stub.ssh_options,
+            vec![
+                "ControlMaster=auto".to_string(),
+                "ControlPath=~/.ssh/cm-%r@%h:%p".to_string(),
+                "ControlPersist=yes".to_string(),
+                "PubkeyAcceptedAlgorithms=+ssh-rsa".to_string(),
+                "HostKeyAlgorithms=+ssh-rsa".to_string(),
+            ]
+        );
     }
 
     #[test]

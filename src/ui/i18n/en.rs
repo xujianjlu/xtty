@@ -326,6 +326,17 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::SettingsProxyJumpDesc => {
             "On: OpenSSH -J through the jump host. Off: log into the jumper first, then type this host's name."
         }
+        L10nKey::SettingsJumpUser => "Jumper user",
+        L10nKey::SettingsJumpUserDesc => "Blank = User from ~/.ssh/config.",
+        L10nKey::SettingsJumpPort => "Jumper port",
+        L10nKey::SettingsJumpPortDesc => "Blank = Port from ~/.ssh/config (22).",
+        L10nKey::SettingsJumpKeepalive => "Jumper keepalive (s)",
+        L10nKey::SettingsJumpKeepaliveDesc => "ServerAliveInterval. Blank = config / default.",
+        L10nKey::SettingsJumpSshOptions => "Jumper ssh options",
+        L10nKey::SettingsJumpSshOptionsDesc => {
+            "One Keyword=value per line, passed as ssh -o. ControlMaster, ControlPath, algorithms…"
+        }
+        L10nKey::SettingsJumpSshOptionsHint => "ControlMaster=auto",
         L10nKey::SettingsInteractiveJump => "Interactive",
         L10nKey::SettingsHopReadyPrompt => "Ready prompt",
         L10nKey::SettingsHopReadyPromptDesc => {

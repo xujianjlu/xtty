@@ -291,6 +291,17 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::SettingsProxyJumpDesc => {
             "开：本机 ssh -J 走跳板（两跳都在本机鉴权）。关（推荐交互堡垒）：先 ssh 跳板别名（和壳里一样读 ~/.ssh/config），登录后再自动键入目的地主机名。"
         }
+        L10nKey::SettingsJumpUser => "跳板用户",
+        L10nKey::SettingsJumpUserDesc => "留空则用 ~/.ssh/config 的 User。",
+        L10nKey::SettingsJumpPort => "跳板端口",
+        L10nKey::SettingsJumpPortDesc => "留空则用 ~/.ssh/config 的 Port（默认 22）。",
+        L10nKey::SettingsJumpKeepalive => "跳板保活间隔（秒）",
+        L10nKey::SettingsJumpKeepaliveDesc => "对应 ServerAliveInterval。留空则用 config。",
+        L10nKey::SettingsJumpSshOptions => "跳板 ssh 选项",
+        L10nKey::SettingsJumpSshOptionsDesc => {
+            "每行一条 Keyword=value，拼进 ssh -o。ControlMaster、ControlPath、算法写这里。"
+        }
+        L10nKey::SettingsJumpSshOptionsHint => "ControlMaster=auto",
         L10nKey::SettingsInteractiveJump => "交互登录",
         L10nKey::SettingsHopReadyPrompt => "就绪提示符",
         L10nKey::SettingsHopReadyPromptDesc => {

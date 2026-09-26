@@ -32,6 +32,7 @@ use crate::core::keychain::{
 };
 use crate::core::ssh_profile::{
     Algorithms, AuthMode, ForwardKind, ForwardRule, HostPort, SshProfile, ensure_jumper_profile,
+    ssh_options_from_text,
     find_jump_profile, jump_text_names_self, parse_quick_connect, to_connect_string,
 };
 use crate::ui::app::{
@@ -1033,6 +1034,10 @@ pub(crate) struct SshProfileForm {
     jump: Entity<InputState>,
     proxy_jump: bool,
     hop_ready_prompt: Entity<InputState>,
+    jump_user: Entity<InputState>,
+    jump_port: Entity<InputState>,
+    jump_keepalive: Entity<InputState>,
+    jump_options: Entity<InputState>,
 
     forwards: Vec<ForwardRuleForm>,
 
@@ -1450,6 +1455,7 @@ fn validate_ssh_draft(draft: SshFormDraft, profiles: &[SshProfile]) -> (SshProfi
         keepalive_interval_s: draft.keepalive_interval.trim().parse().ok(),
         keepalive_count_max: draft.keepalive_count.trim().parse().ok(),
         connect_timeout_s: draft.connect_timeout.trim().parse().ok(),
+        ssh_options: Vec::new(),
         warn_on_close: draft.warn_on_close,
         skip_banner: draft.skip_banner,
         shell_integration: draft.shell_integration,
@@ -1466,6 +1472,63 @@ fn validate_ssh_draft(draft: SshFormDraft, profiles: &[SshProfile]) -> (SshProfi
         verify_host_keys: draft.verify_host_keys,
     };
     (profile, errors)
+}
+
+fn jumper_form_values(jump_name: &str, profiles: &[SshProfile]) -> (String, String, String, String) {
+    let jump_name = jump_name.trim();
+    if jump_name.is_empty() {
+        return (
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+        );
+    }
+    let mut jumper = find_jump_profile(jump_name, Uuid::nil(), profiles)
+        .cloned()
+        .unwrap_or_else(|| {
+            let mut p = SshProfile::new(jump_name);
+            p.host = jump_name.to_string();
+            p
+        });
+    crate::core::ssh_config::fill_optional_from_ssh_config(&mut jumper);
+    let port = if jumper.port == 22 {
+        String::new()
+    } else {
+        jumper.port.to_string()
+    };
+    let keepalive = jumper
+        .keepalive_interval_s
+        .map(|n| n.to_string())
+        .unwrap_or_default();
+    (
+        jumper.user,
+        port,
+        keepalive,
+        jumper.ssh_options.join("\n"),
+    )
+}
+
+fn apply_jumper_form_fields(
+    jumper: &mut SshProfile,
+    user: &str,
+    port: &str,
+    keepalive: &str,
+    options: &str,
+) {
+    if !user.is_empty() {
+        jumper.user = user.to_string();
+    }
+    if let Some(p) = port.parse::<u16>().ok().filter(|&p| p != 0) {
+        jumper.port = p;
+    }
+    if let Ok(n) = keepalive.parse::<u32>() {
+        jumper.keepalive_interval_s = Some(n);
+    }
+    let opts = ssh_options_from_text(options);
+    if !opts.is_empty() {
+        jumper.ssh_options = opts;
+    }
 }
 
 /// The inline complaint under a field: one line, in the danger colour, in the
@@ -3792,6 +3855,17 @@ impl Tty7App {
         let port = seed_input(window, cx, &profile.port.to_string(), false);
         let user = seed_hinted(window, cx, &profile.user, t(L10nKey::SettingsUserHint));
         let jump = seed_input(window, cx, &jump_name, false);
+        let (jump_user_v, jump_port_v, jump_ka_v, jump_opts_v) =
+            jumper_form_values(&jump_name, &cx.global::<Config>().ssh_profiles);
+        let jump_user = seed_hinted(window, cx, &jump_user_v, t(L10nKey::SettingsUserHint));
+        let jump_port = seed_input(window, cx, &jump_port_v, false);
+        let jump_keepalive = seed_input(window, cx, &jump_ka_v, false);
+        let jump_options = seed_hinted_multi(
+            window,
+            cx,
+            &jump_opts_v,
+            t(L10nKey::SettingsJumpSshOptionsHint),
+        );
         let hop_ready_prompt = seed_hinted(
             window,
             cx,
@@ -3917,12 +3991,25 @@ impl Tty7App {
                 }),
             );
         }
+        subs.push(cx.subscribe_in(
+            &jump,
+            window,
+            |this, _i, ev: &InputEvent, window, cx| {
+                if matches!(ev, InputEvent::Change) {
+                    this.fill_empty_jumper_fields(window, cx);
+                }
+            },
+        ));
         let mut watch = vec![
             &name,
             &host,
             &port,
             &user,
             &jump,
+            &jump_user,
+            &jump_port,
+            &jump_keepalive,
+            &jump_options,
             &hop_ready_prompt,
             &password,
             &passphrase,
@@ -3975,6 +4062,10 @@ impl Tty7App {
             jump,
             proxy_jump: profile.proxy_jump,
             hop_ready_prompt,
+            jump_user,
+            jump_port,
+            jump_keepalive,
+            jump_options,
             forwards,
             identity_files,
             proxy_command,
@@ -4056,6 +4147,37 @@ impl Tty7App {
         ))
     }
 
+    fn fill_empty_jumper_fields(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(form) = self.active_settings().and_then(|s| s.ssh_form.as_ref()) else {
+            return;
+        };
+        let jump = form.jump.read(cx).value();
+        let occupied = [
+            form.jump_user.read(cx).value(),
+            form.jump_port.read(cx).value(),
+            form.jump_keepalive.read(cx).value(),
+            form.jump_options.read(cx).value(),
+        ]
+        .iter()
+        .any(|s| !s.trim().is_empty());
+        if occupied {
+            return;
+        }
+        let (user, port, keepalive, options) =
+            jumper_form_values(&jump, &cx.global::<Config>().ssh_profiles);
+        let Some(form) = self.ssh_form_mut() else {
+            return;
+        };
+        form.jump_user
+            .update(cx, |i, cx| i.set_value(user, window, cx));
+        form.jump_port
+            .update(cx, |i, cx| i.set_value(port, window, cx));
+        form.jump_keepalive
+            .update(cx, |i, cx| i.set_value(keepalive, window, cx));
+        form.jump_options
+            .update(cx, |i, cx| i.set_value(options, window, cx));
+    }
+
     /// Point the passphrase box at the key the form now names.
     ///
     /// A passphrase is stored against the contents of the key it unlocks, so
@@ -4134,10 +4256,18 @@ impl Tty7App {
         if !errors.is_empty() {
             return None;
         }
-        let jump_text = self
+        let (jump_text, jump_user, jump_port, jump_keepalive, jump_options) = self
             .active_settings()
             .and_then(|s| s.ssh_form.as_ref())
-            .map(|f| f.jump.read(cx).value().trim().to_string())
+            .map(|f| {
+                (
+                    f.jump.read(cx).value().trim().to_string(),
+                    f.jump_user.read(cx).value().trim().to_string(),
+                    f.jump_port.read(cx).value().trim().to_string(),
+                    f.jump_keepalive.read(cx).value().trim().to_string(),
+                    f.jump_options.read(cx).value().to_string(),
+                )
+            })
             .unwrap_or_default();
         let mut profile = profile;
         let id = profile.id;
@@ -4153,6 +4283,13 @@ impl Tty7App {
             }
             if let Some(jid) = profile.jump_host {
                 if let Some(jumper) = cfg.ssh_profiles.iter_mut().find(|p| p.id == jid) {
+                    apply_jumper_form_fields(
+                        jumper,
+                        &jump_user,
+                        &jump_port,
+                        &jump_keepalive,
+                        &jump_options,
+                    );
                     crate::core::ssh_config::fill_optional_from_ssh_config(jumper);
                 }
             }
@@ -5104,7 +5241,7 @@ impl Tty7App {
                     cx,
                 ),
             );
-            section = section.child(
+            section = section                    .child(
                 self.settings_row(
                     t(L10nKey::SettingsProxyJump),
                     t(L10nKey::SettingsProxyJumpDesc),
@@ -5120,6 +5257,50 @@ impl Tty7App {
                     cx,
                 ),
             );
+            let jump_name = form.jump.read(cx).value();
+            if !form.proxy_jump && !jump_name.trim().is_empty() {
+                section = section
+                    .child(self.settings_row(
+                        t(L10nKey::SettingsJumpUser),
+                        t(L10nKey::SettingsJumpUserDesc),
+                        div()
+                            .w(px(FIELD_W))
+                            .max_w_full()
+                            .child(Input::new(&form.jump_user).small())
+                            .into_any_element(),
+                        cx,
+                    ))
+                    .child(self.settings_row(
+                        t(L10nKey::SettingsJumpPort),
+                        t(L10nKey::SettingsJumpPortDesc),
+                        div()
+                            .w(px(FIELD_W))
+                            .max_w_full()
+                            .child(Input::new(&form.jump_port).small())
+                            .into_any_element(),
+                        cx,
+                    ))
+                    .child(self.settings_row(
+                        t(L10nKey::SettingsJumpKeepalive),
+                        t(L10nKey::SettingsJumpKeepaliveDesc),
+                        div()
+                            .w(px(FIELD_W))
+                            .max_w_full()
+                            .child(Input::new(&form.jump_keepalive).small())
+                            .into_any_element(),
+                        cx,
+                    ))
+                    .child(self.settings_row(
+                        t(L10nKey::SettingsJumpSshOptions),
+                        t(L10nKey::SettingsJumpSshOptionsDesc),
+                        div()
+                            .w(px(FIELD_W))
+                            .max_w_full()
+                            .child(Input::new(&form.jump_options).small())
+                            .into_any_element(),
+                        cx,
+                    ));
+            }
         }
         section.into_any_element()
     }

@@ -4,7 +4,12 @@
 //! in the same tab. Password auto-fill stays per-pane — secrets are written
 //! with a direct `terminal.write` that never emits [`BroadcastInput`].
 
-use gpui::EntityId;
+use gpui::{hsla, EntityId, Hsla};
+
+/// Hairline used for each in-group pane's inset four-sided frame.
+pub fn broadcast_stroke() -> Hsla {
+    hsla(0.08, 0.85, 0.52, 1.0)
+}
 
 /// User keystrokes / paste that should be mirrored to broadcast receivers.
 #[derive(Clone, Debug)]

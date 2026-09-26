@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [26.9.34] - 2026-09-27
+
+### Added
+
+- **Interactive jumper fields in Settings.** When ProxyJump is off and a jump
+  host is set, User / Port / ServerAliveInterval and extra `ssh -o` lines
+  (ControlMaster, ControlPath, `+ssh-rsa`, …) are editable. Empty values still
+  fill from `~/.ssh/config`.
+
+### Changed
+
+- **Broadcast frames are per pane.** Each Source / Receiver draws its own
+  four-sided amber box, inset 2px from that pane's split / outer edges.
+  Opted-out panes draw nothing. Dividers stay the idle grey gutter.
+
 ## [26.9.33] - 2026-09-27
 
 ### Fixed

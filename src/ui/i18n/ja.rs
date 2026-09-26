@@ -331,6 +331,17 @@ pub fn translate_ja(key: L10nKey) -> Option<&'static str> {
         L10nKey::SettingsProxyJumpDesc => {
             "オン: OpenSSH の -J でジャンプ。オフ: 先にジャンパーへログインし、このホスト名を入力します。"
         }
+        L10nKey::SettingsJumpUser => "ジャンパーのユーザー",
+        L10nKey::SettingsJumpUserDesc => "空欄 = ~/.ssh/config の User",
+        L10nKey::SettingsJumpPort => "ジャンパーのポート",
+        L10nKey::SettingsJumpPortDesc => "空欄 = ~/.ssh/config の Port（22）",
+        L10nKey::SettingsJumpKeepalive => "ジャンパー Keepalive（秒）",
+        L10nKey::SettingsJumpKeepaliveDesc => "ServerAliveInterval。空欄 = config",
+        L10nKey::SettingsJumpSshOptions => "ジャンパー ssh オプション",
+        L10nKey::SettingsJumpSshOptionsDesc => {
+            "1 行 1 つの Keyword=value。ssh -o に渡します。ControlMaster、アルゴリズムなど。"
+        }
+        L10nKey::SettingsJumpSshOptionsHint => "ControlMaster=auto",
         L10nKey::SettingsInteractiveJump => "対話ログイン",
         L10nKey::SettingsHopReadyPrompt => "準備完了プロンプト",
         L10nKey::SettingsHopReadyPromptDesc => {

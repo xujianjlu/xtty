@@ -11,6 +11,47 @@ use crate::ui::pending_pane::PendingPane;
 const MIN_RATIO: f32 = 0.1;
 const MAX_RATIO: f32 = 0.9;
 const DIVIDER_THICKNESS: f32 = 5.;
+/// Yellow frame sits this far inside the pane rect (the split / outer edge).
+const BROADCAST_INSET: f32 = 2.;
+
+/// Four 1px strokes, inset from the leaf's divider-bounded box. Separate
+/// hairs so a full-size overlay does not steal clicks; OptedOut leaves
+/// simply skip this.
+fn broadcast_inset_strokes() -> [gpui::Div; 4] {
+    let color = crate::terminal::broadcast::broadcast_stroke();
+    let inset = px(BROADCAST_INSET);
+    let hair = px(1.);
+    [
+        div()
+            .absolute()
+            .top(inset)
+            .left(inset)
+            .right(inset)
+            .h(hair)
+            .bg(color),
+        div()
+            .absolute()
+            .bottom(inset)
+            .left(inset)
+            .right(inset)
+            .h(hair)
+            .bg(color),
+        div()
+            .absolute()
+            .left(inset)
+            .top(inset)
+            .bottom(inset)
+            .w(hair)
+            .bg(color),
+        div()
+            .absolute()
+            .right(inset)
+            .top(inset)
+            .bottom(inset)
+            .w(hair)
+            .bg(color),
+    ]
+}
 
 /// How opaque a dragged (lifted) pane's terminal paints, blended toward the
 /// window background. The terminal reads it through `TerminalView::dim`; kept
@@ -1081,22 +1122,31 @@ impl Pane<PaneSlot> {
                 } else {
                     1.0
                 };
+                let framed = match v {
+                    PaneSlot::Ready(t) => t.read(cx).shows_broadcast_frame(),
+                    PaneSlot::Connecting(_) => false,
+                };
                 div()
                     .size_full()
                     .relative()
                     .overflow_hidden()
-                    .when(chrome.rearrangeable, |d| {
-                        d.pt(px(crate::ui::pane_drag::HANDLE_STRIP))
-                    })
-                    .map(|d| match v {
-                        PaneSlot::Ready(t) => {
-                            t.update(cx, |v, _cx| v.set_dim(dim));
-                            d.child(t.clone())
-                        }
-                        PaneSlot::Connecting(p) => {
-                            d.when(dim < 1., |d| d.opacity(dim)).child(p.clone())
-                        }
-                    })
+                    .child(
+                        div()
+                            .size_full()
+                            .when(chrome.rearrangeable, |d| {
+                                d.pt(px(crate::ui::pane_drag::HANDLE_STRIP))
+                            })
+                            .map(|d| match v {
+                                PaneSlot::Ready(t) => {
+                                    t.update(cx, |v, _cx| v.set_dim(dim));
+                                    d.child(t.clone())
+                                }
+                                PaneSlot::Connecting(p) => {
+                                    d.when(dim < 1., |d| d.opacity(dim)).child(p.clone())
+                                }
+                            }),
+                    )
+                    .when(framed, |d| d.children(broadcast_inset_strokes()))
                     .when(grip, |d| {
                         d.child(crate::ui::pane_drag::reveal_band(id, &chrome.hovered))
                             .child(crate::ui::pane_drag::handle(

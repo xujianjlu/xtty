@@ -1734,6 +1734,13 @@ impl TerminalView {
         self.broadcast_role = role;
     }
 
+    pub(crate) fn shows_broadcast_frame(&self) -> bool {
+        matches!(
+            self.broadcast_role,
+            super::broadcast::BroadcastRole::Source | super::broadcast::BroadcastRole::Receiver
+        )
+    }
+
     pub(crate) fn toggle_broadcast_opt_out(&mut self, cx: &mut Context<Self>) {
         self.broadcast_opt_out = !self.broadcast_opt_out;
         cx.notify();
@@ -6825,33 +6832,7 @@ impl Render for TerminalView {
         let menu_focus = self.focus_handle.clone();
         let has_selection = self.any_selection();
         let menu_view = cx.entity();
-        let broadcast_role = self.broadcast_role;
         let broadcast_opt_out = self.broadcast_opt_out;
-
-        // Amber frame around the cells, not the leftover strip the pane
-        // cannot turn into a row/column — that leftover is why a full-pane
-        // border looked wider top/bottom than left/right.
-        let broadcast_border = match broadcast_role {
-            super::broadcast::BroadcastRole::Source | super::broadcast::BroadcastRole::Receiver => {
-                Some(gpui::hsla(0.08, 0.85, 0.52, 1.0))
-            }
-            super::broadcast::BroadcastRole::OptedOut | super::broadcast::BroadcastRole::Off => {
-                None
-            }
-        };
-        let grid = self.terminal.size();
-        let broadcast_frame = broadcast_border.map(|color| {
-            let w = GRID_PAD_X * 2. + self.cell_width.as_f32() * grid.cols as f32;
-            let h = GRID_PAD_Y * 2. + self.line_height.as_f32() * grid.rows as f32;
-            div()
-                .absolute()
-                .top_0()
-                .left_0()
-                .w(px(w))
-                .h(px(h))
-                .border_2()
-                .border_color(color)
-        });
 
         div()
             .id("terminal-surface")
@@ -6955,7 +6936,6 @@ impl Render for TerminalView {
                 this.tab_pressed(false, cx);
             }))
             .child(TerminalElement::new(entity))
-            .children(broadcast_frame)
             .child(self.render_scrollbar())
             .children(search_bar)
             .children(input_bar)

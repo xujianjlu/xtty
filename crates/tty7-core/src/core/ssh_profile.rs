@@ -40,6 +40,9 @@ pub struct SshProfile {
     pub keepalive_interval_s: Option<u32>,
     pub keepalive_count_max: Option<u32>,
     pub connect_timeout_s: Option<u32>,
+    /// Extra `ssh -o Key=Value` lines (ControlMaster, HostKeyAlgorithms, …).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ssh_options: Vec<String>,
     pub warn_on_close: Option<bool>,
     /// When true, the SSH auth banner is not forwarded to the UI. Default
     /// on: server login notices ("Authorized users only…") are not useful as
@@ -84,6 +87,7 @@ impl Default for SshProfile {
             keepalive_interval_s: None,
             keepalive_count_max: None,
             connect_timeout_s: None,
+            ssh_options: Vec::new(),
             warn_on_close: None,
             skip_banner: true,
             shell_integration: true,
@@ -413,6 +417,14 @@ pub fn openssh_argv(profile: &SshProfile, profiles: &[SshProfile]) -> Vec<String
         args.push("-o".into());
         args.push(format!("ServerAliveCountMax={n}"));
     }
+    for opt in &profile.ssh_options {
+        let opt = normalize_ssh_option(opt);
+        if opt.is_empty() {
+            continue;
+        }
+        args.push("-o".into());
+        args.push(opt);
+    }
     args.push(ssh_destination(profile));
     args
 }
@@ -438,6 +450,30 @@ pub fn ssh_invoke_token(profile: &SshProfile) -> String {
         return host.to_string();
     }
     name.to_string()
+}
+
+/// `ControlMaster auto` or `ControlMaster=auto` → `ControlMaster=auto`.
+pub fn normalize_ssh_option(line: &str) -> String {
+    let line = line.trim();
+    if line.is_empty() {
+        return String::new();
+    }
+    if line.contains('=') {
+        return line.to_string();
+    }
+    match line.split_once(char::is_whitespace) {
+        Some((key, rest)) if !key.is_empty() && !rest.trim().is_empty() => {
+            format!("{}={}", key, rest.trim())
+        }
+        _ => line.to_string(),
+    }
+}
+
+pub fn ssh_options_from_text(text: &str) -> Vec<String> {
+    text.lines()
+        .map(normalize_ssh_option)
+        .filter(|s| !s.is_empty())
+        .collect()
 }
 
 /// First hop to an interactive jumper: `ssh jumper`, same as the shell.
@@ -1005,6 +1041,11 @@ mod tests {
             ],
             "optional -i / user@, destination is the typed Host token"
         );
+        jumper.ssh_options = vec!["ControlMaster=auto".into(), "HostKeyAlgorithms=+ssh-rsa".into()];
+        let typed = openssh_typed_argv(&jumper, &[]);
+        assert!(typed.windows(2).any(|w| w[0] == "-o" && w[1] == "ControlMaster=auto"));
+        assert!(typed.windows(2).any(|w| w[0] == "-o" && w[1] == "HostKeyAlgorithms=+ssh-rsa"));
+        assert_eq!(typed.last().map(String::as_str), Some("gate@jumper"));
     }
 
     #[test]
