@@ -22,9 +22,8 @@ impl Tty7App {
     /// beside the pane in front of the user when the new-tab menu's row was
     /// taken with ⌥ held.
     ///
-    /// Opens a **local** pane running system `ssh` (not the russh Native path).
-    /// Tab identity/cwd come from session facts (process table / OSC), same as
-    /// a typed `ssh` in a shell.
+    /// Opens a local pane running system `ssh` (not the russh Native path).
+    /// Typed `ssh` / jumper hops use the same dest facts and clone as this.
     pub(crate) fn connect_ssh_profile_at(
         &mut self,
         profile_id: uuid::Uuid,
@@ -80,7 +79,7 @@ impl Tty7App {
         self.open_system_ssh(&profile, &profiles, SpawnWhere::NewTab, window, cx);
     }
 
-    /// Spawn local PTY with `ssh` argv; seed chip from profile user@host.
+    /// Spawn local PTY with `ssh` argv; seed the tab title from profile user@host.
     pub(crate) fn open_system_ssh(
         &mut self,
         profile: &SshProfile,
@@ -89,7 +88,13 @@ impl Tty7App {
         window: &mut gpui::Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        let args = crate::core::ssh_profile::openssh_argv(profile, profiles);
+        let mut args = crate::core::ssh_profile::openssh_argv(profile, profiles);
+        if profile.shell_integration {
+            if !args.iter().any(|a| a == "-t" || a == "-tt") {
+                args.insert(0, "-t".into());
+            }
+            args.push(crate::daemon::hop_bootstrap());
+        }
         let shell = Some(crate::daemon::protocol::ShellSpec {
             program: "ssh".into(),
             args,

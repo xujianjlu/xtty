@@ -120,13 +120,14 @@ pub(crate) fn short_title(raw: &str, home: Option<&std::path::Path>) -> String {
     label
 }
 
-/// What Settings → Appearance → Tabs may put on a chip, besides the ranked
-/// name ladder. Defaults match the opt-batch chip: basename first; identity
+/// What Settings → Appearance → Tabs may put on a tab title, besides the ranked
+/// name ladder. Defaults match the opt-batch title: basename first; identity
 /// only when it is the sole evidence (or when `show_user_host` is on).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct TabChipOptions {
     pub show_user_host: bool,
     pub show_cwd_basename: bool,
+    pub show_agent: bool,
 }
 
 impl Default for TabChipOptions {
@@ -134,6 +135,7 @@ impl Default for TabChipOptions {
         Self {
             show_user_host: false,
             show_cwd_basename: true,
+            show_agent: true,
         }
     }
 }
@@ -143,6 +145,7 @@ impl TabChipOptions {
         Self {
             show_user_host: cfg.tab_show_user_host,
             show_cwd_basename: cfg.tab_show_cwd_basename,
+            show_agent: cfg.tab_show_agent_icon,
         }
     }
 }
@@ -206,35 +209,33 @@ pub(crate) fn label_of_with(
         let s = shortened(raw);
         if s.trim().is_empty() { None } else { Some(s) }
     };
-    let compose_identity_basename = |identity: String, basename: Option<String>| -> String {
-        match (options.show_user_host, basename) {
-            (true, Some(leaf)) => format!("{identity}:{leaf}"),
-            (true, None) => identity,
-            // Basename-first default: leave identity for tooltip / sole-evidence.
-            (false, Some(leaf)) => leaf,
-            (false, None) => identity,
+    if let TabLabel::Named(name) = view.label() {
+        return name.to_string();
+    }
+    if options.show_agent {
+        if let Some(agent) = view.agent {
+            return agent.display_name().to_string();
         }
-    };
+    }
     match view.label() {
         TabLabel::Named(name) => name.to_string(),
-        // Direct / Native SSH seed `user@host` as Osc before OSC 7 lands.
-        // Basename-first (default): chip is the path leaf; hover keeps the
-        // abbreviated absolute path (and identity). `show_user_host` puts
-        // identity back on the chip, alone or as `user@host:leaf`.
+        // Identity stays on the title. The folder name is the sidebar's
+        // right-hand slot, not `user@host:leaf`.
         TabLabel::Osc(title) => match tty7_core::core::tab_view::identity_from_title(title) {
-            Some(identity) => {
+            Some(identity) if options.show_user_host => identity,
+            Some(_) => {
                 let path = strip_host_prefix(title.trim());
                 let path = path.trim();
-                let basename = if !path.is_empty() && path != title.trim() {
+                let leaf = if !path.is_empty() && path != title.trim() {
                     basename_of(path)
-                } else if let Some(cwd) =
-                    view.cwd.as_deref().map(str::trim).filter(|c| !c.is_empty())
-                {
-                    basename_of(cwd)
                 } else {
-                    None
+                    view.cwd
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|c| !c.is_empty())
+                        .and_then(basename_of)
                 };
-                compose_identity_basename(identity, basename)
+                leaf.unwrap_or_else(unnamed)
             }
             None => match basename_of(title) {
                 Some(leaf) => leaf,
@@ -277,7 +278,7 @@ fn tooltip_of(
     tooltip_of_with(view, index, home, TabChipOptions::default())
 }
 
-fn tooltip_of_with(
+pub(crate) fn tooltip_of_with(
     view: &crate::ui::machine_mirror::TabView,
     index: usize,
     home: Option<&std::path::Path>,
@@ -1700,8 +1701,8 @@ impl Tty7App {
         );
 
         let tab = this.tabs.get(index);
-        if tab.is_some_and(|t| t.agent(cx).is_some()) {
-            let done = tab.and_then(|t| t.agent_status(cx))
+        if tab.is_some_and(|t| t.agent(None, cx).is_some()) {
+            let done = tab.and_then(|t| t.agent_status(None, cx))
                 == Some(crate::core::cli_agent::AgentStatus::Done);
             menu = menu.item(
                 PopupMenuItem::new(t(L10nKey::TabContextMarkUnread))
@@ -2003,17 +2004,16 @@ impl Tty7App {
             let label = self.tab_label(tab, i, Some(window), cx);
             let full_title = self.tab_title_tooltip(tab, i, Some(window), cx);
             let ssh_dot = self.tab_ssh_dot(tab, cx);
-            let agent = tab.agent(cx);
-            let agent_status = tab.agent_status(cx);
-            let agent_unread = tab.agent_unread_count(cx);
+            let agent = tab.agent(Some(window), cx);
+            let agent_status = tab.agent_status(Some(window), cx);
+            let agent_unread = tab.agent_unread_count(Some(window), cx);
             let zoomed = self.tab_is_zoomed(i);
             let broadcasting = tab.broadcast_input;
-            let git_branch = cx
+            let git = cx
                 .global::<Config>()
                 .tab_show_git_branch
                 .then(|| tab.git_status(Some(window), cx))
-                .flatten()
-                .map(|g| g.branch);
+                .flatten();
 
             let rename_input = self
                 .renaming
@@ -2155,14 +2155,24 @@ impl Tty7App {
                     chip.child(self.broadcast_mark(("tab-broadcast", i), cx))
                 })
                 .child(label_region)
-                .when_some(git_branch, |chip, branch| {
+                .when_some(git, |chip, g| {
+                    let added_ink = crate::ui::presets::resting_ink(
+                        cx.theme().success,
+                        cx.theme().muted_foreground,
+                        cx.theme().secondary,
+                    );
+                    let removed_ink = crate::ui::presets::resting_ink(
+                        cx.theme().danger,
+                        cx.theme().muted_foreground,
+                        cx.theme().secondary,
+                    );
                     chip.child(
                         h_flex()
                             .id(("tab-git", i))
                             .flex_shrink_0()
                             .items_center()
                             .gap_1()
-                            .max_w(px(96.))
+                            .max_w(px(168.))
                             .text_xs()
                             .text_color(cx.theme().muted_foreground)
                             .child(
@@ -2172,7 +2182,23 @@ impl Tty7App {
                                     .size(px(10.))
                                     .text_color(cx.theme().muted_foreground),
                             )
-                            .child(div().min_w_0().truncate().child(branch)),
+                            .child(div().min_w_0().truncate().child(g.branch.clone()))
+                            .when(g.added > 0, |row| {
+                                row.child(
+                                    div()
+                                        .flex_shrink_0()
+                                        .text_color(added_ink)
+                                        .child(format!("+{}", g.added)),
+                                )
+                            })
+                            .when(g.removed > 0, |row| {
+                                row.child(
+                                    div()
+                                        .flex_shrink_0()
+                                        .text_color(removed_ink)
+                                        .child(format!("−{}", g.removed)),
+                                )
+                            }),
                     )
                 })
                 .when(show_badges && i < 9, |chip| {
@@ -3200,9 +3226,10 @@ mod tests {
                 TabChipOptions {
                     show_user_host: true,
                     show_cwd_basename: true,
+                    show_agent: true,
                 }
             ),
-            "deploy@box:app"
+            "deploy@box"
         );
         assert_eq!(
             label_of_with(
@@ -3212,9 +3239,25 @@ mod tests {
                 TabChipOptions {
                     show_user_host: true,
                     show_cwd_basename: false,
+                    show_agent: true,
                 }
             ),
             "deploy@box"
+        );
+
+        tab.agent = Some(crate::core::cli_agent::CLIAgent::Claude);
+        assert_eq!(
+            label_of_with(
+                &tab,
+                0,
+                Some(home()),
+                TabChipOptions {
+                    show_user_host: true,
+                    show_cwd_basename: true,
+                    show_agent: true,
+                }
+            ),
+            "Claude Code"
         );
     }
 

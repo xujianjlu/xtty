@@ -335,6 +335,12 @@ fn forward_open_path_with(
 fn forward_open_path(open_path: Option<&std::path::Path>) -> bool {
     use tty7_core::client::ControlClient;
     use tty7_core::daemon::control::{ControlHello, ControlRequest};
+    use tty7_core::daemon::transport;
+
+    // A wedged daemon still accepts the Unix connect (kernel backlog) but never
+    // writes HELLO. Without a timeout this probe sits in recv forever, so the
+    // Dock icon bounces and `application.run` never starts.
+    const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
 
     forward_open_path_with(
         open_path,
@@ -344,7 +350,11 @@ fn forward_open_path(open_path: Option<&std::path::Path>) -> bool {
                 format!("tty7-app-open-{}", std::process::id()),
                 "this computer",
             );
-            let client = ControlClient::connect(&hello)?;
+            let endpoint = tty7_core::host::server::control_socket_path()?;
+            let stream = transport::connect_endpoint_at(&endpoint)?;
+            let _ = stream.set_read_timeout(Some(PROBE_TIMEOUT));
+            let _ = stream.set_write_timeout(Some(PROBE_TIMEOUT));
+            let client = ControlClient::over_stream(stream, &hello)?;
             let reply = client.request(ControlRequest::GuiOpen {
                 path,
                 workspace: None,

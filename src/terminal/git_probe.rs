@@ -121,13 +121,18 @@ pub(crate) fn probe_command_bytes() -> Vec<u8> {
         "printf '\\036TTY7_GIT_BEGIN\\036\\n'; ",
         "{ pwd -P 2>/dev/null || pwd; }; ",
         "printf '\\036TTY7_GIT_SEP\\036\\n'; ",
-        "GIT_OPTIONAL_LOCKS=0; export GIT_OPTIONAL_LOCKS; ",
-        "if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then ",
-        "git rev-parse --path-format=absolute --show-toplevel --git-dir --git-common-dir 2>/dev/null; ",
+        // Same read-path env as LocalHost::git: no pager, no color, no locks.
+        // An interactive dest otherwise colors numstat (`ESC[32m3`) and the
+        // +/− parse drops every line — branch still shows, counts stay 0.
+        "GIT_OPTIONAL_LOCKS=0 GIT_PAGER=cat GIT_TERMINAL_PROMPT=0; ",
+        "export GIT_OPTIONAL_LOCKS GIT_PAGER GIT_TERMINAL_PROMPT; ",
+        "if git --no-pager -c color.ui=never rev-parse --is-inside-work-tree >/dev/null 2>&1; then ",
+        "git --no-pager -c color.ui=never rev-parse --path-format=absolute --show-toplevel --git-dir --git-common-dir 2>/dev/null ",
+        "|| git --no-pager -c color.ui=never rev-parse --show-toplevel --git-dir --git-common-dir 2>/dev/null; ",
         "printf '\\036TTY7_GIT_SEP\\036\\n'; ",
-        "{ git symbolic-ref --quiet --short HEAD 2>/dev/null || git rev-parse --short HEAD 2>/dev/null || true; }; ",
+        "{ git --no-pager -c color.ui=never symbolic-ref --quiet --short HEAD 2>/dev/null || git --no-pager -c color.ui=never rev-parse --short HEAD 2>/dev/null || true; }; ",
         "printf '\\036TTY7_GIT_SEP\\036\\n'; ",
-        "git diff --numstat HEAD 2>/dev/null || true; ",
+        "git --no-pager -c color.ui=never -c color.diff=never diff --numstat HEAD 2>/dev/null || true; ",
         "fi; ",
         "printf '\\036TTY7_GIT_END\\036\\n'\r"
     );
@@ -231,6 +236,7 @@ fn sum_numstat(bytes: &[u8]) -> (u32, u32) {
     let mut added = 0u32;
     let mut removed = 0u32;
     for line in lines_of(bytes) {
+        let line = strip_ansi(line);
         let mut fields = line.split('\t');
         if let Some(n) = fields.next().and_then(|s| s.parse::<u32>().ok()) {
             added = added.saturating_add(n);
@@ -240,6 +246,29 @@ fn sum_numstat(bytes: &[u8]) -> (u32, u32) {
         }
     }
     (added, removed)
+}
+
+fn strip_ansi(s: &str) -> std::borrow::Cow<'_, str> {
+    if !s.as_bytes().contains(&0x1b) {
+        return std::borrow::Cow::Borrowed(s);
+    }
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '\u{1b}' {
+            out.push(c);
+            continue;
+        }
+        if chars.peek() == Some(&'[') {
+            chars.next();
+            for next in chars.by_ref() {
+                if next.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+        }
+    }
+    std::borrow::Cow::Owned(out)
 }
 
 fn lines_of(bytes: &[u8]) -> Vec<&str> {
@@ -395,6 +424,25 @@ mod tests {
         assert!(find_subslice(&cmd, b"TTY7_GIT_BEGIN").is_some());
         assert!(find_subslice(&cmd, b"TTY7_GIT_END").is_some());
         assert!(find_subslice(&cmd, b"GIT_OPTIONAL_LOCKS").is_some());
+        assert!(find_subslice(&cmd, b"GIT_PAGER").is_some());
+        assert!(find_subslice(&cmd, b"color.ui=never").is_some());
+        assert!(find_subslice(&cmd, b"diff --numstat HEAD").is_some());
         assert!(find_subslice(&cmd, b"rev-parse").is_some());
+    }
+
+    #[test]
+    fn colored_numstat_still_counts() {
+        let mut body = Vec::new();
+        body.extend_from_slice(b"/repo\n");
+        body.extend_from_slice(SEP_MARK);
+        body.extend_from_slice(b"\n/repo\n/repo/.git\n/repo/.git\n");
+        body.extend_from_slice(SEP_MARK);
+        body.extend_from_slice(b"\nmain\n");
+        body.extend_from_slice(SEP_MARK);
+        body.extend_from_slice(b"\n\x1b[32m12\x1b[m\t\x1b[31m4\x1b[m\tsrc/a.rs\n");
+        let snap = parse_env_probe_dump(&framed(&body))
+            .and_then(|e| e.snapshot)
+            .expect("snapshot");
+        assert_eq!(snap.counts, Some((12, 4)));
     }
 }

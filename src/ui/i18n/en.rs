@@ -128,11 +128,11 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::SettingsTabStyle => "Tabs",
         L10nKey::SettingsTabShowUserHost => "Show user@host",
         L10nKey::SettingsTabShowUserHostDesc => {
-            "Put the SSH identity on the tab chip. With basename on, the chip reads user@host:folder."
+            "Show user@host on the left of the tab. While an agent runs, the left side becomes the agent name."
         }
-        L10nKey::SettingsTabShowCwdBasename => "Show folder basename",
+        L10nKey::SettingsTabShowCwdBasename => "Show folder name",
         L10nKey::SettingsTabShowCwdBasenameDesc => {
-            "Show the working-directory leaf name on the chip. Full path stays on hover."
+            "Show the current folder name on the right of the tab — not the full path."
         }
         L10nKey::SettingsTabShowGitBranch => "Show git branch",
         L10nKey::SettingsTabShowGitBranchDesc => {
@@ -142,13 +142,13 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::SettingsTabShowAgentIconDesc => {
             "Show the CLI agent avatar on tabs when an agent is running."
         }
-        L10nKey::SettingsSearchTabShowUserHostKeywords => "tab chip identity user host ssh hop",
+        L10nKey::SettingsSearchTabShowUserHostKeywords => "tab title identity user host ssh hop",
         L10nKey::SettingsSearchTabShowCwdBasenameKeywords => {
-            "tab chip cwd directory basename folder path"
+            "tab title cwd directory folder path"
         }
-        L10nKey::SettingsSearchTabShowGitBranchKeywords => "tab chip git branch status diff",
+        L10nKey::SettingsSearchTabShowGitBranchKeywords => "tab title git branch status diff",
         L10nKey::SettingsSearchTabShowAgentIconKeywords => {
-            "tab chip agent avatar claude codex icon"
+            "tab title agent avatar claude codex icon"
         }
         L10nKey::SettingsLanguage => "Language",
         L10nKey::SettingsLanguageDesc => "Choose the language used for the xtty interface.",

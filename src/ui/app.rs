@@ -572,9 +572,14 @@ impl Tab {
             .and_then(|slot| slot.terminal().cloned())
     }
 
-    /// The leaf a tab names itself after — its title and, with it, the home
-    /// that title's path is measured against.
-    fn title_leaf(&self, window: Option<&Window>, cx: &App) -> Option<Entity<TerminalView>> {
+    /// The leaf a tab names itself after — title, cwd, git, agent, SSH dot.
+    /// Live GPUI focus when this window can see it; otherwise the last focused
+    /// pane, then the first. One pane is that leaf.
+    pub(crate) fn title_leaf(
+        &self,
+        window: Option<&Window>,
+        cx: &App,
+    ) -> Option<Entity<TerminalView>> {
         let leaf = match window {
             Some(window) => self
                 .pane
@@ -672,77 +677,55 @@ impl Tab {
         window: Option<&Window>,
         cx: &App,
     ) -> Option<crate::terminal::git_status::GitStatus> {
-        let leaf = match window {
-            Some(window) => self.pane.focused_or_first(window, cx),
-            None => self.pane.first_leaf().and_then(|s| s.terminal().cloned()),
-        }?;
-        leaf.read(cx).git_status(cx)
+        self.title_leaf(window, cx)?.read(cx).git_status(cx)
     }
 
-    pub(crate) fn agent(&self, cx: &App) -> Option<crate::core::cli_agent::CLIAgent> {
-        self.pane
-            .terminals()
-            .into_iter()
-            .find_map(|l| l.read(cx).agent())
+    pub(crate) fn agent(
+        &self,
+        window: Option<&Window>,
+        cx: &App,
+    ) -> Option<crate::core::cli_agent::CLIAgent> {
+        self.title_leaf(window, cx)?.read(cx).agent()
     }
 
-    /// The tab's most urgent agent leaf, named and reported by that one leaf.
-    ///
-    /// `agent` and `agent_status` answer independently — the *first* leaf
-    /// carrying an agent, and the highest urgency found *anywhere* in the tab
-    /// — so reading them as a pair can put one pane's name beside another
-    /// pane's state, a row no leaf ever had. Anywhere both halves are shown
-    /// at once reads them from here instead (#543).
+    /// Agent name and status from the same leaf the tab names itself after.
     pub(crate) fn agent_row(
         &self,
+        window: Option<&Window>,
         cx: &App,
     ) -> Option<(
         crate::core::cli_agent::CLIAgent,
         crate::core::cli_agent::AgentStatus,
     )> {
         use crate::core::cli_agent::AgentStatus;
-        let urgency = |s: AgentStatus| match s {
-            AgentStatus::Waiting => 3,
-            AgentStatus::Working => 2,
-            AgentStatus::Done => 1,
-            AgentStatus::Idle => 0,
-        };
-        self.pane
-            .terminals()
-            .into_iter()
-            .filter_map(|l| {
-                let view = l.read(cx);
-                let agent = view.agent()?;
-                // A pane whose agent is running but has never reported a
-                // session reads as idle, the same reading the badge has always
-                // given it.
-                let status = view
-                    .agent_session()
-                    .map(|s| s.status)
-                    .unwrap_or(AgentStatus::Idle);
-                Some((agent, status))
-            })
-            .max_by_key(|(_, status)| urgency(*status))
+        let view = self.title_leaf(window, cx)?.read(cx);
+        let agent = view.agent()?;
+        let status = view
+            .agent_session()
+            .map(|s| s.status)
+            .unwrap_or(AgentStatus::Idle);
+        Some((agent, status))
     }
 
-    pub(crate) fn agent_status(&self, cx: &App) -> Option<crate::core::cli_agent::AgentStatus> {
-        self.agent_row(cx).map(|(_, status)| status)
+    pub(crate) fn agent_status(
+        &self,
+        window: Option<&Window>,
+        cx: &App,
+    ) -> Option<crate::core::cli_agent::AgentStatus> {
+        self.agent_row(window, cx).map(|(_, status)| status)
     }
 
-    pub(crate) fn agent_unread_count(&self, cx: &App) -> usize {
+    pub(crate) fn agent_unread_count(&self, window: Option<&Window>, cx: &App) -> usize {
         use crate::core::cli_agent::AgentStatus;
-        if self.agent_status(cx) != Some(AgentStatus::Done) {
+        if self.agent_status(window, cx) != Some(AgentStatus::Done) {
             return 0;
         }
-        self.pane
-            .terminals()
-            .into_iter()
-            .filter(|l| {
-                let v = l.read(cx);
-                v.agent_session().map(|s| s.status) == Some(AgentStatus::Done)
-                    && v.agent_result_unread()
-            })
-            .count()
+        let Some(leaf) = self.title_leaf(window, cx) else {
+            return 0;
+        };
+        let v = leaf.read(cx);
+        (v.agent_session().map(|s| s.status) == Some(AgentStatus::Done)
+            && v.agent_result_unread()) as usize
     }
 }
 
@@ -6198,8 +6181,7 @@ impl Tty7App {
     }
 
     pub(crate) fn tab_ssh_dot(&self, tab: &Tab, cx: &App) -> Option<u32> {
-        let leaf = tab.pane.first_leaf()?;
-        let v = leaf.terminal()?.read(cx);
+        let v = tab.title_leaf(None, cx)?.read(cx);
         v.remote_context().is_some().then_some(0x9CA3AF)
     }
 

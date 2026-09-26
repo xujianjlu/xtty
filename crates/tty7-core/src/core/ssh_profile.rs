@@ -334,6 +334,15 @@ pub fn openssh_argv(profile: &SshProfile, profiles: &[SshProfile]) -> Vec<String
     args
 }
 
+/// Far-side bootstrap: detect `$SHELL`, install SI, `exec` that login shell.
+/// Host picker / "+" append this as the remote command with `-t`.
+///
+/// Do not resolve the destination with `ssh -G` first — that can block on
+/// ProxyCommand / jumper `Match exec` and freeze the tab.
+pub fn ssh_remote_si_command() -> String {
+    crate::daemon::hop_bootstrap()
+}
+
 /// POSIX-quoted `ssh …` line for typing into a local shell (so the SI `ssh()`
 /// wrapper can wrap the hop).
 pub fn openssh_command_line(profile: &SshProfile, profiles: &[SshProfile]) -> String {

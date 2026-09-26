@@ -120,6 +120,44 @@ fn short_connection_host(host: &str) -> &str {
     host.split('.').next().unwrap_or(host)
 }
 
+/// `user@host` for this machine, from the environment / OS hostname.
+///
+/// Used to seed a local tab title before shell integration's first OSC 0,
+/// and as the pane's home identity after a hop ends.
+pub fn local_connection_identity() -> Option<String> {
+    let user = std::env::var("USER")
+        .ok()
+        .or_else(|| std::env::var("LOGNAME").ok())
+        .or_else(|| std::env::var("USERNAME").ok())
+        .filter(|s| !s.trim().is_empty())?;
+    let host = std::env::var("HOST")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| std::env::var("HOSTNAME").ok().filter(|s| !s.trim().is_empty()))
+        .or_else(|| std::env::var("COMPUTERNAME").ok().filter(|s| !s.trim().is_empty()))
+        .or_else(system_hostname)
+        .filter(|s| !s.trim().is_empty())?;
+    connection_identity(&user, &host)
+}
+
+fn system_hostname() -> Option<String> {
+    #[cfg(unix)]
+    {
+        let mut buf = [0u8; 256];
+        let rc = unsafe { libc::gethostname(buf.as_mut_ptr() as *mut libc::c_char, buf.len()) };
+        if rc != 0 {
+            return None;
+        }
+        let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+        let name = String::from_utf8_lossy(&buf[..end]).trim().to_string();
+        if name.is_empty() { None } else { Some(name) }
+    }
+    #[cfg(not(unix))]
+    {
+        None
+    }
+}
+
 /// Identity for an OpenSSH destination (`user@host`, bare `host`, optional
 /// `[ipv6]`). Bare hostnames need `fallback_user` (usually the previous hop's
 /// user, or the local account).
@@ -216,6 +254,95 @@ pub fn identity_from_ssh_command(cmd: &str, fallback_user: Option<&str>) -> Opti
     identity_from_ssh_target(destination, fallback)
 }
 
+/// Interactive `su` / `sudo -i` / `sudo -u user -i`. Keeps the current host
+/// and replaces the user. One-shot `sudo ls` / `su -c cmd` are ignored.
+pub fn identity_from_user_switch_command(cmd: &str, current: Option<&str>) -> Option<String> {
+    let host = current
+        .and_then(|id| id.split_once('@').map(|(_, h)| h))
+        .map(str::trim)
+        .filter(|h| !h.is_empty())?;
+    let tokens: Vec<&str> = cmd.split_whitespace().collect();
+    let prog = tokens
+        .first()
+        .and_then(|p| std::path::Path::new(p).file_name().and_then(|n| n.to_str()))?;
+    let user = match prog {
+        "su" => su_target_user(&tokens[1..])?,
+        "sudo" => sudo_target_user(&tokens[1..])?,
+        _ => return None,
+    };
+    connection_identity(user, host)
+}
+
+fn su_target_user<'a>(args: &'a [&'a str]) -> Option<&'a str> {
+    let mut i = 0usize;
+    let mut user = "root";
+    while i < args.len() {
+        let tok = args[i];
+        if tok == "--" {
+            i += 1;
+            if i < args.len() && !args[i].starts_with('-') {
+                user = args[i];
+            }
+            break;
+        }
+        if tok == "-" || tok == "-l" || tok == "--login" {
+            i += 1;
+            continue;
+        }
+        if tok == "-c" || tok == "--command" || tok == "-s" || tok == "--shell" {
+            return None;
+        }
+        if tok.starts_with('-') {
+            i += 1;
+            continue;
+        }
+        user = tok;
+        break;
+    }
+    Some(user)
+}
+
+fn sudo_target_user<'a>(args: &'a [&'a str]) -> Option<&'a str> {
+    let mut i = 0usize;
+    let mut user: Option<&str> = None;
+    let mut login_shell = false;
+    while i < args.len() {
+        let tok = args[i];
+        if tok == "--" {
+            break;
+        }
+        if tok == "-u" || tok == "--user" {
+            i += 1;
+            user = args.get(i).copied();
+            i += 1;
+            continue;
+        }
+        if let Some(name) = tok.strip_prefix("--user=") {
+            user = Some(name);
+            i += 1;
+            continue;
+        }
+        if tok == "-i" || tok == "--login" || tok == "-s" || tok == "--shell" {
+            login_shell = true;
+            i += 1;
+            continue;
+        }
+        if tok == "su" {
+            return su_target_user(&args[i + 1..]);
+        }
+        if tok.starts_with('-') {
+            i += 1;
+            continue;
+        }
+        return None;
+    }
+    if login_shell {
+        Some(user.unwrap_or("root"))
+    } else {
+        None
+    }
+}
+
 fn ssh_option_takes_value(flag: char) -> bool {
     matches!(
         flag,
@@ -274,6 +401,30 @@ pub fn strip_host_prefix(raw: &str) -> &str {
         true => raw,
         false => tail.trim_start(),
     }
+}
+
+/// Directory carried in a conventional `user@host:path` title (Debian/RHEL
+/// `\u@\h:\w`, our OSC 0 plus a path). `None` when the title is identity-only
+/// or a port. Used when OSC 7 never arrived — a jumper that dropped SI.
+pub fn cwd_from_title(raw: &str) -> Option<String> {
+    let raw = strip_status_mark(raw.trim());
+    let path = strip_host_prefix(raw);
+    if path.is_empty() || path == raw {
+        return None;
+    }
+    if path.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let path = path.trim();
+    if path.starts_with('/')
+        || path.starts_with('~')
+        || (path.len() >= 2
+            && path.as_bytes()[0].is_ascii_alphabetic()
+            && path.as_bytes()[1] == b':')
+    {
+        return Some(path.to_string());
+    }
+    None
 }
 
 /// The marks a coding agent writes in front of the title it sets while it
@@ -429,6 +580,22 @@ mod tests {
         );
         assert_eq!(identity_from_title("fix user@example.com: today"), None);
         assert_eq!(identity_from_title("vim — main.rs"), None);
+    }
+
+    #[test]
+    fn cwd_from_title_reads_the_path_after_user_host() {
+        assert_eq!(
+            cwd_from_title("search@prod-01:~/retr"),
+            Some("~/retr".into())
+        );
+        assert_eq!(
+            cwd_from_title("ann@BOX:/data/app"),
+            Some("/data/app".into())
+        );
+        assert_eq!(cwd_from_title("ann@BOX:C:/src"), Some("C:/src".into()));
+        assert_eq!(cwd_from_title("deploy@10.0.0.5:2222"), None);
+        assert_eq!(cwd_from_title("user@host"), None);
+        assert_eq!(cwd_from_title("user@host:"), None);
     }
 
     #[test]
@@ -689,5 +856,37 @@ mod tests {
         );
         assert_eq!(strip_host_prefix("C:/src"), "C:/src");
         assert_eq!(strip_host_prefix("vim — main.rs"), "vim — main.rs");
+    }
+
+    #[test]
+    fn su_and_sudo_login_retarget_the_user_on_the_same_host() {
+        assert_eq!(
+            identity_from_user_switch_command("su alice", Some("bob@cd02")),
+            Some("alice@cd02".into())
+        );
+        assert_eq!(
+            identity_from_user_switch_command("su -", Some("bob@cd02")),
+            Some("root@cd02".into())
+        );
+        assert_eq!(
+            identity_from_user_switch_command("sudo -i", Some("bob@cd02")),
+            Some("root@cd02".into())
+        );
+        assert_eq!(
+            identity_from_user_switch_command("sudo -u alice -i", Some("bob@cd02")),
+            Some("alice@cd02".into())
+        );
+        assert_eq!(
+            identity_from_user_switch_command("sudo su - deploy", Some("bob@cd02")),
+            Some("deploy@cd02".into())
+        );
+        assert_eq!(
+            identity_from_user_switch_command("sudo ls /tmp", Some("bob@cd02")),
+            None
+        );
+        assert_eq!(
+            identity_from_user_switch_command("su -c id", Some("bob@cd02")),
+            None
+        );
     }
 }

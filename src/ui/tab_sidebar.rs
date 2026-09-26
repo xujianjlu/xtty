@@ -22,7 +22,7 @@ use crate::ui::reorder::{self, Reorder, Surface};
 use crate::ui::right_panel::RESIZE_HANDLE_WIDTH;
 use crate::ui::tab_strip::{
     DragTab, REORDER_SLIDE_MS, abbreviate_home, elide_keep_edges, elide_label,
-    elide_path_keep_tail, measure_text, strip_host_prefix,
+    measure_text, short_title,
 };
 
 pub(crate) const MIN_SIDEBAR_WIDTH: f32 = 180.;
@@ -30,6 +30,28 @@ pub(crate) const MIN_SIDEBAR_WIDTH: f32 = 180.;
 const GRAB_HANDLE_W: f32 = 48.;
 
 const ROW_GAP: f32 = 2.;
+
+/// Right-hand tab label: current folder name only. Home is `~`.
+fn sidebar_folder_name(cwd: &str, home: Option<&Path>, identity: Option<&str>) -> SharedString {
+    let leaf = short_title(cwd, home);
+    if leaf == "~" {
+        return SharedString::from(leaf);
+    }
+    if let Some(id) = identity.and_then(tty7_core::core::tab_view::identity_from_title)
+        && let Some(user) = id.split_once('@').map(|(u, _)| u)
+        && looks_like_user_home(cwd, user)
+    {
+        return SharedString::from("~");
+    }
+    SharedString::from(leaf)
+}
+
+fn looks_like_user_home(cwd: &str, user: &str) -> bool {
+    let cwd = cwd.trim_end_matches(['/', '\\']);
+    cwd == format!("/home/{user}")
+        || cwd == format!("/Users/{user}")
+        || cwd.eq_ignore_ascii_case(&format!(r"C:\Users\{user}"))
+}
 
 /// The row chrome the text budget has to be measured around. These are the
 /// numbers the layout below is built from, not a second guess at it — a row
@@ -466,9 +488,9 @@ impl Tty7App {
                 let tab = &self.tabs[i];
                 let is_active = i == active;
                 let ssh_dot = self.tab_ssh_dot(tab, cx);
-                let agent = tab.agent(cx);
-                let agent_status = tab.agent_status(cx);
-                let agent_unread = tab.agent_unread_count(cx);
+                let agent = tab.agent(Some(window), cx);
+                let agent_status = tab.agent_status(Some(window), cx);
+                let agent_unread = tab.agent_unread_count(Some(window), cx);
                 let git_cwd = git_click(tab, window, cx);
                 let badge_extra = if show_badges && badge_pos < 9 {
                     row_metrics::BADGE + row_metrics::GAP
@@ -507,69 +529,19 @@ impl Tty7App {
                     let full = SharedString::from(name.trim().to_string());
                     (full.clone(), Some(full))
                 } else {
-                    // The ladder the strip and the switcher climb, read
-                    // here for the name and not for the shortening: this
-                    // column measures in pixels and lets a card expand the
-                    // row back to the whole string, so it wants what
-                    // `label_of` would have cut down rather than the cut.
-                    use crate::ui::machine_mirror::TabLabel;
+                    // Same title as the top tab bar and the switcher, including
+                    // Settings → Appearance → Tabs (user@host + folder name).
                     let (view, home) = tab.label_view(Some(window), cx);
-                    // Strip chip policy: path-shaped names are basename-only.
-                    // The sidebar still keeps the home-abbreviated absolute
-                    // path as `full_title` so the expand card / hover can
-                    // spell the whole location — only the row text is cut.
-                    let (raw, full_path) = match view.label() {
-                        TabLabel::Osc(title) => {
-                            match tty7_core::core::tab_view::identity_from_title(title) {
-                                Some(identity) => {
-                                    let path = strip_host_prefix(title.trim());
-                                    let path = path.trim();
-                                    let cwd_path = if !path.is_empty() && path != title.trim() {
-                                        Some(path.to_string())
-                                    } else {
-                                        view.cwd.clone().filter(|c| !c.trim().is_empty())
-                                    };
-                                    match cwd_path {
-                                        Some(p) => {
-                                            let full =
-                                                abbreviate_home(&p, home.as_deref()).into_owned();
-                                            let leaf = crate::ui::tab_strip::short_title(
-                                                &p,
-                                                home.as_deref(),
-                                            );
-                                            (leaf, Some(full))
-                                        }
-                                        None => (identity, None),
-                                    }
-                                }
-                                None => {
-                                    let full = abbreviate_home(
-                                        strip_host_prefix(title.trim()),
-                                        home.as_deref(),
-                                    )
-                                    .into_owned();
-                                    let leaf =
-                                        crate::ui::tab_strip::short_title(title, home.as_deref());
-                                    (leaf, Some(full))
-                                }
-                            }
-                        }
-                        TabLabel::Cwd(title) => {
-                            let full =
-                                abbreviate_home(strip_host_prefix(title.trim()), home.as_deref())
-                                    .into_owned();
-                            let leaf = crate::ui::tab_strip::short_title(title, home.as_deref());
-                            (leaf, Some(full))
-                        }
-                        TabLabel::Agent(agent) => (agent.display_name().to_string(), None),
-                        // A tab holding a name got one above.
-                        TabLabel::Named(name) => (name.to_string(), None),
-                        TabLabel::Process(title) => (title.to_string(), None),
-                        TabLabel::Unknown => (String::new(), None),
-                    };
+                    let options = crate::ui::tab_strip::TabChipOptions::from_config(
+                        cx.global::<Config>(),
+                    );
+                    let raw = crate::ui::tab_strip::label_of_with(
+                        &view,
+                        i,
+                        home.as_deref(),
+                        options,
+                    );
                     if raw.trim().is_empty() {
-                        // Nothing to expand: the row is naming an unnamed
-                        // shell, not hiding a title behind an ellipsis.
                         let placeholder = SharedString::from(t_fmt(
                             L10nKey::TabUnnamedShell,
                             &[("n", &((i + 1).to_string()))],
@@ -577,10 +549,13 @@ impl Tty7App {
                         (placeholder, None)
                     } else {
                         let shown = SharedString::from(raw);
-                        let full = full_path
-                            .filter(|p| p.trim() != shown.as_ref())
-                            .map(SharedString::from)
-                            .or_else(|| Some(shown.clone()));
+                        let full = crate::ui::tab_strip::tooltip_of_with(
+                            &view,
+                            i,
+                            home.as_deref(),
+                            options,
+                        )
+                        .or_else(|| Some(shown.clone()));
                         (shown, full)
                     }
                 };
@@ -672,30 +647,26 @@ impl Tty7App {
                     }
                     line
                 });
-                // Outside a repo there is no branch line, and the working
-                // directory rides on the title's own line rather than growing
-                // a second one under it: a group of plain shells was a column
-                // of two-line rows describing paths that mostly agree, which
-                // is twice the height for a line of small grey text nobody
-                // was reading. A row keeps its second line only for a branch.
-                let cwd_full: Option<SharedString> = match git_line.is_none()
-                    && shared_git.is_none()
+                // Folder name on the title row (even inside a git repo). Git
+                // keeps the second line. Prefer the live OSC 7 cwd so a hop
+                // probe snapshot cannot freeze the right-hand label after `cd`.
+                let cwd_full: Option<SharedString> = match cx.global::<Config>().tab_show_cwd_basename
                 {
                     false => None,
                     true => tab
-                        .pane
-                        .focused_or_first(window, cx)
+                        .title_leaf(Some(window), cx)
                         .and_then(|leaf| {
                             let leaf = leaf.read(cx);
-                            Some((leaf.effective_cwd()?, leaf.display_home(cx)))
+                            let cwd = leaf.cwd().or_else(|| leaf.effective_cwd())?;
+                            let home = leaf.display_home(cx);
+                            let identity = leaf.stated_title();
+                            Some(sidebar_folder_name(
+                                &cwd.display().to_string(),
+                                home.as_deref(),
+                                identity,
+                            ))
                         })
-                        .map(|(cwd, home)| {
-                            let text = cwd.display().to_string();
-                            SharedString::from(abbreviate_home(&text, home.as_deref()).into_owned())
-                        })
-                        // The title already carries the whole path; a second
-                        // copy adds noise, not information.
-                        .filter(|full| full.as_ref() != title_text.as_ref()),
+                        .filter(|leaf| !leaf.is_empty() && leaf.as_str() != title_text.as_ref()),
                 };
                 // The path takes what it needs up to half the line and the
                 // title keeps the rest — the same split a group header makes
@@ -718,9 +689,6 @@ impl Tty7App {
                     title_avail,
                 );
                 if let Some(full) = cwd_full {
-                    // Measured against what the title actually took, not what
-                    // it was allowed to: a short title hands the slack back
-                    // instead of leaving the path elided around a gap.
                     let avail = (label_avail
                         - measure_text(
                             &window.text_system(),
@@ -731,7 +699,7 @@ impl Tty7App {
                         - row_metrics::META_GAP)
                         .max(0.);
                     if avail >= ROW_CWD_FLOOR {
-                        let shown = elide_path_keep_tail(
+                        let shown = elide_label(
                             &window.text_system(),
                             &font,
                             meta_size,

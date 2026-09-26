@@ -236,7 +236,7 @@ pub struct Config {
     pub new_tab_position: NewTabPosition,
     #[serde(default, deserialize_with = "de_lenient")]
     pub tab_bar_position: TabBarPosition,
-    /// Settings → Appearance → Tabs: put `user@host` on the chip when known.
+    /// Settings → Appearance → Tabs: put `user@host` on the tab title when known.
     /// Off by default so a known cwd still reads as its basename (opt-batch);
     /// turn on to restore `user@host` or compose `user@host:basename`.
     #[serde(default)]
@@ -244,11 +244,11 @@ pub struct Config {
     /// Settings → Appearance → Tabs: show the working-directory leaf name.
     #[serde(default = "default_true")]
     pub tab_show_cwd_basename: bool,
-    /// Settings → Appearance → Tabs: git branch (+/−) on strip chips and the
+    /// Settings → Appearance → Tabs: git branch (+/−) on the tab strip and the
     /// left tab sidebar.
     #[serde(default = "default_true")]
     pub tab_show_git_branch: bool,
-    /// Settings → Appearance → Tabs: agent avatar on tab chips.
+    /// Settings → Appearance → Tabs: agent avatar on tab titles.
     #[serde(default = "default_true")]
     pub tab_show_agent_icon: bool,
     #[serde(default = "default_sidebar_width")]

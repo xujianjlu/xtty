@@ -12,6 +12,7 @@ pub mod pidfile;
 pub mod procinfo;
 pub mod protocol;
 pub(crate) mod remote;
+pub use remote::{ssh_argv_through_dest, ssh_remote_command};
 pub mod remote_link;
 pub mod router;
 pub mod scrollback;
@@ -23,3 +24,4 @@ pub mod transport;
 pub(crate) const DETECTED_SHELL_ENV: &str = "TTY7_DETECTED_SHELL";
 
 pub(crate) mod shell_integration;
+pub use shell_integration::remote::hop_bootstrap;

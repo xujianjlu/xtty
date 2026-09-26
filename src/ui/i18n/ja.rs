@@ -133,11 +133,11 @@ pub fn translate_ja(key: L10nKey) -> Option<&'static str> {
         L10nKey::SettingsTabStyle => "タブ",
         L10nKey::SettingsTabShowUserHost => "user@host を表示",
         L10nKey::SettingsTabShowUserHostDesc => {
-            "タブチップに SSH の身元を出します。フォルダ名もオンなら user@host:folder になります"
+            "タブ左側に user@host を出します。Agent 実行中は左側が Agent 名になります"
         }
-        L10nKey::SettingsTabShowCwdBasename => "フォルダ basename を表示",
+        L10nKey::SettingsTabShowCwdBasename => "フォルダ名を表示",
         L10nKey::SettingsTabShowCwdBasenameDesc => {
-            "チップに作業ディレクトリの末尾名を出します。フルパスはホバーに残します"
+            "タブ右側に現在のフォルダ名だけを出します（フルパスは出しません）"
         }
         L10nKey::SettingsTabShowGitBranch => "Git ブランチを表示",
         L10nKey::SettingsTabShowGitBranchDesc => {

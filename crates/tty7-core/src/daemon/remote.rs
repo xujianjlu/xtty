@@ -81,18 +81,61 @@ pub(crate) fn parse_ssh_invocation(argv: &[String]) -> Option<SshInvocation> {
     }
 
     let target = target?;
-    if i < argv.len() {
+    let has_remote_cmd = i < argv.len();
+    // `ssh host cmd` is a one-shot. `ssh -t host <SI bootstrap>` is an
+    // interactive session (Kitty ssh kitten / iTerm2 Auto SI). Rejecting it
+    // left the pane "local", so the Mac cwd of the `ssh` process (usually
+    // $HOME) overwrote every far-side OSC 7.
+    if has_remote_cmd && !argv_requests_tty(argv) {
         return None;
     }
 
     Some(SshInvocation {
         context: RemoteContext {
             kind: RemoteKind::Ssh,
-            argv: argv.to_vec(),
-            target: target.clone(),
+            // Stop before the remote command. The SI bootstrap is tens of KB
+            // and KERN_PROCARGS2 may truncate it, which would look like a new
+            // hop every poll and wipe cwd.
+            argv: argv[..i].to_vec(),
+            target,
         },
         forward_args,
     })
+}
+
+/// `ssh` argv through dest, remote command stripped. Clone compares hops by this.
+pub fn ssh_argv_through_dest(argv: &[String]) -> Option<Vec<String>> {
+    Some(parse_ssh_invocation(argv)?.context.argv)
+}
+
+/// Remote command after dest, if any. The SI bootstrap is one argument.
+pub fn ssh_remote_command(argv: &[String]) -> Option<String> {
+    let through = ssh_argv_through_dest(argv)?;
+    if argv.len() <= through.len() {
+        None
+    } else {
+        Some(argv[through.len()..].join(" "))
+    }
+}
+
+fn argv_requests_tty(argv: &[String]) -> bool {
+    for arg in argv {
+        if arg == "--" {
+            break;
+        }
+        if arg == "-t" || arg == "-tt" {
+            return true;
+        }
+        if let Some(rest) = arg.strip_prefix('-') {
+            if rest.starts_with('-') {
+                continue;
+            }
+            if rest.contains('t') && !rest.contains('T') {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 fn option_takes_value(flag: char) -> bool {
@@ -255,6 +298,47 @@ mod tests {
         assert!(parse_ssh_invocation(&argv(&["ssh", "-N", "dev"])).is_none());
         assert!(parse_ssh_invocation(&argv(&["ssh", "-W", "host:22", "dev"])).is_none());
         assert!(parse_ssh_invocation(&argv(&["scp", "dev:/x", "."])).is_none());
+        let injected = parse_ssh_invocation(&argv(&[
+            "ssh",
+            "-t",
+            "cd02",
+            "unset TTY7_SHELL_INTEGRATION; exec zsh -il",
+        ]))
+        .expect("interactive -t + remote command is a hop");
+        assert_eq!(injected.context.target, "cd02");
+        assert_eq!(injected.context.argv, argv(&["ssh", "-t", "cd02"]));
+    }
+
+    #[test]
+    fn interactive_tty_with_remote_command_is_a_hop() {
+        let inv = parse_ssh_invocation(&argv(&[
+            "ssh",
+            "-t",
+            "cd02",
+            "unset TTY7_SHELL_INTEGRATION; exec zsh -il",
+        ]))
+        .unwrap();
+        assert_eq!(inv.context.target, "cd02");
+        assert_eq!(inv.context.argv, argv(&["ssh", "-t", "cd02"]));
+    }
+
+    #[test]
+    fn clustered_t_with_bootstrap_is_a_hop() {
+        let inv = parse_ssh_invocation(&argv(&["ssh", "-vt", "box", "boot"])).unwrap();
+        assert_eq!(inv.context.target, "box");
+    }
+
+    #[test]
+    fn argv_through_dest_drops_the_remote_command() {
+        let full = argv(&["ssh", "-t", "cd02", "unset TTY7_SHELL_INTEGRATION; exec zsh"]);
+        assert_eq!(
+            ssh_argv_through_dest(&full),
+            Some(argv(&["ssh", "-t", "cd02"]))
+        );
+        assert_eq!(
+            ssh_remote_command(&full).as_deref(),
+            Some("unset TTY7_SHELL_INTEGRATION; exec zsh")
+        );
     }
 }
 

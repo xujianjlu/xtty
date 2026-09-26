@@ -154,7 +154,11 @@ fn build_spawn_config(
     {
         anyhow::bail!(problem);
     }
-    let remote = None;
+    let remote = configured.as_ref().and_then(|c| {
+        let mut argv = vec![c.program.clone()];
+        argv.extend(c.args.iter().cloned());
+        crate::daemon::remote::parse_ssh_invocation(&argv).map(|inv| inv.context)
+    });
     // Taken before the chosen shell is consumed by the command builder: what
     // goes in the tree is what was resolved here, not the possibly-empty
     // override the caller sent.
@@ -164,9 +168,16 @@ fn build_spawn_config(
         args_are_tty7_defaults: c.args_are_tty7_defaults,
     });
     let (cmd, integration_dir) = build_shell_command(configured, &initial_cwd, pane, workspace)?;
+    // The ssh process still starts in this machine's directory. The pane cwd
+    // must not — that is the Mac $HOME and it is what a jumper tab used to
+    // freeze on when OSC 7 never arrived.
+    let pane_cwd = match remote {
+        Some(_) => None,
+        None => initial_cwd,
+    };
     Ok(SpawnConfig {
         cmd,
-        initial_cwd,
+        initial_cwd: pane_cwd,
         integration_dir,
         remote,
         shell,
@@ -539,7 +550,6 @@ fn apply_common_command_setup(
 const RING_CAP: usize = 8 * 1024 * 1024;
 
 const MAX_RING_SEGMENTS: usize = 64;
-const REMOTE_CONTEXT_POLL_INTERVAL: Duration = Duration::from_millis(500);
 
 pub struct OutputGate {
     queued: AtomicI64,
@@ -632,6 +642,10 @@ struct PaneState {
     observers: Vec<Observer>,
     observer_seq: u64,
     cwd: Option<PathBuf>,
+    /// Set when cwd last came from OSC 7 / 1337 (iTerm2 / Ghostty / Kitty).
+    /// The process-table probe is the local `ssh` binary's Mac directory and
+    /// must not overwrite that.
+    cwd_from_osc: bool,
     /// The last title the pane reported over OSC 0/2, for the machine tree to
     /// record. See [`crate::core::machine::PaneRecord::osc_title`].
     osc_title: Option<String>,
@@ -1390,10 +1404,12 @@ impl DaemonPane {
                 observers: Vec::new(),
                 observer_seq: 0,
                 cwd: spawn.initial_cwd,
-                osc_title: restored_title.clone(),
+                cwd_from_osc: false,
+                osc_title: restored_title.clone().or_else(crate::core::tab_view::local_connection_identity),
                 home_identity: restored_title
                     .as_deref()
-                    .and_then(crate::core::tab_view::identity_from_title),
+                    .and_then(crate::core::tab_view::identity_from_title)
+                    .or_else(crate::core::tab_view::local_connection_identity),
                 shell: ShellState::default(),
                 remote_prompt_seen: false,
                 modes: TerminalModes::default(),
@@ -1601,6 +1617,7 @@ impl DaemonPane {
                 observers: Vec::new(),
                 observer_seq: 0,
                 cwd: carried.cwd,
+                cwd_from_osc: false,
                 osc_title: carried.osc_title.clone(),
                 home_identity: carried
                     .osc_title
@@ -1679,7 +1696,6 @@ impl DaemonPane {
                 let mut tr_reads: u32 = 0;
                 let mut tr_read_t = std::time::Duration::ZERO;
                 let mut tr_disp_t = std::time::Duration::ZERO;
-                let mut next_remote_check = std::time::Instant::now();
 
                 loop {
                     if trace && tr_last.elapsed() >= std::time::Duration::from_secs(1) {
@@ -1802,31 +1818,26 @@ impl DaemonPane {
 
                             // `any` first: `foreground_running` is a syscall,
                             // and most reads carry no prompt mark at all.
-                            if signals.shell.iter().any(|s| s.at_prompt) && foreground_running() {
+                            // Direct / typed / jumper SSH: dest owns the pane.
+                            // Do not strip dest PS1 — same as a `+` ssh pane
+                            // whose child *is* ssh (fg == shell, no suppress).
+                            let remote_ssh = state
+                                .lock()
+                                .unwrap()
+                                .remote
+                                .as_ref()
+                                .is_some_and(|r| r.kind == RemoteKind::Ssh);
+                            if signals.shell.iter().any(|s| s.at_prompt)
+                                && foreground_running()
+                                && !remote_ssh
+                            {
                                 suppress_relayed_prompt_marks(&mut signals.shell);
                             }
 
-                            // A prompt mark that survived the suppression above
-                            // is the shell saying the command it ran is over, so
-                            // the foreground has just gone back to being the
-                            // shell itself. Probe right then rather than waiting
-                            // out the interval: the probe is what clears the
-                            // remote context an `ssh` left behind, and the
-                            // interval alone can miss it forever. Polling only
-                            // runs on output, and the prompt the shell just drew
-                            // is the last output a pane produces until the user
-                            // types again — so a pane whose `ssh` exited inside
-                            // the interval kept reporting itself as remote, and
-                            // everything keyed off that (the history scope ↑
-                            // reads, most visibly) stayed on the far end until
-                            // some unrelated output arrived (#817).
-                            let back_at_prompt = signals.shell.iter().any(|s| s.at_prompt);
-                            let poll_now =
-                                back_at_prompt || std::time::Instant::now() >= next_remote_check;
-                            if poll_now {
-                                next_remote_check =
-                                    std::time::Instant::now() + REMOTE_CONTEXT_POLL_INTERVAL;
-                            }
+                            // Process table (hop / local cwd / local agent) only
+                            // on a surviving prompt mark — the PS1 refresh.
+                            // OSC 7 is the pane cwd; the probe must not race it.
+                            let poll_now = signals.shell.iter().any(|s| s.at_prompt);
                             let remote = if poll_now {
                                 let managed = {
                                     let st = state.lock().unwrap();
@@ -2590,6 +2601,7 @@ fn agent_facts_changed(
 
 fn apply_signals(st: &mut PaneState, signals: SniffSignals) {
     if let Some(cwd) = signals.cwd {
+        st.cwd_from_osc = true;
         if st.cwd.as_ref() != Some(&cwd) {
             notify(st, DaemonMsg::Cwd(cwd.clone()));
             st.cwd = Some(cwd);
@@ -2599,6 +2611,17 @@ fn apply_signals(st: &mut PaneState, signals: SniffSignals) {
         apply_osc7_host_identity(st, host);
     }
     if let Some(title) = signals.title {
+        if !st.cwd_from_osc
+            && let Some(path) = crate::core::tab_view::cwd_from_title(&title)
+        {
+            let identity = crate::core::tab_view::identity_from_title(&title)
+                .or_else(|| st.osc_title.clone());
+            let cwd = title_cwd_path(&path, identity.as_deref());
+            if st.cwd.as_ref() != Some(&cwd) {
+                notify(st, DaemonMsg::Cwd(cwd.clone()));
+                st.cwd = Some(cwd);
+            }
+        }
         // No `notify`: a window renders its own tabs from its own terminal,
         // which parsed the same sequence. This is only for the tree.
         if let Some(identity) = crate::core::tab_view::identity_from_title(&title) {
@@ -2620,6 +2643,7 @@ fn apply_signals(st: &mut PaneState, signals: SniffSignals) {
     for shell in signals.shell {
         if let Some(cmd) = shell.command.as_deref() {
             try_ssh_command_hop(st, cmd);
+            try_user_switch(st, cmd);
         }
         // Local panes learn the agent from the process table. A remote pane
         // (Native SSH or a shell-in-ssh hop) has no local child to inspect —
@@ -2662,6 +2686,10 @@ fn set_pane_identity(st: &mut PaneState, identity: String) {
 }
 
 fn try_ssh_command_hop(st: &mut PaneState, cmd: &str) {
+    let argv = crate::core::cli_agent::command_argv(cmd);
+    if let Some(inv) = crate::daemon::remote::parse_ssh_invocation(&argv) {
+        apply_remote_context(st, Some(inv.context));
+    }
     let fallback = st
         .osc_title
         .as_deref()
@@ -2671,6 +2699,30 @@ fn try_ssh_command_hop(st: &mut PaneState, cmd: &str) {
         return;
     };
     // Do not touch home_identity — this is an outbound hop.
+    st.osc_title = Some(identity);
+}
+
+fn title_cwd_path(path: &str, identity: Option<&str>) -> PathBuf {
+    let user = identity.and_then(|id| id.split_once('@').map(|(u, _)| u));
+    if path == "~" {
+        if let Some(user) = user {
+            return PathBuf::from(format!("/home/{user}"));
+        }
+    }
+    if let Some(rest) = path.strip_prefix("~/")
+        && let Some(user) = user
+    {
+        return PathBuf::from(format!("/home/{user}/{rest}"));
+    }
+    PathBuf::from(path)
+}
+
+fn try_user_switch(st: &mut PaneState, cmd: &str) {
+    let current = st.osc_title.as_deref().or(st.home_identity.as_deref());
+    let Some(identity) = crate::core::tab_view::identity_from_user_switch_command(cmd, current)
+    else {
+        return;
+    };
     st.osc_title = Some(identity);
 }
 
@@ -2748,7 +2800,9 @@ fn apply_probed_cwd(st: &mut PaneState, probed: Option<PathBuf>) {
     let Some(probed) = probed else {
         return;
     };
-    if st.remote.is_some() {
+    // iTerm2 / Ghostty / Kitty: OSC 7 is the pane cwd. The probe is this
+    // machine's foreground process (the local `ssh` binary), i.e. $HOME.
+    if st.cwd_from_osc || st.remote.is_some() {
         return;
     }
     if st.cwd.as_deref().is_some_and(|cur| same_dir(cur, &probed)) {
@@ -2801,11 +2855,20 @@ fn suppress_relayed_prompt_marks(shell: &mut Vec<ShellState>) {
     });
 }
 
+fn same_hop(a: Option<&RemoteContext>, b: Option<&RemoteContext>) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (Some(a), Some(b)) => a.kind == b.kind && a.target == b.target,
+        _ => false,
+    }
+}
+
 fn apply_remote_context(st: &mut PaneState, remote: Option<RemoteContext>) {
-    if st.remote == remote {
+    if same_hop(st.remote.as_ref(), remote.as_ref()) {
         return;
     }
     st.cwd = None;
+    st.cwd_from_osc = false;
     // A new far side has to prove its own shell integration. The mark that is
     // standing right now belongs to whatever the pane was before this hop —
     // the near shell's "I started `ssh`", or the previous host's prompt.
@@ -3062,7 +3125,7 @@ struct OscSniffer {
 impl OscSniffer {
     fn new() -> Self {
         Self {
-            tok: OscTokenizer::new(&[b"0", b"2", b"7", b"133", b"9", b"777"]),
+            tok: OscTokenizer::new(&[b"0", b"2", b"7", b"1337", b"133", b"9", b"777"]),
             shell: ShellState::default(),
         }
     }
@@ -3076,6 +3139,10 @@ impl OscSniffer {
                 if let Some(host) = host {
                     signals.cwd_host = Some(host);
                 }
+            } else if let Some(path) = parse_osc1337_cwd(payload) {
+                signals.cwd = Some(path);
+            } else if let Some(host) = parse_osc1337_remote_host(payload) {
+                signals.cwd_host = Some(host);
             } else if let Some(title) = parse_osc_title(payload) {
                 signals.title = Some(title);
             } else if let Some(rest) = payload.strip_prefix(b"133;") {
@@ -3147,11 +3214,14 @@ pub(crate) fn parse_osc7(payload: &[u8]) -> Option<PathBuf> {
     parse_osc7_parts(payload).map(|(_, path)| path)
 }
 
-/// OSC 7 `file://host/path` → optional hostname (for identity retargeting) and path.
+/// OSC 7 `file://host/path` or Kitty `kitty-shell-cwd://host/path`.
 fn parse_osc7_parts(payload: &[u8]) -> Option<(Option<String>, PathBuf)> {
     let rest = payload.strip_prefix(b"7;")?;
     let (host, path_bytes): (Option<String>, &[u8]) =
-        if let Some(after) = rest.strip_prefix(b"file://") {
+        if let Some(after) = rest
+            .strip_prefix(b"file://")
+            .or_else(|| rest.strip_prefix(b"kitty-shell-cwd://"))
+        {
             let idx = after.iter().position(|&c| c == b'/')?;
             let raw_host = String::from_utf8_lossy(&after[..idx]);
             let host = {
@@ -3174,6 +3244,24 @@ fn parse_osc7_parts(payload: &[u8]) -> Option<(Option<String>, PathBuf)> {
         return None;
     }
     Some((host, path_from_bytes(&decoded)))
+}
+
+/// iTerm2 `OSC 1337 ; CurrentDir=<path>`.
+fn parse_osc1337_cwd(payload: &[u8]) -> Option<PathBuf> {
+    let rest = payload.strip_prefix(b"1337;CurrentDir=")?;
+    let decoded = percent_decode(rest);
+    if decoded.is_empty() || decoded.first() != Some(&b'/') {
+        return None;
+    }
+    Some(path_from_bytes(&decoded))
+}
+
+/// iTerm2 `OSC 1337 ; RemoteHost=user@host` → hostname for identity retargeting.
+fn parse_osc1337_remote_host(payload: &[u8]) -> Option<String> {
+    let rest = payload.strip_prefix(b"1337;RemoteHost=")?;
+    let spec = String::from_utf8_lossy(rest);
+    let host = spec.rsplit('@').next().unwrap_or(spec.as_ref()).trim();
+    osc7_identity_host(host)
 }
 
 fn osc7_identity_host(host: &str) -> Option<String> {
@@ -3344,9 +3432,7 @@ mod tests {
 
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     #[test]
-    fn live_pane_reports_an_uninstrumented_shells_cwd() {
-        let target = std::path::Path::new("/usr");
-
+    fn uninstrumented_shell_does_not_track_cwd_without_a_prompt_mark() {
         let (tx, rx) = mpsc::channel();
         let pane = DaemonPane::spawn(
             1,
@@ -3366,26 +3452,23 @@ mod tests {
         .expect("spawn pane");
         pane.attach(tx);
 
-        let mut reported = None;
-        for _ in 0..200 {
+        let mut saw_usr = false;
+        for _ in 0..30 {
             pane.write_input(b"\n");
             while let Ok(msg) = rx.try_recv() {
-                if let DaemonMsg::Cwd(p) = msg {
-                    reported = Some(p);
+                if let DaemonMsg::Cwd(p) = msg
+                    && p == PathBuf::from("/usr")
+                {
+                    saw_usr = true;
                 }
-            }
-            if reported.as_deref() == Some(target) {
-                break;
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         pane.kill();
 
-        assert_eq!(
-            reported.as_deref(),
-            Some(target),
-            "a pane whose shell emits no OSC 7 must still report where it \
-             actually is — this is what a new tab inherits (issue #187)"
+        assert!(
+            !saw_usr,
+            "cwd comes from PS1 ($PWD / OSC 7), not a process-table poll"
         );
     }
 
@@ -4299,6 +4382,55 @@ mod tests {
     }
 
     #[test]
+    fn ssh_command_hop_marks_remote_so_the_next_c_can_name_an_agent() {
+        use crate::core::cli_agent::CLIAgent;
+
+        let mut st = test_state(true);
+        assert!(st.remote.is_none());
+        let mut sniffer = OscSniffer::new();
+        apply_signals(&mut st, sniffer.feed(b"\x1b]133;C;ssh%20gray\x07"));
+        assert!(st.remote.is_some(), "in-tab ssh must mark the pane remote");
+        assert_eq!(st.cwd, None);
+        apply_signals(&mut st, sniffer.feed(b"\x1b]133;C;claude\x07"));
+        assert_eq!(st.agent, Some(CLIAgent::Claude));
+    }
+
+    #[test]
+    fn title_path_fills_cwd_when_osc7_never_arrived() {
+        let mut st = test_state(true);
+        st.cwd = None;
+        apply_signals(
+            &mut st,
+            SniffSignals {
+                title: Some("alice@gray:~/src".into()),
+                ..SniffSignals::default()
+            },
+        );
+        assert_eq!(st.cwd.as_deref(), Some(Path::new("/home/alice/src")));
+    }
+
+    #[test]
+    fn osc7_cwd_is_not_replaced_by_a_title_path() {
+        let mut st = test_state(true);
+        apply_signals(
+            &mut st,
+            SniffSignals {
+                cwd: Some(PathBuf::from("/data/app")),
+                ..SniffSignals::default()
+            },
+        );
+        apply_signals(
+            &mut st,
+            SniffSignals {
+                title: Some("alice@gray:~/src".into()),
+                ..SniffSignals::default()
+            },
+        );
+        assert_eq!(st.cwd.as_deref(), Some(Path::new("/data/app")));
+        assert!(st.cwd_from_osc);
+    }
+
+    #[test]
     fn local_pane_does_not_use_shell_mark_agent_detection() {
         // Local panes keep the process-table probe as the source of truth.
         // OSC 133 alone must not flip the agent — that would race the probe.
@@ -4613,6 +4745,34 @@ mod tests {
         assert!(parse_osc7(b"7;file://host").is_none());
         assert!(parse_osc7(b"7;relative/path").is_none());
         assert!(parse_osc7(b"7;file://host").is_none());
+        assert_eq!(
+            parse_osc7(b"7;kitty-shell-cwd://cd02/home/me/src"),
+            Some(PathBuf::from("/home/me/src"))
+        );
+        assert_eq!(
+            parse_osc1337_cwd(b"1337;CurrentDir=/work/repo"),
+            Some(PathBuf::from("/work/repo"))
+        );
+        assert_eq!(
+            parse_osc1337_remote_host(b"1337;RemoteHost=alice@cd02.example"),
+            osc7_identity_host("cd02.example")
+        );
+        assert!(parse_osc1337_cwd(b"1337;CurrentDir=relative").is_none());
+    }
+
+    #[test]
+    fn osc_sniffer_reads_iterm_current_dir_and_kitty_cwd() {
+        let mut s = OscSniffer::new();
+        let kitty = s.feed(b"\x1b]7;kitty-shell-cwd://box/var/app\x07");
+        assert_eq!(kitty.cwd.as_deref(), Some(std::path::Path::new("/var/app")));
+        assert_eq!(kitty.cwd_host.as_deref(), Some("box"));
+
+        let mut s = OscSniffer::new();
+        let iterm = s.feed(b"\x1b]1337;CurrentDir=/opt/src\x07");
+        assert_eq!(
+            iterm.cwd.as_deref(),
+            Some(std::path::Path::new("/opt/src"))
+        );
     }
 
     #[test]
@@ -4680,6 +4840,7 @@ mod tests {
             observer_seq: 0,
             shell_spec: None,
             cwd: None,
+            cwd_from_osc: false,
             osc_title: None,
             home_identity: None,
             shell: ShellState::default(),
@@ -5031,6 +5192,43 @@ mod tests {
 
         assert_eq!(st.cwd, None);
         assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn probed_cwd_does_not_overwrite_osc7() {
+        let mut st = test_state(true);
+        st.cwd = Some(PathBuf::from("/data/app"));
+        st.cwd_from_osc = true;
+        let (tx, rx) = mpsc::channel();
+        st.subscriber = Some(tx);
+
+        apply_probed_cwd(&mut st, Some(PathBuf::from("/Users/alice")));
+
+        assert_eq!(st.cwd.as_deref(), Some(Path::new("/data/app")));
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn same_hop_ignores_argv_noise() {
+        let a = RemoteContext {
+            kind: RemoteKind::Ssh,
+            argv: vec!["ssh".into(), "-t".into(), "cd02".into()],
+            target: "cd02".into(),
+        };
+        let b = RemoteContext {
+            kind: RemoteKind::Ssh,
+            argv: vec!["ssh".into(), "-t".into(), "cd02".into(), "truncated".into()],
+            target: "cd02".into(),
+        };
+        assert!(same_hop(Some(&a), Some(&b)));
+        assert!(!same_hop(
+            Some(&a),
+            Some(&RemoteContext {
+                kind: RemoteKind::Ssh,
+                argv: a.argv.clone(),
+                target: "gray".into(),
+            })
+        ));
     }
 
     #[test]
@@ -5557,16 +5755,11 @@ mod tests {
         assert_eq!(snap.state.session_id.as_deref(), Some("sess-1"));
     }
 
-    /// The foreground probe only ever runs on output, and the prompt a shell
-    /// draws after a command is the last output a pane produces until the user
-    /// types again. So an `ssh` that exited inside the poll interval used to
-    /// leave the pane reporting itself as remote indefinitely: nothing came
-    /// along to probe on. A prompt mark now forces the probe (#817).
+    /// Each surviving prompt mark probes the foreground once (#817).
     #[test]
-    fn a_prompt_mark_reprobes_the_foreground_inside_the_poll_interval() {
+    fn a_prompt_mark_reprobes_the_foreground() {
         /// Hands the reader one chunk per `read`, so two prompt marks arrive as
-        /// two passes through the loop a few microseconds apart — well inside
-        /// `REMOTE_CONTEXT_POLL_INTERVAL`.
+        /// two passes through the loop.
         struct Chunks(std::collections::VecDeque<Vec<u8>>);
 
         impl Read for Chunks {
@@ -5602,8 +5795,8 @@ mod tests {
             Arc::new(OutputGate::new()),
             Box::new(Chunks(
                 [
-                    b"\x1b]133;C;ssh box\x07".to_vec(),
-                    b"\x1b]133;D;0\x07".to_vec(),
+                    b"\x1b]133;A\x07\x1b]133;B\x07".to_vec(),
+                    b"\x1b]133;A\x07\x1b]133;B\x07".to_vec(),
                 ]
                 .into_iter()
                 .collect(),
@@ -5972,7 +6165,47 @@ mod tests {
     }
 
     #[test]
-    fn reader_poll_applies_the_probed_cwd() {
+    fn reader_poll_applies_the_probed_cwd_on_prompt_mark() {
+        let state = Arc::new(Mutex::new(test_state(true)));
+        let (sub_tx, sub_rx) = mpsc::channel();
+        {
+            let mut st = state.lock().unwrap();
+            st.cwd = Some(PathBuf::from("/Users/alice"));
+            st.subscriber = Some(sub_tx);
+        }
+
+        let handle = DaemonPane::spawn_reader(
+            state.clone(),
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(OutputGate::new()),
+            Box::new(std::io::Cursor::new(
+                b"\x1b]133;A\x07\x1b]133;B\x07alice@host ~ % ".to_vec(),
+            )),
+            null_writer(),
+            || false,
+            ForegroundProbes {
+                remote: Box::new(|| None),
+                agent: Box::new(|| None),
+                cwd: Box::new(|| Some(PathBuf::from("/Users/alice/dev/tty7"))),
+            },
+            Arc::new(DeathReporter::new(|| {})),
+        );
+        handle.join().unwrap();
+
+        assert_eq!(
+            state.lock().unwrap().cwd.as_deref(),
+            Some(Path::new("/Users/alice/dev/tty7"))
+        );
+        let msgs: Vec<_> = std::iter::from_fn(|| sub_rx.try_recv().ok()).collect();
+        assert!(
+            msgs.iter().any(
+                |m| matches!(m, DaemonMsg::Cwd(p) if p == &PathBuf::from("/Users/alice/dev/tty7"))
+            )
+        );
+    }
+
+    #[test]
+    fn reader_output_without_prompt_does_not_apply_probed_cwd() {
         let state = Arc::new(Mutex::new(test_state(true)));
         let (sub_tx, sub_rx) = mpsc::channel();
         {
@@ -5999,12 +6232,10 @@ mod tests {
 
         assert_eq!(
             state.lock().unwrap().cwd.as_deref(),
-            Some(Path::new("/Users/alice/dev/tty7"))
+            Some(Path::new("/Users/alice"))
         );
-        assert!(matches!(sub_rx.try_recv(), Ok(DaemonMsg::Output(_))));
-        assert!(
-            matches!(sub_rx.try_recv(), Ok(DaemonMsg::Cwd(p)) if p == PathBuf::from("/Users/alice/dev/tty7"))
-        );
+        let msgs: Vec<_> = std::iter::from_fn(|| sub_rx.try_recv().ok()).collect();
+        assert!(!msgs.iter().any(|m| matches!(m, DaemonMsg::Cwd(_))));
     }
 
     #[test]

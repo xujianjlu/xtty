@@ -356,6 +356,10 @@ pub struct TerminalView {
     /// Last interactive `ssh …` command we applied as a hop, so we do not
     /// re-apply every Wakeup while it stays in `running_command`.
     last_ssh_command: Option<String>,
+    /// `prompt_seq` when the current nested SSH hop was noticed. PTY git /
+    /// history dumps wait for a later prompt so they cannot swallow jumper
+    /// handshake / password bytes.
+    hop_prompt_seq: Option<u64>,
     /// Lines Copy Tab / split-as-clone still owe the new shell (in-shell hop).
     /// Flushed on the first prompt, or after a short fallback if integration
     /// never reports one.
@@ -1330,6 +1334,7 @@ impl TerminalView {
         );
         let history_frecency =
             super::history::frecency_scores(&history.entries, &history.counts, &history.cwds, None);
+        let home_id = tty7_core::core::tab_view::local_connection_identity();
 
         Self {
             terminal,
@@ -1363,10 +1368,11 @@ impl TerminalView {
             scroll_anim_epoch: 0,
             gesture_until: None,
             title: DEFAULT_TITLE.to_string(),
-            terminal_identity: None,
-            identity_home: None,
+            terminal_identity: home_id.clone(),
+            identity_home: home_id,
             last_remote_ssh_target: None,
             last_ssh_command: None,
+            hop_prompt_seq: None,
             clone_follow_up: Vec::new(),
             password_trigger: Default::default(),
             broadcast_opt_out: false,
@@ -1576,6 +1582,7 @@ impl TerminalView {
             self.last_remote_ssh_target = target.clone();
             match target {
                 Some(dest) => {
+                    self.hop_prompt_seq = Some(self.terminal.prompt_seq());
                     let fallback_user = self
                         .terminal_identity
                         .as_deref()
@@ -1591,6 +1598,7 @@ impl TerminalView {
                     }
                 }
                 None if leaving.is_some() => {
+                    self.hop_prompt_seq = None;
                     if let Some(home) = self.identity_home.clone() {
                         if self.terminal_identity.as_deref() != Some(home.as_str()) {
                             self.terminal_identity = Some(home);
@@ -1611,13 +1619,15 @@ impl TerminalView {
         if self.last_ssh_command.as_deref() == Some(cmd.as_str()) {
             return;
         }
-        let fallback_user = self
+        let current = self
             .terminal_identity
             .as_deref()
-            .or(self.identity_home.as_deref())
-            .and_then(|id| id.split_once('@').map(|(u, _)| u));
+            .or(self.identity_home.as_deref());
+        let fallback_user = current.and_then(|id| id.split_once('@').map(|(u, _)| u));
         let Some(identity) =
-            tty7_core::core::tab_view::identity_from_ssh_command(&cmd, fallback_user)
+            tty7_core::core::tab_view::identity_from_ssh_command(&cmd, fallback_user).or_else(|| {
+                tty7_core::core::tab_view::identity_from_user_switch_command(&cmd, current)
+            })
         else {
             return;
         };
@@ -2168,9 +2178,10 @@ impl TerminalView {
                 //
                 if self.is_nested_shell_ssh() {
                     let cwd = self.cwd();
-                    let needs_probe = cwd.as_ref() != self.git_status_cwd.as_ref()
-                        || (cwd.is_none() && !self.terminal.git_probe_pipe().is_active());
-                    if needs_probe {
+                    // OSC 7 is the cwd source. Do not re-arm a PTY divert when
+                    // cwd is still unknown — that swallows later marks and
+                    // livelocks discovery.
+                    if cwd.is_some() && cwd.as_ref() != self.git_status_cwd.as_ref() {
                         self.refresh_git_status(cwd, GitRefresh::Edge, cx);
                     }
                 }
@@ -3979,6 +3990,15 @@ impl TerminalView {
     fn follow_history_scope(&mut self, cx: &mut Context<Self>) {
         let scope = self.desired_history_scope();
         if scope == self.history_scope {
+            // Hop dump was deferred until the far prompt — start it now.
+            if self
+                .remote_context()
+                .is_some_and(|c| c.kind == crate::daemon::protocol::RemoteKind::Ssh)
+                && !self.history_ready
+                && self.can_start_pty_history_probe()
+            {
+                self.start_pty_history_probe(cx);
+            }
             return;
         }
         self.flush_pending_history();
@@ -4080,7 +4100,7 @@ impl TerminalView {
             .ok();
         })
         .detach();
-        if needs_pty_probe {
+        if needs_pty_probe && self.can_start_pty_history_probe() {
             self.start_pty_history_probe(cx);
         }
     }
@@ -4090,6 +4110,9 @@ impl TerminalView {
     /// every Ctrl+R open so the overlay matches what `history` would show —
     /// not the OSC/app-tracked stash.
     fn start_pty_history_probe(&mut self, cx: &mut Context<Self>) {
+        if !self.can_start_pty_history_probe() {
+            return;
+        }
         let pipe = self.terminal.history_probe_pipe();
         // Never cancel an in-flight divert: jumper/nested ssh arms a dump on
         // hop, and Ctrl+R moments later used to wipe that capture (and inject
@@ -4209,39 +4232,40 @@ impl TerminalView {
         use crate::terminal::git_status::GitStatusCache;
 
         let changed = self.git_status_cwd != cwd;
-        self.git_status_cwd = cwd.clone();
         let id = self.host_id();
 
-        // Nested ssh/jumper: no Host to the hop — probe via PTY divert.
-        // Even with no OSC 7 cwd yet, still arm the dump: the script prints
-        // `pwd` first so Tab chips get a path without far-side shell integration.
-        //
+        // Nested ssh/jumper: no Host to the hop — git via PTY divert after
+        // OSC 7 has named the far cwd. Never probe just to discover pwd.
         if self.is_nested_shell_ssh() {
+            let Some(probe_cwd) = cwd.clone() else {
+                self.git_status_cwd = None;
+                if changed {
+                    cx.notify();
+                }
+                return;
+            };
             if !self.can_start_pty_git_probe() {
                 if changed {
                     cx.notify();
                 }
                 return;
             }
-            let probe_cwd = cwd.clone().unwrap_or_else(|| std::path::PathBuf::from("."));
             cx.default_global::<GitStatusCache>();
             let claimed = cx.update_global::<GitStatusCache, _>(|cache, _| match trigger {
                 GitRefresh::Edge => cache.begin_probe(id, &probe_cwd),
                 GitRefresh::Opportunistic => {
-                    if cwd.is_none() {
-                        // No cwd yet — only Edge (hop / prompt) may discover it.
-                        false
-                    } else {
-                        cache.begin_probe_throttled(id, &probe_cwd, OPPORTUNISTIC_GIT_GAP)
-                    }
+                    cache.begin_probe_throttled(id, &probe_cwd, OPPORTUNISTIC_GIT_GAP)
                 }
             });
             if !claimed {
                 return;
             }
+            self.git_status_cwd = cwd;
             self.start_pty_git_probe(probe_cwd, id, cx);
             return;
         }
+
+        self.git_status_cwd = cwd.clone();
 
         let Some(cwd) = cwd else {
             if changed {
@@ -4293,7 +4317,43 @@ impl TerminalView {
         );
     }
 
+    fn hop_prompt_has_settled(&self) -> bool {
+        if !self.is_nested_shell_ssh() {
+            return true;
+        }
+        // Dest PS1 is `at_prompt` for every SSH hop (typed or `+`). A new
+        // prompt after the hop is enough; do not stall on spawn-time seq.
+        self.terminal.at_prompt()
+    }
+
+    fn can_start_pty_history_probe(&self) -> bool {
+        if !self.hop_prompt_has_settled() {
+            return false;
+        }
+        // Nested hop: leftover local `at_prompt` is not the far shell. Wait
+        // until a prompt mark arrives after the hop (seq > hop_prompt_seq).
+        if self.is_nested_shell_ssh() && !self.terminal.at_prompt() {
+            return false;
+        }
+        if self.terminal.history_probe_pipe().is_active() {
+            return false;
+        }
+        if self.terminal.git_probe_pipe().is_diverting() {
+            return false;
+        }
+        if self.terminal.zmodem_pipe().is_diverting() {
+            return false;
+        }
+        true
+    }
+
     fn can_start_pty_git_probe(&self) -> bool {
+        if !self.terminal.at_prompt() {
+            return false;
+        }
+        if self.is_nested_shell_ssh() && self.cwd().is_none() {
+            return false;
+        }
         if self.terminal.history_probe_pipe().is_active() {
             return false;
         }
@@ -12241,6 +12301,8 @@ mod gpui_tests {
             }
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
+        // Far-side prompt after hop — dumps must not arm during handshake.
+        prompt_ready(&window, cx, &mut daemon);
 
         window
             .update(cx, |view, window, cx| {
@@ -12336,11 +12398,19 @@ mod gpui_tests {
         DaemonMsg::Cwd(std::path::PathBuf::from("/home/carol/src/app"))
             .encode(&mut daemon)
             .unwrap();
+        DaemonMsg::Prompt {
+            active: true,
+            at_prompt: true,
+            last_exit: None,
+        }
+        .encode(&mut daemon)
+        .unwrap();
         for _ in 0..200 {
             let ready = window
                 .update(cx, |view, _, _| {
                     view.remote_context().is_some()
                         && view.cwd() == Some(std::path::PathBuf::from("/home/carol/src/app"))
+                        && view.terminal.at_prompt()
                 })
                 .unwrap();
             if ready {
@@ -12463,6 +12533,7 @@ mod gpui_tests {
             }
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
+        prompt_ready(&window, cx, &mut daemon);
 
         window
             .update(cx, |view, window, cx| {

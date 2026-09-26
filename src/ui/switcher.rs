@@ -964,20 +964,18 @@ impl Tty7App {
                         index: i,
                         label: self.tab_label(tab, i, None, cx),
                         named: tab.name.as_deref().is_some_and(|n| !n.trim().is_empty())
-                            || tab.agent(cx).is_some(),
+                            || tab.agent(None, cx).is_some(),
                         path: tab
-                            .pane
-                            .terminals()
-                            .first()
+                            .title_leaf(None, cx)
                             .and_then(|leaf| {
                                 let leaf = leaf.read(cx);
                                 Some((leaf.cwd()?, leaf.display_home(cx)))
                             })
                             .map(|(p, home)| crate::ui::home::display_path(&p, home.as_deref()))
                             .unwrap_or_default(),
-                        agent: tab.agent(cx),
-                        status: tab.agent_status(cx),
-                        unread: tab.agent_unread_count(cx),
+                        agent: tab.agent(None, cx),
+                        status: tab.agent_status(None, cx),
+                        unread: tab.agent_unread_count(None, cx),
                         ssh: self.tab_ssh_dot(tab, cx),
                         active: i == self.active,
                         git: tab.git_status(None, cx),
